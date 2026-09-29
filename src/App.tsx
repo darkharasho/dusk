@@ -7,6 +7,7 @@ import { SelfCard } from "./components/SelfCard";
 import { AddDeviceDialog } from "./components/AddDeviceDialog";
 import { DeviceDrawer } from "./components/DeviceDrawer";
 import { HostSettings } from "./components/HostSettings";
+import { SetupChecklist } from "./components/SetupChecklist";
 
 /** Lit machines first, then alphabetical, so the actionable ones stay on top. */
 const TONE_ORDER = { hosting: 0, ready: 1, unpaired: 2, offline: 3 } as const;
@@ -42,6 +43,8 @@ export function App() {
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [signInNonce, setSignInNonce] = useState(0);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -98,6 +101,8 @@ export function App() {
             name={self?.name ?? "This machine"}
             snapshot={snapshot}
             onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSetup={() => setSetupOpen(true)}
+            signInNonce={signInNonce}
           />
         </section>
 
@@ -136,6 +141,13 @@ export function App() {
       {/* Resolved from the live snapshot rather than held in state, so an
           open drawer keeps updating as the machine's state changes under it. */}
       {settingsOpen && <HostSettings onClose={() => setSettingsOpen(false)} />}
+
+      {setupOpen && (
+        <SetupChecklist
+          onClose={() => setSetupOpen(false)}
+          onSignIn={() => setSignInNonce((n) => n + 1)}
+        />
+      )}
 
       {open && (
         <DeviceDrawer

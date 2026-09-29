@@ -92,6 +92,44 @@ export interface HostState {
   status: HostStatus;
 }
 
+export type StepId =
+  | "installSunshine"
+  | "startService"
+  | "signIn"
+  | "firewall"
+  | "screenRecording"
+  | "accessibility"
+  | "systemAudio"
+  | "virtualDisplay";
+
+export type StepState =
+  | { kind: "done" }
+  | { kind: "todo" }
+  /** Dusk cannot tell from here; the person confirms it themselves. */
+  | { kind: "unknown" }
+  | { kind: "notNeeded"; reason: string };
+
+export interface Step {
+  id: StepId;
+  title: string;
+  detail: string;
+  state: StepState;
+  /** False means the person has to do it, and `detail` says what. */
+  automatable: boolean;
+}
+
+export interface Setup {
+  steps: Step[];
+}
+
+export interface DownloadPreview {
+  version: string;
+  asset: string;
+  size: number;
+  /** False when no checksum exists, in which case Dusk refuses to install. */
+  verifiable: boolean;
+}
+
 /** The single payload the whole UI renders from. */
 export interface Snapshot {
   devices: Device[];

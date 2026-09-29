@@ -23,6 +23,7 @@ quick-xml = "0.36"
 thiserror = "1"
 gethostname = "0.5"
 async-trait = "0.1"
+sha2 = "0.10"
 if-addrs = "0.13"
 # The Sunshine web-UI password belongs in the OS keystore, not a JSON file.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -46,4 +47,4 @@ winreg = "0.52"
 [dependencies.reqwest]
 version = "0.12"
 default-features = false
-features = ["rustls-tls", "json"]
+features = ["rustls-tls", "json", "stream"]

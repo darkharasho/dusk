@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, State};
 
+use crate::install;
 use crate::model::{Device, Snapshot};
 use crate::registry::split_address;
 use crate::state::{emit_snapshot, AppState};
@@ -287,6 +288,92 @@ pub async fn accept_pin(
 
     emit_snapshot(&app, &inner).await;
     Ok(())
+}
+
+/// The first-run checklist for this machine.
+#[tauri::command]
+pub async fn get_setup(state: State<'_, Arc<AppState>>) -> Result<install::Setup, String> {
+    let inner = state.inner().clone();
+    let host = inner.host.state().await;
+    Ok(install::steps::build(
+        host.platform,
+        &host.status,
+        host.capabilities.support_tier,
+        inner.credentials.load().await.is_some(),
+    ))
+}
+
+/// Which Sunshine build this machine would get, without downloading it.
+///
+/// Separate from installing on purpose: it is worth being able to see the
+/// version, the size and whether a checksum exists before committing to a
+/// download that will be run with elevated rights.
+#[tauri::command]
+pub async fn preview_sunshine_download(
+    state: State<'_, Arc<AppState>>,
+) -> Result<DownloadPreview, String> {
+    let inner = state.inner().clone();
+    let release = install::release::fetch_latest(&inner.http).await?;
+
+    let choice = install::release::select(
+        &release.assets,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .ok_or_else(|| {
+        format!(
+            "Sunshine does not publish a build for {} on {}.",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        )
+    })?;
+
+    Ok(DownloadPreview {
+        version: release.version,
+        asset: choice.asset.name.clone(),
+        size: choice.asset.size,
+        verifiable: choice.asset.sha256.is_some(),
+    })
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadPreview {
+    pub version: String,
+    pub asset: String,
+    pub size: u64,
+    /// False when the release carries no checksum, in which case Dusk
+    /// refuses to install rather than running an unverifiable binary.
+    pub verifiable: bool,
+}
+
+/// Open the system screen where a permission Dusk cannot grant is granted.
+///
+/// macOS TCC settings cannot be set by any installer, so the most Dusk can
+/// do is put the right pane in front of someone.
+#[tauri::command]
+pub async fn open_privacy_settings(pane: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let anchor = match pane.as_str() {
+            "screenRecording" => "Privacy_ScreenCapture",
+            "accessibility" => "Privacy_Accessibility",
+            _ => return Err("Dusk does not know that settings pane.".into()),
+        };
+        let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");
+        let out = crate::host::service::run("open", &[&url])
+            .await
+            .map_err(|e| e.to_string())?;
+        if !out.ok() {
+            return Err(out.message());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pane;
+        Err("This only applies to macOS.".into())
+    }
 }
 
 async fn host_api(

@@ -20,7 +20,7 @@ Streaming, host control, and the installer are not built yet.
 | M2 | Client path — pair, list apps, launch via `moonlight-qt` | built, not yet tested against a second machine |
 | M3 | Host path — Sunshine service control on all three platforms | built; probe verified on macOS |
 | M4 | Config UI — schema-driven, replaces Sunshine's web UI | built; needs a signed-in host to exercise |
-| M5 | First-run install per platform | |
+| M5 | First-run install per platform | **partial** — see below |
 
 ## Running it
 
@@ -110,6 +110,26 @@ than as a faded version of it.
 | Ready / Online | ok | `axi-chip--ok` |
 | Not paired | warn | `axi-chip--warn` |
 | Offline | none | plain `axi-chip` |
+
+## What M5 still needs
+
+Setup is a checklist, not a wizard, because Sunshine is usually already
+installed and the outstanding item is often just one step. Built so far:
+release discovery, asset selection, a verified download, the checklist
+itself, and the macOS privacy deep links.
+
+Not built, and none of it is faked in the UI:
+
+- **Installing what was downloaded.** Mounting the DMG and copying the
+  bundle, handing the MSI to `msiexec`, placing the AppImage. The download
+  path stops at a verified file.
+- **Firewall rules** on Windows.
+- **The virtual display driver** on Windows.
+- **Download progress** reaching the UI. The backend reports it; nothing
+  listens yet.
+
+`sc start`/`sc stop` also need administrator rights, and Dusk does not
+elevate — the hosting toggle will fail on Windows until it does.
 
 ## Things worth knowing
 

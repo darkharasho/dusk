@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Device, Snapshot } from "./types";
+import type { Device, DownloadPreview, Setup, Snapshot } from "./types";
 
 export const SNAPSHOT_EVENT = "dusk://snapshot";
 
@@ -52,6 +52,22 @@ export function signInHost(username: string, password: string): Promise<void> {
 
 export function signOutHost(): Promise<void> {
   return invoke("sign_out_host");
+}
+
+export function getSetup(): Promise<Setup> {
+  return invoke<Setup>("get_setup");
+}
+
+/** What Dusk would download, without downloading it. */
+export function previewSunshineDownload(): Promise<DownloadPreview> {
+  return invoke<DownloadPreview>("preview_sunshine_download");
+}
+
+/** Put a macOS privacy pane in front of someone; Dusk cannot grant it. */
+export function openPrivacySettings(
+  pane: "screenRecording" | "accessibility",
+): Promise<void> {
+  return invoke("open_privacy_settings", { pane });
 }
 
 export type HostConfig = Record<string, unknown>;

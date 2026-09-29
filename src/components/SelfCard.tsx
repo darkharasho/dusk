@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { HostState, Snapshot } from "../types";
 import {
   acceptPin,
@@ -12,6 +12,9 @@ interface Props {
   name: string;
   snapshot: Snapshot;
   onOpenSettings(): void;
+  onOpenSetup(): void;
+  /** Bumped when something elsewhere asks for the sign-in form. */
+  signInNonce: number;
 }
 
 type Panel = null | "signIn" | "pin";
@@ -33,7 +36,13 @@ function statusLine(host: HostState): string {
  * The machine you are sitting at. It is the only one that can host, so it is
  * a panel rather than one tile among equals in the grid.
  */
-export function SelfCard({ name, snapshot, onOpenSettings }: Props) {
+export function SelfCard({
+  name,
+  snapshot,
+  onOpenSettings,
+  onOpenSetup,
+  signInNonce,
+}: Props) {
   const host = snapshot.host;
   const { status, capabilities } = host;
   const installed = status.kind === "installed";
@@ -43,6 +52,11 @@ export function SelfCard({ name, snapshot, onOpenSettings }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  // The setup checklist sends people here for the sign-in step.
+  useEffect(() => {
+    if (signInNonce > 0) setPanel("signIn");
+  }, [signInNonce]);
 
   async function run(action: () => Promise<void>, done?: string) {
     setBusy(true);
@@ -78,6 +92,9 @@ export function SelfCard({ name, snapshot, onOpenSettings }: Props) {
         </div>
 
         <div className="axi-row dusk-row__end">
+          <button type="button" className="axi-btn" onClick={onOpenSetup}>
+            Set up hosting
+          </button>
           {installed && snapshot.hostSignedIn && (
             <button type="button" className="axi-btn" onClick={onOpenSettings}>
               Settings

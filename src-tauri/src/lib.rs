@@ -7,6 +7,7 @@ mod applist;
 mod commands;
 mod discovery;
 mod host;
+mod install;
 mod mockdata;
 mod model;
 mod moonlight;
@@ -139,6 +140,9 @@ pub fn run() {
             commands::accept_pin,
             commands::get_host_config,
             commands::save_host_config,
+            commands::get_setup,
+            commands::preview_sunshine_download,
+            commands::open_privacy_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dusk");

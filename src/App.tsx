@@ -6,6 +6,7 @@ import { DeviceCard } from "./components/DeviceCard";
 import { SelfCard } from "./components/SelfCard";
 import { AddDeviceDialog } from "./components/AddDeviceDialog";
 import { DeviceDrawer } from "./components/DeviceDrawer";
+import { HostSettings } from "./components/HostSettings";
 
 /** Lit machines first, then alphabetical, so the actionable ones stay on top. */
 const TONE_ORDER = { hosting: 0, ready: 1, unpaired: 2, offline: 3 } as const;
@@ -40,6 +41,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -92,7 +94,11 @@ export function App() {
       <main className="axi-page dusk-page">
         <section className="dusk-section">
           <h2 className="axi-eyebrow">This machine</h2>
-          <SelfCard name={self?.name ?? "This machine"} snapshot={snapshot} />
+          <SelfCard
+            name={self?.name ?? "This machine"}
+            snapshot={snapshot}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
         </section>
 
         <section className="dusk-section">
@@ -129,6 +135,8 @@ export function App() {
 
       {/* Resolved from the live snapshot rather than held in state, so an
           open drawer keeps updating as the machine's state changes under it. */}
+      {settingsOpen && <HostSettings onClose={() => setSettingsOpen(false)} />}
+
       {open && (
         <DeviceDrawer
           device={open}

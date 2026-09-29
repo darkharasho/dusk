@@ -137,6 +137,8 @@ pub fn run() {
             commands::sign_in_host,
             commands::sign_out_host,
             commands::accept_pin,
+            commands::get_host_config,
+            commands::save_host_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dusk");

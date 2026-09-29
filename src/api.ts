@@ -54,6 +54,21 @@ export function signOutHost(): Promise<void> {
   return invoke("sign_out_host");
 }
 
+export type HostConfig = Record<string, unknown>;
+
+export function getHostConfig(): Promise<HostConfig> {
+  return invoke<HostConfig>("get_host_config");
+}
+
+/**
+ * Save changed settings. Only the changed keys are sent; the backend merges
+ * them into the current config, because Sunshine's endpoint replaces rather
+ * than patches.
+ */
+export function saveHostConfig(changes: HostConfig, restart: boolean): Promise<void> {
+  return invoke("save_host_config", { changes, restart });
+}
+
 /** Accept an incoming pairing PIN on this machine. */
 export function acceptPin(pin: string, deviceName?: string): Promise<void> {
   return invoke("accept_pin", { pin, deviceName: deviceName ?? null });

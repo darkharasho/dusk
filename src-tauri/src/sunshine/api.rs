@@ -27,6 +27,15 @@ pub const DEFAULT_PORT: u16 = 47990;
 
 const TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Fields `GET /api/config` reports that are *not* settings.
+///
+/// They have to be stripped before a save, because the endpoint replaces the
+/// configuration with whatever it is handed and these would be written into
+/// `sunshine.conf` as if they were settings. The list is version-sensitive:
+/// a future Sunshine adding a new read-only field would have it written back
+/// until this list catches up. Tested against the shape a live host returns.
+const METADATA_KEYS: &[&str] = &["platform", "version", "status", "restart_supported"];
+
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     #[error("Dusk does not have this machine's Sunshine sign-in yet")]
@@ -119,6 +128,121 @@ impl SunshineApi {
         Ok(())
     }
 
+    /// Read the host's whole configuration.
+    ///
+    /// Returns exactly what Sunshine reports, including the metadata fields
+    /// below — stripping happens at save time, not here, because the UI
+    /// wants the version and platform.
+    pub async fn get_config(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, ApiError> {
+        let response = self
+            .client
+            .get(self.url("/api/config"))
+            .basic_auth(&credentials.username, Some(&credentials.password))
+            .timeout(TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized);
+        }
+        if !response.status().is_success() {
+            return Err(ApiError::Failed(format!(
+                "Sunshine answered {}",
+                response.status()
+            )));
+        }
+
+        match response.json().await {
+            Ok(serde_json::Value::Object(map)) => Ok(map),
+            Ok(_) => Err(ApiError::Failed(
+                "Sunshine's configuration was not in the expected shape.".into(),
+            )),
+            Err(e) => Err(ApiError::Failed(e.to_string())),
+        }
+    }
+
+    /// Write changed settings.
+    ///
+    /// `POST /api/config` **replaces** the configuration with whatever is
+    /// sent, so this reads the current config and merges into it rather than
+    /// posting the changes alone — posting a partial object would silently
+    /// erase every setting not included. There is a small race if something
+    /// else writes between the read and the write; Sunshine's own web UI has
+    /// the same one, and the alternative is a patch endpoint that does not
+    /// exist.
+    pub async fn save_config(
+        &self,
+        credentials: &Credentials,
+        changes: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), ApiError> {
+        let mut config = self.get_config(credentials).await?;
+        for (key, value) in changes {
+            config.insert(key, value);
+        }
+        for key in METADATA_KEYS {
+            config.remove(*key);
+        }
+
+        let response = self
+            .client
+            .post(self.url("/api/config"))
+            .basic_auth(&credentials.username, Some(&credentials.password))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&serde_json::Value::Object(config))
+            .timeout(TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized);
+        }
+
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        let reply: ApiReply = serde_json::from_str(&text).unwrap_or(ApiReply {
+            status: None,
+            error: None,
+        });
+
+        if !status.is_success() || !truthy(reply.status.as_ref()) {
+            return Err(ApiError::Failed(
+                reply
+                    .error
+                    .unwrap_or_else(|| "Sunshine did not accept those settings.".into()),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Restart Sunshine so changed settings take effect.
+    ///
+    /// The connection usually dies mid-request because the process goes away
+    /// while answering, so a transport error here is the expected outcome
+    /// rather than a failure.
+    pub async fn restart(&self, credentials: &Credentials) -> Result<(), ApiError> {
+        let sent = self
+            .client
+            .post(self.url("/api/restart"))
+            .basic_auth(&credentials.username, Some(&credentials.password))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&serde_json::json!({}))
+            .timeout(TIMEOUT)
+            .send()
+            .await;
+
+        match sent {
+            Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => {
+                Err(ApiError::Unauthorized)
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Check a username and password without changing anything.
     ///
     /// `GET /api/config` is the cheapest authenticated read there is, and it
@@ -193,6 +317,26 @@ mod tests {
                 .expect("parses");
         assert_eq!(reply.error.as_deref(), Some("Unauthorized"));
         assert!(!truthy(reply.status.as_ref()));
+    }
+
+    #[test]
+    fn metadata_is_stripped_before_a_save_but_settings_are_kept() {
+        // Writing `version` or `platform` back would put them in
+        // sunshine.conf as though someone had configured them.
+        let mut config: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(
+                r#"{"platform":"macos","version":"2026.1","status":"true",
+                    "restart_supported":true,"sunshine_name":"Workshop","qp":"28"}"#,
+            )
+            .expect("parses");
+
+        for key in METADATA_KEYS {
+            config.remove(*key);
+        }
+
+        assert_eq!(config.len(), 2);
+        assert!(config.contains_key("sunshine_name"));
+        assert!(config.contains_key("qp"));
     }
 
     #[test]

@@ -19,7 +19,7 @@ Streaming, host control, and the installer are not built yet.
 | M1 | mDNS + manual address book, liveness polling, device grid | done |
 | M2 | Client path — pair, list apps, launch via `moonlight-qt` | built, not yet tested against a second machine |
 | M3 | Host path — Sunshine service control on all three platforms | built; probe verified on macOS |
-| M4 | Config UI — schema-driven, replaces Sunshine's web UI | |
+| M4 | Config UI — schema-driven, replaces Sunshine's web UI | built; needs a signed-in host to exercise |
 | M5 | First-run install per platform | |
 
 ## Running it
@@ -70,6 +70,13 @@ manual address book ───┘
   it without `application/json` and you get `400 Content type mismatch`
   regardless of credentials, which is easy to misread as an unauthenticated
   endpoint.
+- **`src/sunshineSchema.ts`** curates the settings worth a considered
+  control and lets everything else render generically from whatever the API
+  returns. That is what makes full coverage affordable without mirroring a
+  hundred fields by hand — and a setting added by a future Sunshine appears
+  on its own instead of silently going missing. The copy is Dusk's own:
+  Sunshine is GPL-3.0 and its help text is creative work, while key names
+  and types are interface facts.
 - **`sunshine/credentials.rs`** keeps the web-UI password in the OS keystore.
   Where no keystore exists it holds the password for the run and says so,
   rather than silently downgrading to plaintext on disk.

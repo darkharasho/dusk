@@ -27,7 +27,7 @@ body,
 /* axi zeroes paragraph margins inside the components that own copy — a card,
    a notice, prose. A <p> placed directly in a panel still arrives with the
    UA's 1em, which reads as a gap the layout never asked for. */
-:where(.dusk-page, .axi-modal__body) :where(p) {
+:where(.dusk-page, .axi-modal__body, .axi-drawer__body) :where(p) {
   margin: 0;
 }
 
@@ -46,6 +46,29 @@ body,
    already sets the size and the dim ink; only the family is ours. */
 .dusk-card__address {
   font-family: var(--axi-mono);
+}
+
+/* A "Changed" marker sits beside its label rather than under it. */
+.dusk-field > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dusk-field__flag {
+  margin-left: auto;
+}
+
+/* The settings drawer scrolls its body; head and foot stay put so Save is
+   always reachable in a form this long. */
+.axi-drawer__body {
+  overflow-y: auto;
+}
+
+/* Groups need more air between them than fields do inside one, or a long
+   form reads as one undifferentiated run. */
+.dusk-settings {
+  --axi-stack-gap: 24px;
 }
 
 /* The pairing PIN. Large, monospaced and widely tracked, because it is read

@@ -289,6 +289,51 @@ pub async fn accept_pin(
     Ok(())
 }
 
+async fn host_api(
+    state: &Arc<AppState>,
+) -> Result<(SunshineApi, Credentials), String> {
+    let credentials = state
+        .credentials
+        .load()
+        .await
+        .ok_or_else(|| sunshine::ApiError::NoCredentials.to_string())?;
+    let api = SunshineApi::new(sunshine::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
+    Ok((api, credentials))
+}
+
+/// Read this machine's Sunshine configuration.
+#[tauri::command]
+pub async fn get_host_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let inner = state.inner().clone();
+    let (api, credentials) = host_api(&inner).await?;
+    api.get_config(&credentials).await.map_err(|e| e.to_string())
+}
+
+/// Write changed settings, and optionally restart so they take effect.
+#[tauri::command]
+pub async fn save_host_config(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    changes: serde_json::Map<String, serde_json::Value>,
+    restart: bool,
+) -> Result<(), String> {
+    let inner = state.inner().clone();
+    let (api, credentials) = host_api(&inner).await?;
+
+    api.save_config(&credentials, changes)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if restart {
+        api.restart(&credentials).await.map_err(|e| e.to_string())?;
+    }
+
+    emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
 /// Ask the host to end whatever session is running on it.
 #[tauri::command]
 pub async fn quit_session(

@@ -11,6 +11,7 @@ import {
 interface Props {
   name: string;
   snapshot: Snapshot;
+  onOpenSettings(): void;
 }
 
 type Panel = null | "signIn" | "pin";
@@ -32,7 +33,7 @@ function statusLine(host: HostState): string {
  * The machine you are sitting at. It is the only one that can host, so it is
  * a panel rather than one tile among equals in the grid.
  */
-export function SelfCard({ name, snapshot }: Props) {
+export function SelfCard({ name, snapshot, onOpenSettings }: Props) {
   const host = snapshot.host;
   const { status, capabilities } = host;
   const installed = status.kind === "installed";
@@ -77,6 +78,11 @@ export function SelfCard({ name, snapshot }: Props) {
         </div>
 
         <div className="axi-row dusk-row__end">
+          {installed && snapshot.hostSignedIn && (
+            <button type="button" className="axi-btn" onClick={onOpenSettings}>
+              Settings
+            </button>
+          )}
           {installed && snapshot.hostSignedIn && (
             <button
               type="button"

@@ -18,7 +18,7 @@ Streaming, host control, and the installer are not built yet.
 | M0 | Tauri shell, device model, `HostBackend` trait + mock | done |
 | M1 | mDNS + manual address book, liveness polling, device grid | done |
 | M2 | Client path — pair, list apps, launch via `moonlight-qt` | built, not yet tested against a second machine |
-| M3 | Host path — Sunshine service control on all three platforms | |
+| M3 | Host path — Sunshine service control on all three platforms | built; probe verified on macOS |
 | M4 | Config UI — schema-driven, replaces Sunshine's web UI | |
 | M5 | First-run install per platform | |
 
@@ -63,6 +63,16 @@ manual address book ───┘
 - **`applist.rs`** gets the app list from GameStream rather than
   `moonlight list`: structured XML beats CLI text, and it is what turns a
   running app's id into the name a card shows.
+- **`sunshine/api.rs`** drives Sunshine's config API. Unlike GameStream,
+  nothing depends on this staying still, so every call degrades rather than
+  assumes. Two measured quirks: auth failures are a real `401` with a JSON
+  body, and `POST /api/pin` validates `Content-Type` **before** auth — send
+  it without `application/json` and you get `400 Content type mismatch`
+  regardless of credentials, which is easy to misread as an unauthenticated
+  endpoint.
+- **`sunshine/credentials.rs`** keeps the web-UI password in the OS keystore.
+  Where no keystore exists it holds the password for the run and says so,
+  rather than silently downgrading to plaintext on disk.
 - **`host/`** is the platform abstraction. Capability matrices are real and
   drive the UI; `probe`/`start`/`stop` land in M3.
 - The backend pushes a whole `Snapshot` on every change and the UI is a pure

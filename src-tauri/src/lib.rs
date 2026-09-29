@@ -15,6 +15,7 @@ mod registry;
 mod serverinfo;
 mod state;
 mod store;
+mod sunshine;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -131,6 +132,11 @@ pub fn run() {
             commands::pair_device,
             commands::launch_app,
             commands::quit_session,
+            commands::start_hosting,
+            commands::stop_hosting,
+            commands::sign_in_host,
+            commands::sign_out_host,
+            commands::accept_pin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dusk");

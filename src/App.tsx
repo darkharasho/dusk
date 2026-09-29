@@ -92,7 +92,7 @@ export function App() {
       <main className="axi-page dusk-page">
         <section className="dusk-section">
           <h2 className="axi-eyebrow">This machine</h2>
-          <SelfCard name={self?.name ?? "This machine"} host={snapshot.host} />
+          <SelfCard name={self?.name ?? "This machine"} snapshot={snapshot} />
         </section>
 
         <section className="dusk-section">

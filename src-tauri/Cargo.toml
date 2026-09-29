@@ -22,21 +22,28 @@ mdns-sd = "0.11"
 quick-xml = "0.36"
 thiserror = "1"
 gethostname = "0.5"
+async-trait = "0.1"
 if-addrs = "0.13"
+# The Sunshine web-UI password belongs in the OS keystore, not a JSON file.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
-# rustls rather than the platform TLS stack: Sunshine's certificate is
-# self-signed, and M2 needs client-certificate auth on the TLS port, which is
-# far easier to drive consistently across three platforms with rustls.
 # Reading moonlight-qt's identity out of its QSettings store, which is a
 # different backend on each platform: a plist on macOS, an INI file on Linux
 # (handled in-tree), and the registry on Windows.
+[target.'cfg(unix)'.dependencies]
+# getuid, for the launchd user domain every launchctl verb needs.
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
 
+# rustls rather than the platform TLS stack: both Sunshine's GameStream port
+# and its config API serve self-signed certificates, and client-certificate
+# auth is far easier to drive consistently across three platforms with rustls.
 [dependencies.reqwest]
 version = "0.12"
 default-features = false
-features = ["rustls-tls"]
+features = ["rustls-tls", "json"]

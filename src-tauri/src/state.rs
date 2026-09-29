@@ -13,6 +13,7 @@ use crate::model::Snapshot;
 use crate::moonlight::{ClientIdentity, Moonlight};
 use crate::registry::Registry;
 use crate::store::Store;
+use crate::sunshine::CredentialStore;
 
 pub const SNAPSHOT_EVENT: &str = "dusk://snapshot";
 
@@ -30,6 +31,8 @@ pub struct AppState {
     tls: RwLock<Option<reqwest::Client>>,
     /// `None` when moonlight-qt is not installed.
     pub moonlight: Option<Moonlight>,
+    /// This machine's Sunshine web-UI sign-in, in the OS keystore.
+    pub credentials: CredentialStore,
     discovering: AtomicBool,
     refresh: Notify,
 }
@@ -79,6 +82,7 @@ impl AppState {
             http,
             tls: RwLock::new(tls),
             moonlight,
+            credentials: CredentialStore::default(),
             discovering: AtomicBool::new(false),
             refresh: Notify::new(),
         }
@@ -124,9 +128,11 @@ impl AppState {
     pub async fn snapshot(&self) -> Snapshot {
         Snapshot {
             devices: self.registry.read().await.devices(),
-            host: self.host.state(),
+            host: self.host.state().await,
             discovering: self.is_discovering(),
             moonlight_available: self.moonlight.is_some(),
+            host_signed_in: self.credentials.load().await.is_some(),
+            host_credentials_persistent: self.credentials.is_persistent().await,
         }
     }
 }

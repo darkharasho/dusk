@@ -1,10 +1,12 @@
 //! An in-memory host backend.
 //!
-//! This is what makes M1–M4 developable on a machine that cannot usefully run
-//! Sunshine. It reports the capability matrix of whatever platform it is
-//! pretending to be, so the UI is exercised against honest constraints.
+//! This is what makes the host-side UI developable on a machine that cannot
+//! usefully run Sunshine. It reports a plausible capability matrix so the UI
+//! is exercised against honest constraints.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use async_trait::async_trait;
 
 use super::{HostBackend, HostError};
 use crate::model::{HostCapabilities, HostPlatform, HostStatus, SupportTier};
@@ -23,6 +25,7 @@ impl Default for MockHost {
     }
 }
 
+#[async_trait]
 impl HostBackend for MockHost {
     fn platform(&self) -> HostPlatform {
         HostPlatform::Mock
@@ -39,7 +42,7 @@ impl HostBackend for MockHost {
         }
     }
 
-    fn probe(&self) -> Result<HostStatus, HostError> {
+    async fn probe(&self) -> Result<HostStatus, HostError> {
         if !self.installed {
             return Ok(HostStatus::NotInstalled);
         }
@@ -49,12 +52,12 @@ impl HostBackend for MockHost {
         })
     }
 
-    fn start(&self) -> Result<(), HostError> {
+    async fn start(&self) -> Result<(), HostError> {
         self.running.store(true, Ordering::Relaxed);
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), HostError> {
+    async fn stop(&self) -> Result<(), HostError> {
         self.running.store(false, Ordering::Relaxed);
         Ok(())
     }

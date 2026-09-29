@@ -198,4 +198,11 @@ pub struct Snapshot {
     /// works without it, so the UI says so rather than offering buttons that
     /// can only fail.
     pub moonlight_available: bool,
+    /// Whether Dusk holds this machine's Sunshine sign-in. Everything on the
+    /// host side beyond start/stop needs it.
+    pub host_signed_in: bool,
+    /// False when the sign-in is only held for this run because the OS
+    /// keystore was unavailable. The UI says so rather than letting someone
+    /// believe it was saved.
+    pub host_credentials_persistent: bool,
 }

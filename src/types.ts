@@ -99,4 +99,8 @@ export interface Snapshot {
   discovering: boolean;
   /** False when moonlight-qt is missing; nothing client-side works without it. */
   moonlightAvailable: boolean;
+  /** Whether Dusk holds this machine's Sunshine sign-in. */
+  hostSignedIn: boolean;
+  /** False when the sign-in is only held for this run (no OS keystore). */
+  hostCredentialsPersistent: boolean;
 }

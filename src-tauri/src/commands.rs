@@ -8,6 +8,7 @@ use crate::model::{Device, Snapshot};
 use crate::registry::split_address;
 use crate::state::{emit_snapshot, AppState};
 use crate::store::ManualEntry;
+use crate::sunshine::{self, Credentials, SunshineApi};
 
 #[tauri::command]
 pub async fn get_snapshot(state: State<'_, Arc<AppState>>) -> Result<Snapshot, String> {
@@ -192,6 +193,99 @@ pub async fn launch_app(
     });
 
     inner.request_refresh();
+    Ok(())
+}
+
+// ------------------------------------------------------------- host side
+
+/// Turn hosting on for this machine.
+#[tauri::command]
+pub async fn start_hosting(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let inner = state.inner().clone();
+    inner.host.start().await.map_err(|e| e.to_string())?;
+    emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
+/// Turn hosting off for this machine.
+#[tauri::command]
+pub async fn stop_hosting(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let inner = state.inner().clone();
+    inner.host.stop().await.map_err(|e| e.to_string())?;
+    emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
+/// Store this machine's Sunshine sign-in, after checking it actually works.
+///
+/// Verified before saving so a typo surfaces here rather than as a confusing
+/// failure the first time someone tries to accept a PIN.
+#[tauri::command]
+pub async fn sign_in_host(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    let inner = state.inner().clone();
+    let credentials = Credentials { username, password };
+
+    SunshineApi::new(sunshine::api::DEFAULT_PORT)
+        .map_err(|e| e.to_string())?
+        .verify(&credentials)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    inner.credentials.save(credentials).await?;
+    emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sign_out_host(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let inner = state.inner().clone();
+    inner.credentials.forget().await;
+    emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
+/// Accept a pairing PIN on this machine.
+///
+/// This is the half of pairing that is Sunshine's web page today, and doing
+/// it here is the single biggest reason Dusk stops feeling like two
+/// programs.
+#[tauri::command]
+pub async fn accept_pin(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    pin: String,
+    device_name: Option<String>,
+) -> Result<(), String> {
+    let inner = state.inner().clone();
+
+    let pin = pin.trim().to_string();
+    if pin.len() != 4 || !pin.chars().all(|c| c.is_ascii_digit()) {
+        return Err("A pairing PIN is four digits.".into());
+    }
+
+    let credentials = inner
+        .credentials
+        .load()
+        .await
+        .ok_or_else(|| sunshine::ApiError::NoCredentials.to_string())?;
+
+    let name = device_name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Dusk".to_string());
+
+    SunshineApi::new(sunshine::api::DEFAULT_PORT)
+        .map_err(|e| e.to_string())?
+        .submit_pin(&credentials, &pin, &name)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    emit_snapshot(&app, &inner).await;
     Ok(())
 }
 

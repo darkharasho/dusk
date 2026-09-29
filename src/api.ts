@@ -37,6 +37,28 @@ export function quitSession(id: string): Promise<void> {
   return invoke("quit_session", { id });
 }
 
+export function startHosting(): Promise<void> {
+  return invoke("start_hosting");
+}
+
+export function stopHosting(): Promise<void> {
+  return invoke("stop_hosting");
+}
+
+/** Verified against Sunshine before it is stored, so a typo surfaces here. */
+export function signInHost(username: string, password: string): Promise<void> {
+  return invoke("sign_in_host", { username, password });
+}
+
+export function signOutHost(): Promise<void> {
+  return invoke("sign_out_host");
+}
+
+/** Accept an incoming pairing PIN on this machine. */
+export function acceptPin(pin: string, deviceName?: string): Promise<void> {
+  return invoke("accept_pin", { pin, deviceName: deviceName ?? null });
+}
+
 /**
  * A four-digit pairing PIN.
  *

@@ -1,0 +1,77 @@
+/*
+ * What axi-design does not already draw.
+ *
+ * Deliberately small. Anything here that starts to look like a component
+ * belongs upstream in the language instead — see its docs/RULES.md, "A style
+ * only reachable through a layer will be re-invented".
+ *
+ * The accent is left at the language's default, Axi Gold, which is also the
+ * right ink for this app: the strip on a card that is mid-session is the sun
+ * in sunshine/moonlight.
+ */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+.dusk-page {
+  padding-block: 26px 64px;
+}
+
+.dusk-section + .dusk-section {
+  margin-top: 34px;
+}
+
+/* axi zeroes paragraph margins inside the components that own copy — a card,
+   a notice, prose. A <p> placed directly in a panel still arrives with the
+   UA's 1em, which reads as a gap the layout never asked for. */
+:where(.dusk-page, .axi-modal__body) :where(p) {
+  margin: 0;
+}
+
+/* A label above its field. Not a component: two elements and a gap. */
+.dusk-field {
+  display: grid;
+  gap: 5px;
+}
+
+.dusk-field > label {
+  font: var(--axi-t-small);
+  color: var(--axi-text-dim);
+}
+
+/* A device address is content that wants to be monospaced. .axi-card :where(p)
+   already sets the size and the dim ink; only the family is ours. */
+.dusk-card__address {
+  font-family: var(--axi-mono);
+}
+
+/* The cards are not pressable until M2 gives them somewhere to go. The
+   language's hover lift stays — it is honest about what they are about to
+   become — but the hand is not, because nothing happens on click yet.
+   Delete this rule when the card gets its press. */
+.dusk-card {
+  cursor: default;
+}
+
+/* Push a row's trailing control to the far edge. .axi-row is a plain wrapping
+   flex run and has no opinion about this. */
+.dusk-row__end {
+  margin-left: auto;
+}
+
+.dusk-empty {
+  text-align: center;
+}
+
+.dusk-empty > * {
+  margin-inline: auto;
+}
+
+/* The empty state's explanation, held to a readable measure rather than the
+   full width of the panel it sits in. */
+.dusk-empty__body {
+  max-width: 46ch;
+}

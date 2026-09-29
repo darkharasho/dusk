@@ -1,3 +1,109 @@
 # dusk
 
-A single polished desktop app that wraps Sunshine (host) and Moonlight (client) behind one device-centric UI, so hosting and connecting stop feeling like two separate programs. Sunshine runs as a managed background service configured through the app's own screens via its local API; Moonlight handles the stream, shelled out to moonlight-qt at first with an embedded moonlight-common-c renderer as a later swap. Networking is accepted as-is — LAN or the user's own VPN, with Sunshine's existing pairing and mDNS discovery — so there are no accounts, rendezvous servers, or relay infrastructure to run. The core payoff is a device grid where every machine appears as a card showing online, paired, and hosting/available state.
+A single desktop app that wraps Sunshine (host) and Moonlight (client) behind one
+device-centric UI, so hosting and connecting stop feeling like two separate
+programs. Networking is accepted as-is — LAN or your own VPN, using Sunshine's
+existing pairing and mDNS discovery — so there are no accounts, rendezvous
+servers, or relay infrastructure to run. The payoff is a device grid where every
+machine appears as a card showing online, paired, and hosting state.
+
+## Status
+
+M0 and M1 are done: the skeleton, the device model, the host abstraction, and a
+working device grid fed by real mDNS discovery and `serverinfo` polling.
+Streaming, host control, and the installer are not built yet.
+
+| Milestone | What it covers | State |
+| --- | --- | --- |
+| M0 | Tauri shell, device model, `HostBackend` trait + mock | done |
+| M1 | mDNS + manual address book, liveness polling, device grid | done |
+| M2 | Client path — pair, list apps, launch via `moonlight-qt` | next |
+| M3 | Host path — Sunshine service control on all three platforms | |
+| M4 | Config UI — schema-driven, replaces Sunshine's web UI | |
+| M5 | First-run install per platform | |
+
+## Running it
+
+```sh
+npm install
+npm run tauri dev            # real discovery on the local network
+DUSK_MOCK=1 npm run tauri dev # fixtures, no network, for UI work
+```
+
+`DUSK_MOCK=1` seeds one device in each card state and swaps in a mock host
+backend. It exists because a Mac cannot usefully run Sunshine (see below), and
+the rest of the UI should not be blocked on that.
+
+```sh
+npm run typecheck                 # frontend
+cd src-tauri && cargo test        # backend
+python3 scripts/make_placeholder_icon.py   # regenerate the placeholder icon
+```
+
+## How it fits together
+
+```
+mDNS (_nvstream._tcp) ─┐
+                       ├─→ Registry ─→ poller ─→ serverinfo ─→ Snapshot ─→ UI
+manual address book ───┘
+```
+
+- **`registry.rs`** is the interesting file. Two sources feed it and the same
+  machine routinely appears in both, or twice over mDNS on two interfaces.
+  Devices are keyed by address until `serverinfo` returns Sunshine's `uniqueid`,
+  at which point the entry is re-keyed and merged. That is what makes "one
+  machine on LAN and VPN" a single card.
+- **`serverinfo.rs`** talks to the stable GameStream endpoint rather than
+  Sunshine's config API. Moonlight depends on it, so it cannot change freely.
+- **`host/`** is the platform abstraction. Capability matrices are real and
+  drive the UI; `probe`/`start`/`stop` land in M3.
+- The backend pushes a whole `Snapshot` on every change and the UI is a pure
+  function of it. Cheap at this scale, and diffing would be premature.
+
+## The look
+
+The UI is drawn in [`@axiapps/axi-design`](https://darkharasho.github.io/axi-design/),
+bundled rather than linked from its Pages URL — a desktop window opened offline
+still has to paint. The accent is left at the language's default, Axi Gold,
+which is also the right ink here: the strip on a card mid-session is the sun in
+sunshine/moonlight.
+
+`src/app.css` holds only what the language does not draw, and should stay that
+way. Anything in it that grows into a component belongs upstream instead.
+
+The one thing worth knowing is how device state is encoded, because the
+language is opinionated about it. Status is a **cap across the head of a card**,
+never a stripe down its edge: a full-height stripe reads as the card's border,
+and a grid of them becomes a grid of coloured frames that say nothing about any
+one machine. Offline gets no cap and a neutral chip — a muted status ink is
+forbidden, so the absence of status is drawn as the absence of colour rather
+than as a faded version of it.
+
+| State | Cap | Chip |
+| --- | --- | --- |
+| Hosting | accent | `axi-chip--accent` |
+| Ready / Online | ok | `axi-chip--ok` |
+| Not paired | warn | `axi-chip--warn` |
+| Offline | none | plain `axi-chip` |
+
+## Things worth knowing
+
+**Pairing state reads as unknown, deliberately.** `PairStatus` is only
+meaningful over the TLS port with a client certificate presented, and Dusk does
+not own one until M2. Over plain HTTP the field is always `0`, so reporting it
+would mean rendering every paired machine as unpaired. The UI says "Online"
+instead of guessing.
+
+**macOS hosting is experimental upstream.** Not a Dusk limitation — Sunshine
+itself treats macOS hosting as experimental: no gamepad support, no system audio
+without a loopback device like BlackHole, and Screen Recording plus Accessibility
+have to be granted by hand because no installer can script a TCC prompt. The UI
+flags this rather than promising parity. Streaming *to* a Mac is unaffected and
+first-class.
+
+**Sunshine is not bundled.** It gets fetched and verified at first run (M5).
+That keeps Dusk out of GPL-3.0 conveying obligations, lets Sunshine ship security
+updates without a Dusk release, and defers to the distro package on Linux.
+
+**`src/types.ts` mirrors `src-tauri/src/model.rs` by hand.** If it starts
+drifting, generate it (ts-rs or specta) rather than patching it up.

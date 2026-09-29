@@ -7,3 +7,7 @@ build
 *.log
 .superpowers
 .sai/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/

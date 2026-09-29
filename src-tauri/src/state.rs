@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::host::HostBackend;
 use crate::model::Snapshot;
-use crate::moonlight::ClientIdentity;
+use crate::moonlight::{ClientIdentity, Moonlight};
 use crate::registry::Registry;
 use crate::store::Store;
 
@@ -23,8 +23,13 @@ pub struct AppState {
     pub store_path: PathBuf,
     pub http: reqwest::Client,
     /// Presents our client certificate, so `PairStatus` is meaningful.
-    /// `None` until moonlight-qt has paired with something at least once.
-    pub tls: Option<reqwest::Client>,
+    ///
+    /// `None` until moonlight-qt has paired with something at least once,
+    /// and swappable because the first successful pair is what creates the
+    /// identity — see [`AppState::reload_identity`].
+    tls: RwLock<Option<reqwest::Client>>,
+    /// `None` when moonlight-qt is not installed.
+    pub moonlight: Option<Moonlight>,
     discovering: AtomicBool,
     refresh: Notify,
 }
@@ -64,6 +69,7 @@ impl AppState {
         store_path: PathBuf,
         http: reqwest::Client,
         tls: Option<reqwest::Client>,
+        moonlight: Option<Moonlight>,
     ) -> Self {
         Self {
             registry: RwLock::new(registry),
@@ -71,10 +77,31 @@ impl AppState {
             store: Mutex::new(store),
             store_path,
             http,
-            tls,
+            tls: RwLock::new(tls),
+            moonlight,
             discovering: AtomicBool::new(false),
             refresh: Notify::new(),
         }
+    }
+
+    /// The authenticated client, if we have an identity.
+    pub async fn tls(&self) -> Option<reqwest::Client> {
+        self.tls.read().await.clone()
+    }
+
+    /// Re-read moonlight-qt's identity and rebuild the TLS client.
+    ///
+    /// Called after pairing: a first-ever pair mints the identity, so until
+    /// this runs Dusk would keep probing unauthenticated and reporting the
+    /// machine it just paired with as unknown.
+    pub fn reload_identity(self: &Arc<Self>) {
+        let state = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let rebuilt = crate::moonlight::identity::load().and_then(|id| tls_client(&id));
+            if rebuilt.is_some() {
+                *state.tls.write().await = rebuilt;
+            }
+        });
     }
 
     pub fn set_discovering(&self, value: bool) {
@@ -99,6 +126,7 @@ impl AppState {
             devices: self.registry.read().await.devices(),
             host: self.host.state(),
             discovering: self.is_discovering(),
+            moonlight_available: self.moonlight.is_some(),
         }
     }
 }

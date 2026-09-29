@@ -79,6 +79,20 @@ fn parse_port(raw: &str) -> Result<u16, String> {
         .ok_or_else(|| format!("\"{raw}\" is not a valid port."))
 }
 
+/// Turn a running app's id into its name, when we know the host's apps.
+///
+/// `serverinfo` only reports `currentgame` as an id, so without this a card
+/// mid-session can say no more than "In a session".
+fn resolve_running_app(device: &mut Device) {
+    let Activity::Hosting { app_id, app_name } = &mut device.activity else {
+        return;
+    };
+    let Some(id) = app_id.as_deref() else { return };
+    if let Some(app) = device.apps.iter().find(|a| a.id == id) {
+        *app_name = Some(app.name.clone());
+    }
+}
+
 #[derive(Debug)]
 pub enum ProbeOutcome {
     Reached {
@@ -131,6 +145,35 @@ impl Registry {
             .values()
             .filter(|d| !d.is_self && !d.addresses.is_empty())
             .map(|d| (d.id.clone(), d.probe_order(), d.http_port, d.https_port))
+            .collect()
+    }
+
+    /// Record the app list fetched for a device, and resolve the name of
+    /// whatever it is running now.
+    pub fn set_apps(&mut self, id: &str, apps: Vec<crate::applist::HostApp>) {
+        if let Some(device) = self.devices.get_mut(id) {
+            device.apps = apps;
+            resolve_running_app(device);
+        }
+    }
+
+    /// Devices we should fetch an app list for: paired, online, and without
+    /// one yet. The list changes rarely, so re-fetching every tick would be
+    /// a request per host per five seconds for data that almost never moves.
+    pub fn applist_targets(&self) -> Vec<(DeviceId, String, u16)> {
+        self.devices
+            .values()
+            .filter(|d| {
+                !d.is_self
+                    && d.apps.is_empty()
+                    && d.pairing == PairingState::Paired
+                    && matches!(d.reachability, Reachability::Online { .. })
+            })
+            .filter_map(|d| {
+                d.primary_address
+                    .clone()
+                    .map(|address| (d.id.clone(), address, d.https_port))
+            })
             .collect()
     }
 
@@ -278,6 +321,13 @@ impl Registry {
         device.pairing = pairing_override.unwrap_or_else(|| info.pairing());
         device.activity = info.activity();
         device.server = Some(info.details());
+        resolve_running_app(device);
+
+        // An app list belongs to a pairing. Losing the pairing invalidates
+        // it, and keeping it would offer launch buttons that cannot work.
+        if device.pairing == PairingState::NotPaired {
+            device.apps.clear();
+        }
         if device.custom_name.is_none() {
             if let Some(hostname) = info.hostname() {
                 device.name = hostname.to_string();

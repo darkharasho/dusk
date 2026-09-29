@@ -4,6 +4,7 @@ import { cardState, initials, originLabel } from "../deviceState";
 
 interface Props {
   device: Device;
+  onOpen(device: Device): void;
 }
 
 /**
@@ -13,15 +14,17 @@ interface Props {
  * a full-height stripe reads as the card's border, and a grid of them becomes
  * a grid of coloured frames that say nothing about any one machine.
  */
-export function DeviceCard({ device }: Props) {
+export function DeviceCard({ device, onOpen }: Props) {
   const { label, strip, chipClass } = cardState(device);
   const origin = originLabel(device);
   const address = device.primaryAddress ?? device.addresses[0] ?? "No address";
 
   return (
-    <div
-      className={`axi-card dusk-card${strip ? " axi-card--strip" : ""}`}
+    <button
+      type="button"
+      className={`axi-card${strip ? " axi-card--strip" : ""}`}
       style={strip ? ({ "--axi-card-strip": strip } as CSSProperties) : undefined}
+      onClick={() => onOpen(device)}
     >
       <div className="axi-card__head">
         <span className="axi-card__glyph" aria-hidden="true">
@@ -37,7 +40,10 @@ export function DeviceCard({ device }: Props) {
 
       <div className="axi-card__meta">
         <span className={chipClass}>{label}</span>
+        {device.apps.length > 0 && (
+          <span>{device.apps.length} apps</span>
+        )}
       </div>
-    </div>
+    </button>
   );
 }

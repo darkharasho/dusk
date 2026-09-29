@@ -79,6 +79,9 @@ pub struct Device {
     pub pairing: PairingState,
     pub activity: Activity,
     pub server: Option<ServerDetails>,
+    /// What this host offers to stream. Only populated once we are paired,
+    /// because `applist` requires the client certificate.
+    pub apps: Vec<crate::applist::HostApp>,
     pub last_seen_ms: Option<u64>,
 
     /// A name the user typed. Survives merges so discovery cannot overwrite
@@ -102,6 +105,7 @@ impl Device {
             pairing: PairingState::Unknown,
             activity: Activity::Unknown,
             server: None,
+            apps: Vec::new(),
             last_seen_ms: None,
             custom_name: None,
         }
@@ -190,4 +194,8 @@ pub struct Snapshot {
     pub devices: Vec<Device>,
     pub host: HostState,
     pub discovering: bool,
+    /// False when moonlight-qt is not installed. Nothing on the client side
+    /// works without it, so the UI says so rather than offering buttons that
+    /// can only fail.
+    pub moonlight_available: bool,
 }

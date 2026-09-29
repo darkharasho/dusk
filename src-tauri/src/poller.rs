@@ -11,6 +11,7 @@ use std::time::Duration;
 use futures_util::future::join_all;
 use tauri::AppHandle;
 
+use crate::applist;
 use crate::registry::ProbeOutcome;
 use crate::serverinfo;
 use crate::state::{emit_snapshot, AppState};
@@ -37,11 +38,16 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
         return;
     }
 
+    // Read once for the whole tick rather than per target: it is behind a
+    // lock, and every probe in a tick should agree on which identity is in
+    // play anyway.
+    let tls_client = state.tls().await;
+
     // All machines are probed concurrently; one unreachable host must not
     // hold up the rest of the grid.
     let probes = targets.into_iter().map(|(id, addresses, port, tls_port)| {
         let http = state.http.clone();
-        let tls = state.tls.clone();
+        let tls = tls_client.clone();
         async move {
             (
                 id,
@@ -60,6 +66,42 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
     }
 
     emit_snapshot(app, state).await;
+    fetch_app_lists(app, state).await;
+}
+
+/// Fetch app lists for newly paired machines.
+///
+/// Runs after the snapshot rather than before, so liveness is never held up
+/// waiting on a list that only matters once someone opens a device.
+async fn fetch_app_lists(app: &AppHandle, state: &Arc<AppState>) {
+    let Some(tls) = state.tls().await else { return };
+    let targets = state.registry.read().await.applist_targets();
+    if targets.is_empty() {
+        return;
+    }
+
+    let fetches = targets.into_iter().map(|(id, address, port)| {
+        let tls = tls.clone();
+        async move { (id, applist::query(&tls, &address, port).await) }
+    });
+
+    let mut changed = false;
+    for (id, result) in join_all(fetches).await {
+        match result {
+            Ok(apps) if !apps.is_empty() => {
+                state.registry.write().await.set_apps(&id, apps);
+                changed = true;
+            }
+            // An empty list is legitimate and will simply be retried; an
+            // error is worth a line but not worth failing the tick over.
+            Ok(_) => {}
+            Err(err) => eprintln!("dusk: could not read app list for {id}: {err}"),
+        }
+    }
+
+    if changed {
+        emit_snapshot(app, state).await;
+    }
 }
 
 /// Try each address in turn, preferring the authenticated probe.

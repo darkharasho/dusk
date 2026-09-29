@@ -43,6 +43,12 @@ export interface ServerDetails {
   localIp: string | null;
 }
 
+export interface HostApp {
+  id: string;
+  name: string;
+  hdr: boolean;
+}
+
 export interface Device {
   id: DeviceId;
   name: string;
@@ -56,6 +62,8 @@ export interface Device {
   pairing: PairingState;
   activity: Activity;
   server: ServerDetails | null;
+  /** Only populated once paired — `applist` needs the client certificate. */
+  apps: HostApp[];
   lastSeenMs: number | null;
 }
 
@@ -89,4 +97,6 @@ export interface Snapshot {
   devices: Device[];
   host: HostState;
   discovering: boolean;
+  /** False when moonlight-qt is missing; nothing client-side works without it. */
+  moonlightAvailable: boolean;
 }

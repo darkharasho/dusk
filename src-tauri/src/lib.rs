@@ -3,6 +3,7 @@
 //! M0/M1 scope: the device grid. Discovery and liveness are real; host
 //! control and streaming are the next two milestones.
 
+mod applist;
 mod commands;
 mod discovery;
 mod host;
@@ -96,6 +97,11 @@ pub fn run() {
                 );
             }
 
+            let moonlight = moonlight::Moonlight::discover();
+            if moonlight.is_none() {
+                eprintln!("dusk: moonlight-qt not found; pairing and streaming are unavailable");
+            }
+
             let state = Arc::new(AppState::new(
                 registry,
                 host::detect(),
@@ -103,6 +109,7 @@ pub fn run() {
                 store_path,
                 http,
                 tls,
+                moonlight,
             ));
             app.manage(state.clone());
 
@@ -121,6 +128,9 @@ pub fn run() {
             commands::add_manual_device,
             commands::remove_manual_device,
             commands::refresh_now,
+            commands::pair_device,
+            commands::launch_app,
+            commands::quit_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dusk");

@@ -17,7 +17,7 @@ Streaming, host control, and the installer are not built yet.
 | --- | --- | --- |
 | M0 | Tauri shell, device model, `HostBackend` trait + mock | done |
 | M1 | mDNS + manual address book, liveness polling, device grid | done |
-| M2 | Client path — pair, list apps, launch via `moonlight-qt` | next |
+| M2 | Client path — pair, list apps, launch via `moonlight-qt` | built, not yet tested against a second machine |
 | M3 | Host path — Sunshine service control on all three platforms | |
 | M4 | Config UI — schema-driven, replaces Sunshine's web UI | |
 | M5 | First-run install per platform | |
@@ -55,6 +55,14 @@ manual address book ───┘
   machine on LAN and VPN" a single card.
 - **`serverinfo.rs`** talks to the stable GameStream endpoint rather than
   Sunshine's config API. Moonlight depends on it, so it cannot change freely.
+- **`moonlight/cli.rs`** drives moonlight-qt for the three things that need
+  it — pair, stream, quit. Everything it asserts about that binary was
+  measured, not assumed: it exits `255` on failure, puts all human-readable
+  output on stderr behind a log banner, and `quit` against a host that will
+  not answer **hangs forever**, which is why every run carries a timeout.
+- **`applist.rs`** gets the app list from GameStream rather than
+  `moonlight list`: structured XML beats CLI text, and it is what turns a
+  running app's id into the name a card shows.
 - **`host/`** is the platform abstraction. Capability matrices are real and
   drive the UI; `probe`/`start`/`stop` land in M3.
 - The backend pushes a whole `Snapshot` on every change and the UI is a pure

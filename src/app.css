@@ -48,12 +48,18 @@ body,
   font-family: var(--axi-mono);
 }
 
-/* The cards are not pressable until M2 gives them somewhere to go. The
-   language's hover lift stays — it is honest about what they are about to
-   become — but the hand is not, because nothing happens on click yet.
-   Delete this rule when the card gets its press. */
-.dusk-card {
-  cursor: default;
+/* The pairing PIN. Large, monospaced and widely tracked, because it is read
+   off this screen and typed on another one. */
+.dusk-pin {
+  font-family: var(--axi-mono);
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  /* The tracking is applied to the right of each glyph, including the last,
+     which would otherwise sit visibly off-centre. */
+  text-indent: 0.22em;
+  text-align: center;
+  color: var(--axi-accent);
 }
 
 /* Push a row's trailing control to the far edge. .axi-row is a plain wrapping

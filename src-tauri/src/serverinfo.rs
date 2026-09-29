@@ -156,7 +156,7 @@ async fn query(
 ///
 /// Bracketed IPv6 literals (`[::1]`) keep their brackets; a bare IPv6 literal
 /// is bracketed here so the URL stays parseable.
-fn with_port(address: &str, port: u16) -> String {
+pub fn with_port(address: &str, port: u16) -> String {
     let trimmed = address.trim();
 
     if trimmed.starts_with('[') {

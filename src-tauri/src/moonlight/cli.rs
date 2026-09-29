@@ -232,6 +232,31 @@ fn on_path(name: &str) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Stand-ins for moonlight-qt, so the timeout and success paths are
+    /// covered on every platform rather than only on the developer's.
+    ///
+    /// Windows has no `/bin/sleep`; a `ping` with a count is the usual way
+    /// to occupy a shell for a known time.
+    #[cfg(unix)]
+    const HANGS: (&str, &[&str]) = ("/bin/sleep", &["60"]);
+    #[cfg(windows)]
+    const HANGS: (&str, &[&str]) = ("cmd", &["/C", "ping", "-n", "60", "127.0.0.1"]);
+
+    #[cfg(unix)]
+    const PRINTS_READY: (&str, &[&str]) = ("/bin/echo", &["ready"]);
+    #[cfg(windows)]
+    const PRINTS_READY: (&str, &[&str]) = ("cmd", &["/C", "echo", "ready"]);
+
+    /// Any file that certainly exists, for the discovery override.
+    fn a_real_file() -> PathBuf {
+        #[cfg(unix)]
+        return PathBuf::from("/bin/sh");
+        #[cfg(windows)]
+        return PathBuf::from(
+            std::env::var("COMSPEC").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string()),
+        );
+    }
+
     #[test]
     fn the_log_banner_is_not_shown_to_a_person() {
         let stderr = "Redirecting log output to /tmp/Moonlight-123.log\n\
@@ -262,16 +287,18 @@ mod tests {
     /// UI in "busy" forever. `sleep` stands in for that behaviour.
     #[tokio::test]
     async fn a_command_that_never_returns_is_given_up_on() {
-        let moonlight = Moonlight::at(PathBuf::from("/bin/sleep"));
-        let result = moonlight.run(&["60"], Duration::from_millis(250)).await;
+        let (program, args) = HANGS;
+        let moonlight = Moonlight::at(PathBuf::from(program));
+        let result = moonlight.run(args, Duration::from_millis(250)).await;
         assert!(matches!(result, Err(MoonlightError::TimedOut)));
     }
 
     #[tokio::test]
     async fn a_command_that_answers_in_time_is_not_cut_off() {
-        let moonlight = Moonlight::at(PathBuf::from("/bin/echo"));
+        let (program, args) = PRINTS_READY;
+        let moonlight = Moonlight::at(PathBuf::from(program));
         let out = moonlight
-            .run(&["ready"], Duration::from_secs(5))
+            .run(args, Duration::from_secs(10))
             .await
             .expect("completes");
         assert_eq!(out.trim(), "ready");
@@ -281,9 +308,10 @@ mod tests {
     fn discovery_prefers_an_explicit_override() {
         // The override has to win over the fixed list, or a portable install
         // is unreachable. Pointed at a file that certainly exists.
-        std::env::set_var("DUSK_MOONLIGHT_BIN", "/bin/sh");
+        let real = a_real_file();
+        std::env::set_var("DUSK_MOONLIGHT_BIN", &real);
         let found = Moonlight::discover().expect("override is a file");
-        assert_eq!(found.binary, PathBuf::from("/bin/sh"));
+        assert_eq!(found.binary, real);
         std::env::remove_var("DUSK_MOONLIGHT_BIN");
     }
 }

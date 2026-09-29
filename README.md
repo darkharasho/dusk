@@ -49,6 +49,26 @@ a Mac — so without it they would rot unnoticed. The network download tests
 are excluded there, because an outage or a rate limit would produce a red
 build that says nothing about the commit.
 
+### Checking the Windows build without Windows
+
+```sh
+brew install llvm lld
+cargo install cargo-xwin
+rustup target add x86_64-pc-windows-msvc
+
+./scripts/check-windows.sh        # ~30s cold, ~2s warm
+```
+
+Worth the setup: the first two CI failures on this project were both
+Windows-only compile errors that no amount of local testing could have
+found. This runs the same compile and the same lints against
+`x86_64-pc-windows-msvc` in seconds instead of a push-and-wait round trip.
+
+It cross-compiles, it does not run. A test that passes here is a test that
+*builds* here — the third CI failure was tests calling `/bin/sleep`, which
+compiles on Windows perfectly well and then fails at runtime. CI is still
+the only place Windows tests actually execute.
+
 ## How it fits together
 
 ```

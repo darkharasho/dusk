@@ -27,6 +27,15 @@ if-addrs = "0.13"
 # rustls rather than the platform TLS stack: Sunshine's certificate is
 # self-signed, and M2 needs client-certificate auth on the TLS port, which is
 # far easier to drive consistently across three platforms with rustls.
+# Reading moonlight-qt's identity out of its QSettings store, which is a
+# different backend on each platform: a plist on macOS, an INI file on Linux
+# (handled in-tree), and the registry on Windows.
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.52"
+
 [dependencies.reqwest]
 version = "0.12"
 default-features = false

@@ -81,7 +81,14 @@ fn parse_port(raw: &str) -> Result<u16, String> {
 
 #[derive(Debug)]
 pub enum ProbeOutcome {
-    Reached { address: String, info: ServerInfo },
+    Reached {
+        address: String,
+        info: ServerInfo,
+        /// A pairing verdict from an authenticated probe, when the response
+        /// carrying the detail was not itself authenticated. Wins over
+        /// `info.pairing()`, which in that case can only say Unknown.
+        pairing: Option<PairingState>,
+    },
     Unreachable,
 }
 
@@ -117,12 +124,13 @@ impl Registry {
         self.devices.values().cloned().collect()
     }
 
-    /// Everything that should be polled: all remote devices with an address.
-    pub fn probe_targets(&self) -> Vec<(DeviceId, Vec<String>, u16)> {
+    /// Everything that should be polled: all remote devices with an address,
+    /// as `(id, addresses, http port, tls port)`.
+    pub fn probe_targets(&self) -> Vec<(DeviceId, Vec<String>, u16, u16)> {
         self.devices
             .values()
             .filter(|d| !d.is_self && !d.addresses.is_empty())
-            .map(|d| (d.id.clone(), d.probe_order(), d.http_port))
+            .map(|d| (d.id.clone(), d.probe_order(), d.http_port, d.https_port))
             .collect()
     }
 
@@ -246,24 +254,28 @@ impl Registry {
             return id.to_string();
         };
 
-        let info = match outcome {
+        let (info, pairing_override) = match outcome {
             ProbeOutcome::Unreachable => {
                 device.reachability = Reachability::Offline;
                 device.activity = Activity::Unknown;
                 device.pairing = PairingState::Unknown;
                 return id.to_string();
             }
-            ProbeOutcome::Reached { address, info } => {
+            ProbeOutcome::Reached {
+                address,
+                info,
+                pairing,
+            } => {
                 device.reachability = Reachability::Online {
                     rtt_ms: info.rtt_ms,
                 };
                 device.primary_address = Some(address);
                 device.last_seen_ms = Some(now_ms());
-                info
+                (info, pairing)
             }
         };
 
-        device.pairing = info.pairing();
+        device.pairing = pairing_override.unwrap_or_else(|| info.pairing());
         device.activity = info.activity();
         device.server = Some(info.details());
         if device.custom_name.is_none() {
@@ -357,6 +369,15 @@ mod tests {
                 .collect::<HashMap<_, _>>(),
             rtt_ms: 7,
             authenticated: false,
+            status_code: crate::serverinfo::STATUS_OK,
+        }
+    }
+
+    fn reached(address: &str, info: ServerInfo) -> ProbeOutcome {
+        ProbeOutcome::Reached {
+            address: address.into(),
+            info,
+            pairing: None,
         }
     }
 
@@ -386,9 +407,8 @@ mod tests {
         let vpn = r.upsert_manual("100.84.2.9", None, None);
         assert_eq!(r.devices().len(), 3); // self + two
 
-        let probe = |address: &str| ProbeOutcome::Reached {
-            address: address.into(),
-            info: info(&[("uniqueid", "abc-123"), ("hostname", "WORKSHOP")]),
+        let probe = |address: &str| {
+            reached(address, info(&[("uniqueid", "abc-123"), ("hostname", "WORKSHOP")]))
         };
         r.apply_probe(&lan, probe("192.168.1.40"));
         r.apply_probe(&vpn, probe("100.84.2.9"));
@@ -405,10 +425,10 @@ mod tests {
         let id = r.upsert_manual("192.168.1.40", None, Some("Workshop PC".into()));
         r.apply_probe(
             &id,
-            ProbeOutcome::Reached {
-                address: "192.168.1.40".into(),
-                info: info(&[("uniqueid", "abc-123"), ("hostname", "DESKTOP-8HF2K1")]),
-            },
+            reached(
+                "192.168.1.40",
+                info(&[("uniqueid", "abc-123"), ("hostname", "DESKTOP-8HF2K1")]),
+            ),
         );
         let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
         assert_eq!(device.name, "Workshop PC");
@@ -442,6 +462,24 @@ mod tests {
         let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
         assert_eq!(device.reachability, Reachability::Offline);
         assert_eq!(device.activity, Activity::Unknown);
+    }
+
+    #[test]
+    fn an_authenticated_verdict_beats_the_plain_probes_unknown() {
+        // The detail came from the unauthenticated port, so info.pairing() can
+        // only say Unknown — but a TLS 401 already told us where we stand.
+        let mut r = registry();
+        let id = r.upsert_manual("192.168.1.40", None, None);
+        r.apply_probe(
+            &id,
+            ProbeOutcome::Reached {
+                address: "192.168.1.40".into(),
+                info: info(&[("hostname", "WORKSHOP")]),
+                pairing: Some(PairingState::NotPaired),
+            },
+        );
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert_eq!(device.pairing, PairingState::NotPaired);
     }
 
     #[test]

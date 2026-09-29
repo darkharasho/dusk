@@ -15,6 +15,12 @@ use crate::model::{Activity, PairingState, ServerDetails};
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// Sunshine's own status, carried in the `status_code` attribute of `<root>`
+/// rather than in the HTTP status — an unauthorized client still gets
+/// `HTTP 200` with `status_code="401"` in the body.
+pub const STATUS_OK: u16 = 200;
+pub const STATUS_UNAUTHORIZED: u16 = 401;
+
 #[derive(Debug, Clone)]
 pub struct ServerInfo {
     pub fields: HashMap<String, String>,
@@ -23,6 +29,8 @@ pub struct ServerInfo {
     /// certificate presented, which is the only case where `PairStatus`
     /// means anything.
     pub authenticated: bool,
+    /// Sunshine's application-level status, not the HTTP one.
+    pub status_code: u16,
 }
 
 impl ServerInfo {
@@ -54,6 +62,12 @@ impl ServerInfo {
             // Over plain HTTP `PairStatus` is always 0 regardless of the real
             // state. Reporting that as NotPaired would be a lie.
             return PairingState::Unknown;
+        }
+        // The host rejected our certificate outright. That is not a failed
+        // probe — it is the clearest "not paired" answer available, and
+        // better than anything the plain-HTTP probe can say.
+        if self.status_code == STATUS_UNAUTHORIZED {
+            return PairingState::NotPaired;
         }
         match self.get("pairstatus") {
             Some("1") => PairingState::Paired,
@@ -90,11 +104,34 @@ pub async fn query_http(
     port: u16,
 ) -> Result<ServerInfo, String> {
     let authority = with_port(address, port);
-    let url = format!("http://{authority}/serverinfo?uniqueid=0&uuid=0");
+    query(client, &format!("http://{authority}/serverinfo?uniqueid=0&uuid=0"), false).await
+}
 
+/// Query `serverinfo` over TLS with our client certificate presented.
+///
+/// This is the only way `PairStatus` means anything: the host answers it
+/// against the certificate it is talking to, so the plain-HTTP probe can
+/// never tell paired from unpaired.
+///
+/// `client` must be one built by [`crate::state::tls_client`] — an ordinary
+/// client has no certificate to present and would read as unpaired.
+pub async fn query_https(
+    client: &reqwest::Client,
+    address: &str,
+    port: u16,
+) -> Result<ServerInfo, String> {
+    let authority = with_port(address, port);
+    query(client, &format!("https://{authority}/serverinfo?uniqueid=0&uuid=0"), true).await
+}
+
+async fn query(
+    client: &reqwest::Client,
+    url: &str,
+    authenticated: bool,
+) -> Result<ServerInfo, String> {
     let started = Instant::now();
     let response = client
-        .get(&url)
+        .get(url)
         .timeout(PROBE_TIMEOUT)
         .send()
         .await
@@ -106,10 +143,12 @@ pub async fn query_http(
     }
 
     let body = response.text().await.map_err(|e| e.to_string())?;
+    let (status_code, fields) = parse(&body)?;
     Ok(ServerInfo {
-        fields: parse(&body)?,
+        fields,
         rtt_ms,
-        authenticated: false,
+        authenticated,
+        status_code,
     })
 }
 
@@ -141,23 +180,40 @@ fn with_port(address: &str, port: u16) -> String {
     }
 }
 
-/// Flatten the top-level children of `<root>` into a lowercase-keyed map.
+/// Flatten the top-level children of `<root>` into a lowercase-keyed map,
+/// alongside the `status_code` attribute on `<root>` itself.
 ///
 /// The document is flat, so a tag/text scan is enough and avoids binding the
 /// parser to a field list that Sunshine may extend.
-fn parse(xml: &str) -> Result<HashMap<String, String>, String> {
+fn parse(xml: &str) -> Result<(u16, HashMap<String, String>), String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
     let mut fields = HashMap::new();
+    let mut status = STATUS_OK;
     let mut depth = 0usize;
     let mut current: Option<String> = None;
     let mut buf = Vec::new();
+    let mut saw_root = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
+            // An unauthorized response is a self-closing <root/>, so the
+            // status has to be read from Empty as well as Start.
+            Ok(Event::Empty(e)) => {
+                depth += 1;
+                if depth == 1 {
+                    saw_root = true;
+                    status = root_status(&e).unwrap_or(status);
+                }
+                depth -= 1;
+            }
             Ok(Event::Start(e)) => {
                 depth += 1;
+                if depth == 1 {
+                    saw_root = true;
+                    status = root_status(&e).unwrap_or(status);
+                }
                 // Depth 1 is <root>; depth 2 is the fields we want.
                 if depth == 2 {
                     current = Some(
@@ -190,10 +246,23 @@ fn parse(xml: &str) -> Result<HashMap<String, String>, String> {
         buf.clear();
     }
 
-    if fields.is_empty() {
+    if !saw_root {
+        return Err("serverinfo response was not a serverinfo document".into());
+    }
+    // A non-OK status legitimately carries no fields — that response is the
+    // answer, not a malformed one.
+    if fields.is_empty() && status == STATUS_OK {
         return Err("serverinfo response had no fields".into());
     }
-    Ok(fields)
+    Ok((status, fields))
+}
+
+fn root_status(e: &quick_xml::events::BytesStart<'_>) -> Option<u16> {
+    let attr = e
+        .attributes()
+        .flatten()
+        .find(|a| a.key.as_ref().eq_ignore_ascii_case(b"status_code"))?;
+    String::from_utf8_lossy(&attr.value).trim().parse().ok()
 }
 
 #[cfg(test)]
@@ -212,11 +281,18 @@ mod tests {
   <state>SUNSHINE_SERVER_FREE</state>
 </root>"#;
 
+    /// Exactly what a local Sunshine returns to an unpaired client on the TLS
+    /// port: HTTP 200, a self-closing root, and the real status in the body.
+    const UNAUTHORIZED: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<root status_code="401" query="" status_message="The client is not authorized. Certificate verification failed."/>"#;
+
     fn info(xml: &str, authenticated: bool) -> ServerInfo {
+        let (status_code, fields) = parse(xml).expect("parses");
         ServerInfo {
-            fields: parse(xml).expect("parses"),
+            fields,
             rtt_ms: 3,
             authenticated,
+            status_code,
         }
     }
 
@@ -270,5 +346,33 @@ mod tests {
     fn malformed_bodies_are_errors_not_empty_devices() {
         assert!(parse("not xml at all").is_err());
         assert!(parse("<root></root>").is_err());
+    }
+
+    #[test]
+    fn an_unauthorized_body_parses_despite_carrying_no_fields() {
+        // Sunshine answers HTTP 200 here, so the only signal is in the body.
+        let (status, fields) = parse(UNAUTHORIZED).expect("parses");
+        assert_eq!(status, STATUS_UNAUTHORIZED);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn a_rejected_certificate_means_not_paired_not_unknown() {
+        // The host told us plainly. Falling back to Unknown would throw away
+        // the best answer we are ever going to get.
+        assert_eq!(info(UNAUTHORIZED, true).pairing(), PairingState::NotPaired);
+    }
+
+    #[test]
+    fn an_unauthenticated_probe_stays_unknown_even_on_a_401() {
+        // Without our certificate the 401 says nothing about pairing.
+        assert_eq!(info(UNAUTHORIZED, false).pairing(), PairingState::Unknown);
+    }
+
+    #[test]
+    fn a_missing_status_code_attribute_defaults_to_ok() {
+        let (status, _) = parse(SAMPLE.replace(" status_code=\"200\"", "").as_str())
+            .expect("parses");
+        assert_eq!(status, STATUS_OK);
     }
 }

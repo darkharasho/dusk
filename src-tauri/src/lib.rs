@@ -8,6 +8,7 @@ mod discovery;
 mod host;
 mod mockdata;
 mod model;
+mod moonlight;
 mod poller;
 mod registry;
 mod serverinfo;
@@ -85,12 +86,23 @@ pub fn run() {
                 .connect_timeout(Duration::from_millis(1500))
                 .build()?;
 
+            // Adopt moonlight-qt's client identity if it has one. Without it
+            // every probe is unauthenticated and pairing state stays unknown,
+            // which is a degraded grid rather than a broken one.
+            let tls = moonlight::identity::load().and_then(|id| state::tls_client(&id));
+            if tls.is_none() {
+                eprintln!(
+                    "dusk: no Moonlight client identity found; pairing state will read as unknown"
+                );
+            }
+
             let state = Arc::new(AppState::new(
                 registry,
                 host::detect(),
                 store,
                 store_path,
                 http,
+                tls,
             ));
             app.manage(state.clone());
 

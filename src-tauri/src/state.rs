@@ -3,12 +3,14 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::host::HostBackend;
 use crate::model::Snapshot;
+use crate::moonlight::ClientIdentity;
 use crate::registry::Registry;
 use crate::store::Store;
 
@@ -20,8 +22,38 @@ pub struct AppState {
     pub store: Mutex<Store>,
     pub store_path: PathBuf,
     pub http: reqwest::Client,
+    /// Presents our client certificate, so `PairStatus` is meaningful.
+    /// `None` until moonlight-qt has paired with something at least once.
+    pub tls: Option<reqwest::Client>,
     discovering: AtomicBool,
     refresh: Notify,
+}
+
+/// Build a client that presents the Moonlight identity.
+///
+/// `danger_accept_invalid_certs` is load-bearing and not laziness: Sunshine
+/// serves a self-signed certificate, so ordinary verification can only fail.
+/// Moonlight's own answer is to pin the certificate it was handed at pairing,
+/// and Dusk should do the same once it drives pairing — until then this
+/// endpoint is read-only and carries nothing secret, but it is a real gap and
+/// it closes with the pairing work.
+pub fn tls_client(identity: &ClientIdentity) -> Option<reqwest::Client> {
+    let pem = identity.to_combined_pem();
+    let id = match reqwest::Identity::from_pem(&pem) {
+        Ok(id) => id,
+        Err(err) => {
+            eprintln!("dusk: moonlight identity unusable, falling back to plain probes: {err}");
+            return None;
+        }
+    };
+
+    reqwest::Client::builder()
+        .identity(id)
+        .danger_accept_invalid_certs(true)
+        .connect_timeout(Duration::from_millis(1500))
+        .build()
+        .map_err(|err| eprintln!("dusk: could not build TLS client: {err}"))
+        .ok()
 }
 
 impl AppState {
@@ -31,6 +63,7 @@ impl AppState {
         store: Store,
         store_path: PathBuf,
         http: reqwest::Client,
+        tls: Option<reqwest::Client>,
     ) -> Self {
         Self {
             registry: RwLock::new(registry),
@@ -38,6 +71,7 @@ impl AppState {
             store: Mutex::new(store),
             store_path,
             http,
+            tls,
             discovering: AtomicBool::new(false),
             refresh: Notify::new(),
         }

@@ -88,11 +88,22 @@ than as a faded version of it.
 
 ## Things worth knowing
 
-**Pairing state reads as unknown, deliberately.** `PairStatus` is only
-meaningful over the TLS port with a client certificate presented, and Dusk does
-not own one until M2. Over plain HTTP the field is always `0`, so reporting it
-would mean rendering every paired machine as unpaired. The UI says "Online"
-instead of guessing.
+**Dusk adopts Moonlight's client identity rather than imposing one.** The plan
+was for Dusk to generate a keypair and point moonlight-qt at a private profile.
+The spike killed it: moonlight-qt has no `--config` flag and its QSettings
+backend is CFPreferences on macOS and the registry on Windows, neither
+redirectable by environment variable. But the identity turns out to be plain
+PEM under two keys, so Dusk reads it and never writes. Ownership flips at the
+moonlight-common-c swap, and because Dusk already holds the keypair that swap
+costs nobody a re-pair.
+
+**A rejected certificate is an answer, not a failure.** Asked for `serverinfo`
+over TLS by an unpaired client, Sunshine replies `HTTP 200` with
+`status_code="401"` in the body. Reading only the HTTP status would drop that
+on the floor and fall back to the plain probe, which can never say more than
+"unknown" — so the parser reads the body's status and treats a rejected
+certificate as a definite "not paired". Pairing still reads as unknown where
+no identity exists yet, which is an honest first-run state.
 
 **macOS hosting is experimental upstream.** Not a Dusk limitation — Sunshine
 itself treats macOS hosting as experimental: no gamepad support, no system audio

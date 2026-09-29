@@ -39,9 +39,15 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
 
     // All machines are probed concurrently; one unreachable host must not
     // hold up the rest of the grid.
-    let probes = targets.into_iter().map(|(id, addresses, port)| {
+    let probes = targets.into_iter().map(|(id, addresses, port, tls_port)| {
         let http = state.http.clone();
-        async move { (id, probe(&http, &addresses, port).await) }
+        let tls = state.tls.clone();
+        async move {
+            (
+                id,
+                probe(&http, tls.as_ref(), &addresses, port, tls_port).await,
+            )
+        }
     });
 
     let results = join_all(probes).await;
@@ -56,14 +62,60 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
     emit_snapshot(app, state).await;
 }
 
-async fn probe(client: &reqwest::Client, addresses: &[String], port: u16) -> ProbeOutcome {
+/// Try each address in turn, preferring the authenticated probe.
+///
+/// Three outcomes matter, not two:
+///
+/// - TLS answers `200` — the best case. Full detail *and* real pairing state.
+/// - TLS answers `401` — the host rejected our certificate. That is a real
+///   "not paired", but the body carries no hostname or session state, so the
+///   plain probe still runs for detail and the pairing verdict is carried
+///   over. A host that answers only this is still online.
+/// - TLS fails outright — plain probe alone, pairing unknown.
+async fn probe(
+    http: &reqwest::Client,
+    tls: Option<&reqwest::Client>,
+    addresses: &[String],
+    port: u16,
+    tls_port: u16,
+) -> ProbeOutcome {
+    let mut rejected: Option<(String, serverinfo::ServerInfo)> = None;
+
     for address in addresses {
-        if let Ok(info) = serverinfo::query_http(client, address, port).await {
+        if let Some(tls) = tls {
+            if let Ok(info) = serverinfo::query_https(tls, address, tls_port).await {
+                if info.status_code == serverinfo::STATUS_OK {
+                    return ProbeOutcome::Reached {
+                        address: address.clone(),
+                        info,
+                        pairing: None,
+                    };
+                }
+                if info.status_code == serverinfo::STATUS_UNAUTHORIZED && rejected.is_none() {
+                    rejected = Some((address.clone(), info));
+                }
+            }
+        }
+
+        if let Ok(info) = serverinfo::query_http(http, address, port).await {
             return ProbeOutcome::Reached {
                 address: address.clone(),
+                // Carry the authenticated verdict over the plain probe's
+                // Unknown, which is strictly less informative.
+                pairing: rejected.as_ref().map(|(_, r)| r.pairing()),
                 info,
             };
         }
     }
-    ProbeOutcome::Unreachable
+
+    // Reachable over TLS but not over the plain port: still online, and we
+    // know exactly where we stand on pairing.
+    match rejected {
+        Some((address, info)) => ProbeOutcome::Reached {
+            address,
+            pairing: Some(info.pairing()),
+            info,
+        },
+        None => ProbeOutcome::Unreachable,
+    }
 }

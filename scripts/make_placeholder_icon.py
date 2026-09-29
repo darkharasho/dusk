@@ -71,12 +71,69 @@ def png(size):
     )
 
 
+ICO_SIZES = (16, 32, 48, 64, 128, 256)
+
+
+def ico(sizes=ICO_SIZES):
+    """Pack the icon into a Windows .ico.
+
+    tauri-build refuses to build on Windows without this file, so its
+    absence is a build failure rather than a missing picture.
+
+    Entries are classic BMP/DIB rather than embedded PNG. PNG-in-ICO is
+    legal on Vista and later and would be a third of the size, but the
+    resource compilers in this path do not all read it, and an icon that
+    fails to compile is worse than a larger one.
+    """
+    entries, images, offset = [], [], 6 + 16 * len(sizes)
+
+    for size in sizes:
+        # A DIB inside an ICO declares twice its real height: the bitmap is
+        # the colour rows followed by the AND mask.
+        header = struct.pack(
+            "<IiiHHIIiiII", 40, size, size * 2, 1, 32, 0, 0, 0, 0, 0, 0
+        )
+
+        # Bottom-up BGRA, which is the order a DIB is stored in.
+        pixels = bytearray()
+        for y in range(size - 1, -1, -1):
+            for x in range(size):
+                r, g, b = pixel(x, y, size)
+                pixels.extend((b, g, r, 0xFF))
+
+        # The AND mask is ignored for 32-bit icons but must still be there
+        # and correctly sized: rows of 1 bit per pixel, padded to 4 bytes.
+        mask_row = ((size + 31) // 32) * 4
+        mask = bytes(mask_row * size)
+
+        image = header + bytes(pixels) + mask
+        images.append(image)
+        # 256 is stored as 0; the field is one byte.
+        entries.append(
+            struct.pack(
+                "<BBBBHHII",
+                0 if size == 256 else size,
+                0 if size == 256 else size,
+                0,
+                0,
+                1,
+                32,
+                len(image),
+                offset,
+            )
+        )
+        offset += len(image)
+
+    return struct.pack("<HHH", 0, 1, len(sizes)) + b"".join(entries) + b"".join(images)
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for size in SIZES:
         (OUT_DIR / f"{size}x{size}.png").write_bytes(png(size))
     (OUT_DIR / "icon.png").write_bytes(png(512))
     (OUT_DIR / "128x128@2x.png").write_bytes(png(256))
+    (OUT_DIR / "icon.ico").write_bytes(ico())
     print(f"wrote placeholder icons to {OUT_DIR}")
 
 

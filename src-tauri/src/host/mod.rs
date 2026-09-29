@@ -15,8 +15,6 @@ pub mod service;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
-    #[error("not supported on this platform")]
-    Unsupported,
     #[error("{0}")]
     Failed(String),
 }

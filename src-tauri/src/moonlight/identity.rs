@@ -19,8 +19,6 @@
 //! Dusk already holds this keypair, that swap costs nobody a re-pair — which
 //! was the whole point of settling this early.
 
-use std::path::PathBuf;
-
 /// A PEM certificate and its private key, as read from moonlight-qt.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClientIdentity {
@@ -96,6 +94,7 @@ pub fn load() -> Option<ClientIdentity> {
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
+    use std::path::PathBuf;
 
     fn store_path() -> Option<PathBuf> {
         let home = std::env::var_os("HOME")?;
@@ -115,6 +114,7 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
+    use std::path::PathBuf;
 
     fn store_path() -> Option<PathBuf> {
         let base = match std::env::var_os("XDG_CONFIG_HOME") {

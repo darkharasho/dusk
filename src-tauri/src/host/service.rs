@@ -123,14 +123,17 @@ pub async fn run_elevated(
 }
 
 /// Present on every platform so callers compile everywhere; only Windows
-/// has a notion of elevating a separate process like this.
+/// has a notion of relaunching a separate process to elevate it. Unix asks
+/// per-command instead, which is what `osascript` and `sudo` are for.
 #[cfg(not(target_os = "windows"))]
 pub async fn run_elevated(
     _program: &str,
     _args: &[&str],
     _budget: Duration,
 ) -> Result<Run, HostError> {
-    Err(HostError::Unsupported)
+    Err(HostError::Failed(
+        "Relaunching a process with elevated rights is a Windows notion.".into(),
+    ))
 }
 
 /// Single-quote for PowerShell, where a single quote is escaped by doubling

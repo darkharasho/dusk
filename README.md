@@ -129,10 +129,18 @@ verify, and installing one silently would mean putting unverified code in
 the kernel on someone's behalf. The step stays on the checklist and explains
 what to do; it just is not automated. A test enforces this.
 
-Two things are still missing on Windows: `sc start`/`sc stop` need
-administrator rights and Dusk does not elevate them (unlike the installer
-and firewall paths, which do), and none of the Windows or Linux paths have
-run on a real machine.
+Everything on Windows that needs administrator rights — the installer, the
+firewall rules, and starting or stopping the service — goes through one
+elevation helper in `host/service.rs`. Three details there are load-bearing
+and each one fails silently if missed: `-PassThru` with an explicit `exit`,
+or PowerShell's success at *starting* the process is reported instead of
+the result; `sc.exe` rather than `sc`, which in PowerShell is an alias for
+`Set-Content`; and a much longer timeout, because the ordinary one would
+cut off a UAC prompt before the command it guards had begun. The script is
+built by a function that is unit-tested from any platform, since that is
+the only way it gets checked before reaching Windows.
+
+None of the Windows or Linux paths have run on a real machine.
 
 ## Things worth knowing
 

@@ -159,30 +159,26 @@ async fn windows_msi(msi: &Path) -> Result<(), ApplyError> {
         return Err(ApplyError::Unsupported);
     }
 
-    // An MSI that installs a service needs elevation, and there is no way to
-    // ask for it from an already-running unelevated process except by
-    // launching a new one with the runas verb. -Wait keeps this call
-    // meaningful; without it the command returns before the install starts.
-    let command = format!(
-        "Start-Process msiexec.exe -ArgumentList '/i',{},'/qb' -Verb RunAs -Wait",
-        powershell_quote(&msi.to_string_lossy())
-    );
-    check(
-        service::run(
-            "powershell",
-            &["-NoProfile", "-NonInteractive", "-Command", &command],
-        )
-        .await
-        .map_err(|e| ApplyError::Failed(e.to_string()))?,
-        "the installer did not finish",
-    )?;
-    Ok(())
-}
+    // An MSI that registers a service needs elevation. The install budget
+    // rather than the ordinary one: an installer legitimately runs for
+    // minutes, and the default would kill it partway through.
+    let run = service::run_elevated(
+        "msiexec.exe",
+        &["/i", &msi.to_string_lossy(), "/qb"],
+        service::INSTALL_TIMEOUT,
+    )
+    .await
+    .map_err(|e| ApplyError::Failed(e.to_string()))?;
 
-/// Single-quote for PowerShell, where the escape for a single quote is to
-/// double it.
-fn powershell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    if run.ok() {
+        return Ok(());
+    }
+    Err(ApplyError::Failed(match run.status {
+        // 1602 is the documented msiexec code for a user cancelling.
+        Some(1602) => "The installation was cancelled.".to_string(),
+        Some(code) => format!("The installer stopped with code {code}."),
+        None => "The installer did not finish.".to_string(),
+    }))
 }
 
 /// Let Sunshine through the Windows firewall.
@@ -191,41 +187,45 @@ fn powershell_quote(s: &str) -> String {
 /// listens on several TCP and UDP ranges that have changed between releases,
 /// and a program rule stays correct when they do. It is also narrower —
 /// opening a port range admits anything that binds it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub async fn open_firewall(program: &Path) -> Result<(), ApplyError> {
     if !cfg!(target_os = "windows") {
         return Err(ApplyError::Unsupported);
     }
 
-    let mut command = String::from("Start-Process netsh -Verb RunAs -Wait -ArgumentList ");
-    let args = [
+    let program = program.to_string_lossy().into_owned();
+
+    // One rule per protocol. Each elevates separately, which means two
+    // prompts — unavoidable without writing a script file and running that,
+    // which trades two prompts for a temporary file that runs as admin.
+    for (name, protocol) in [
         ("Sunshine (inbound TCP)", "TCP"),
         ("Sunshine (inbound UDP)", "UDP"),
-    ]
-    .iter()
-    .map(|(name, proto)| {
-        format!(
-            "'advfirewall','firewall','add','rule','name={}','dir=in','action=allow','program={}','protocol={}','enable=yes'",
-            name,
-            program.to_string_lossy(),
-            proto
+    ] {
+        let run = service::run_elevated(
+            "netsh.exe",
+            &[
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                &format!("name={name}"),
+                "dir=in",
+                "action=allow",
+                &format!("program={program}"),
+                &format!("protocol={protocol}"),
+                "enable=yes",
+            ],
+            service::ELEVATED_TIMEOUT,
         )
-    })
-    .collect::<Vec<_>>();
+        .await
+        .map_err(|e| ApplyError::Failed(e.to_string()))?;
 
-    for arg in args {
-        command.clear();
-        command.push_str(&format!(
-            "Start-Process netsh -Verb RunAs -Wait -ArgumentList {arg}"
-        ));
-        check(
-            service::run(
-                "powershell",
-                &["-NoProfile", "-NonInteractive", "-Command", &command],
-            )
-            .await
-            .map_err(|e| ApplyError::Failed(e.to_string()))?,
-            "could not add a firewall rule",
-        )?;
+        if !run.ok() {
+            return Err(ApplyError::Failed(format!(
+                "Could not add the {protocol} firewall rule."
+            )));
+        }
     }
     Ok(())
 }
@@ -271,11 +271,8 @@ mod tests {
         assert_eq!(shell_quote("/tmp/it's here"), r"'/tmp/it'\''s here'");
     }
 
-    #[test]
-    fn powershell_quoting_doubles_the_quote() {
-        assert_eq!(powershell_quote(r"C:\x\a.msi"), r"'C:\x\a.msi'");
-        assert_eq!(powershell_quote("C:\\it's\\a.msi"), "'C:\\it''s\\a.msi'");
-    }
+    // PowerShell quoting and the elevation script are tested where they
+    // live, in host::service.
 
     #[test]
     fn a_space_in_a_path_needs_no_special_case_because_it_is_quoted() {

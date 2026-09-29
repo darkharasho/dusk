@@ -58,13 +58,48 @@ impl HostBackend for WindowsHost {
         })
     }
 
+    // Querying a service is unprivileged; starting and stopping one is not,
+    // so these two elevate and `probe` does not.
     async fn start(&self) -> Result<(), HostError> {
-        expect(service::run("sc", &["start", WINDOWS_SERVICE]).await?)
+        elevated_sc("start").await
     }
 
     async fn stop(&self) -> Result<(), HostError> {
-        expect(service::run("sc", &["stop", WINDOWS_SERVICE]).await?)
+        elevated_sc("stop").await
     }
+}
+
+async fn elevated_sc(verb: &str) -> Result<(), HostError> {
+    // `sc.exe` rather than `sc`: PowerShell aliases the bare name to
+    // Set-Content, which would silently do something else entirely.
+    let run = service::run_elevated(
+        "sc.exe",
+        &[verb, WINDOWS_SERVICE],
+        service::ELEVATED_TIMEOUT,
+    )
+    .await?;
+
+    if run.ok() {
+        return Ok(());
+    }
+
+    // An elevated child's output is not ours to read, so the exit code is
+    // all there is. These two are worth naming; anything else falls through
+    // to whatever PowerShell said.
+    Err(HostError::Failed(match run.status {
+        // 1060: the service is not installed.
+        Some(1060) => "Sunshine is not installed as a service on this machine.".into(),
+        // 5: access denied, which here means the prompt was refused.
+        Some(5) => "Windows did not grant permission to change the service.".into(),
+        _ => {
+            let said = run.message();
+            if said == "no output" {
+                format!("Windows could not {verb} the Sunshine service.")
+            } else {
+                said
+            }
+        }
+    }))
 }
 
 /// `sc query` prints a `STATE` line whose numeric code is the reliable part;

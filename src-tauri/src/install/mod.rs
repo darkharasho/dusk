@@ -15,4 +15,4 @@ pub mod download;
 pub mod release;
 pub mod steps;
 
-pub use steps::{Step, StepId, StepState, Setup};
+pub use steps::Setup;

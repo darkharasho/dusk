@@ -143,6 +143,8 @@ pub fn run() {
             commands::get_setup,
             commands::preview_sunshine_download,
             commands::open_privacy_settings,
+            commands::install_sunshine,
+            commands::open_firewall,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dusk");

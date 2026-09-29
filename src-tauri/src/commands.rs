@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::install;
 use crate::model::{Device, Snapshot};
@@ -345,6 +345,84 @@ pub struct DownloadPreview {
     /// False when the release carries no checksum, in which case Dusk
     /// refuses to install rather than running an unverifiable binary.
     pub verifiable: bool,
+}
+
+/// Progress events while a release downloads.
+pub const DOWNLOAD_EVENT: &str = "dusk://download";
+
+/// Download the right Sunshine build and install it.
+///
+/// Both halves are real state changes on the machine, so this only ever runs
+/// from an explicit press — never on a timer, and never as part of a probe.
+#[tauri::command]
+pub async fn install_sunshine(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let inner = state.inner().clone();
+    let release = install::release::fetch_latest(&inner.http).await?;
+
+    let choice = install::release::select(
+        &release.assets,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .ok_or_else(|| {
+        format!(
+            "Sunshine does not publish a build for {} on {}.",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        )
+    })?;
+
+    // Downloads land in the app's own cache directory rather than a shared
+    // temp path: a verified installer briefly sitting somewhere world
+    // writable is a place to swap it before it runs.
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("downloads");
+
+    let emitter = app.clone();
+    let path = install::download::fetch(&inner.http, &choice.asset, &dir, move |progress| {
+        let _ = emitter.emit(DOWNLOAD_EVENT, progress);
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let outcome = install::apply::install(&path, choice.kind)
+        .await
+        .map_err(|e| e.to_string());
+
+    // The installer is a verified copy of a public release, not a secret,
+    // but there is no reason to leave 40MB behind either.
+    let _ = tokio::fs::remove_file(&path).await;
+    outcome?;
+
+    emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
+/// Add firewall rules for Sunshine. Windows only; elevates when it runs.
+#[tauri::command]
+pub async fn open_firewall() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let program = std::env::var_os("ProgramFiles")
+            .map(|base| std::path::PathBuf::from(base).join("Sunshine\\sunshine.exe"))
+            .filter(|p| p.is_file())
+            .ok_or_else(|| {
+                "Dusk could not find sunshine.exe, so it cannot add a rule for it.".to_string()
+            })?;
+        install::apply::open_firewall(&program)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Dusk only manages firewall rules on Windows.".into())
+    }
 }
 
 /// Open the system screen where a permission Dusk cannot grant is granted.

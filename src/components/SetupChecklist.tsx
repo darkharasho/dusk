@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   getSetup,
+  installSunshine,
+  onDownloadProgress,
+  openFirewall,
   openPrivacySettings,
   previewSunshineDownload,
   startHosting,
+  type DownloadProgress,
 } from "../api";
 import type { DownloadPreview, Setup, Step } from "../types";
 
@@ -45,10 +49,40 @@ export function SetupChecklist({ onClose, onSignIn }: Props) {
   const [preview, setPreview] = useState<DownloadPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<DownloadProgress | null>(null);
 
   useEffect(() => {
     getSetup().then(setSetup).catch((e) => setError(String(e)));
   }, []);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    onDownloadProgress(setProgress).then((fn) => {
+      if (cancelled) fn();
+      else stop = fn;
+    });
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, []);
+
+  async function runInstall() {
+    setBusy(true);
+    setError(null);
+    setProgress(null);
+    try {
+      await installSunshine();
+      setPreview(null);
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }
 
   async function refresh() {
     setSetup(await getSetup());
@@ -77,6 +111,10 @@ export function SetupChecklist({ onClose, onSignIn }: Props) {
         case "screenRecording":
         case "accessibility":
           await openPrivacySettings(step.id);
+          break;
+        case "firewall":
+          await openFirewall();
+          await refresh();
           break;
         default:
           setError("Dusk cannot do this step for you yet.");
@@ -139,10 +177,49 @@ export function SetupChecklist({ onClose, onSignIn }: Props) {
                     This release has no checksum, so Dusk will not install it.
                   </p>
                 )}
-                <p className="axi-ink-faint">
-                  Installing is not wired up yet — this is the download Dusk
-                  would fetch.
-                </p>
+                {progress && progress.total > 0 ? (
+                  <>
+                    {/* Rule 9: a proportion is drawn as length at full
+                        strength, never as a faded fill. */}
+                    <div className="axi-meter">
+                      <span
+                        className="axi-meter__fill"
+                        style={
+                          {
+                            "--axi-meter-v": `${Math.round(
+                              (progress.received / progress.total) * 100,
+                            )}%`,
+                          } as React.CSSProperties
+                        }
+                      />
+                    </div>
+                    <p className="axi-ink-faint">
+                      {megabytes(progress.received)} of{" "}
+                      {megabytes(progress.total)}
+                    </p>
+                  </>
+                ) : (
+                  preview.verifiable && (
+                    <div className="axi-row">
+                      <button
+                        type="button"
+                        className="axi-btn axi-btn--primary"
+                        disabled={busy}
+                        onClick={runInstall}
+                      >
+                        {busy ? "Installing" : "Download and install"}
+                      </button>
+                      <button
+                        type="button"
+                        className="axi-btn axi-btn--ghost"
+                        disabled={busy}
+                        onClick={() => setPreview(null)}
+                      >
+                        Not now
+                      </button>
+                    </div>
+                  )
+                )}
               </div>
             </div>
           )}

@@ -10,6 +10,7 @@
 //! item might be a firewall rule. A checklist shows the state of each step
 //! and lets any one of them be run on its own.
 
+pub mod apply;
 pub mod download;
 pub mod release;
 pub mod steps;

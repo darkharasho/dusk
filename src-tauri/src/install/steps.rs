@@ -135,12 +135,19 @@ pub fn build(
             ));
         }
         HostPlatform::Windows => {
+            // Deliberately not automated. A virtual display is a
+            // kernel-mode driver from a third party, outside the Sunshine
+            // release Dusk verifies — so installing one silently would mean
+            // Dusk putting unverified code in the kernel on someone's
+            // behalf. Sunshine's own display-device options cover the
+            // common case of an attached monitor, and someone who genuinely
+            // needs a headless display should choose the driver knowingly.
             steps.push(step(
                 StepId::VirtualDisplay,
-                "Install a virtual display",
-                "Lets this machine be streamed at the other machine's resolution, and with no monitor attached.",
-                StepState::Todo,
-                true,
+                "Add a virtual display",
+                "Only needed to stream with no monitor attached, or at a resolution this machine's screen does not have. It means installing a display driver from another project, so Dusk will not do it for you.",
+                StepState::Unknown,
+                false,
             ));
         }
         HostPlatform::Linux => {
@@ -275,6 +282,22 @@ mod tests {
         );
         let vd = setup.steps.iter().find(|s| s.id == StepId::VirtualDisplay);
         assert!(vd.is_none() || matches!(vd.unwrap().state, StepState::NotNeeded { .. }));
+    }
+
+    #[test]
+    fn dusk_never_offers_to_install_a_kernel_driver_itself() {
+        // A virtual display is a third-party kernel-mode driver, outside
+        // the release Dusk verifies. Automating it would mean loading
+        // unverified code into the kernel on someone's behalf.
+        for platform in [HostPlatform::Windows, HostPlatform::Linux] {
+            let setup = build(platform, &installed(true), SupportTier::Supported, true);
+            let vd = setup
+                .steps
+                .iter()
+                .find(|s| s.id == StepId::VirtualDisplay)
+                .expect("the step exists");
+            assert!(!vd.automatable, "{platform:?} must not automate this");
+        }
     }
 
     #[test]

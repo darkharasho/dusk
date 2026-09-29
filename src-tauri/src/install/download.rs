@@ -130,6 +130,74 @@ mod tests {
         );
     }
 
+    /// Exercises the whole path against a real release: fetch the asset
+    /// list, take the smallest asset, download it and verify the digest.
+    ///
+    /// Ignored by default because it needs the network. Run it with
+    /// `cargo test -- --ignored` when touching this module — the parts that
+    /// matter here (streaming hash, digest comparison) cannot be proven by
+    /// a unit test alone.
+    #[tokio::test]
+    #[ignore = "needs the network"]
+    async fn a_real_asset_downloads_and_verifies() {
+        let client = reqwest::Client::new();
+        let release = super::super::release::fetch_latest(&client)
+            .await
+            .expect("release list");
+
+        let smallest = release
+            .assets
+            .iter()
+            .filter(|a| a.sha256.is_some())
+            .min_by_key(|a| a.size)
+            .expect("an asset with a digest");
+
+        let dir = std::env::temp_dir().join("dusk-download-test");
+        let path = fetch(&client, smallest, &dir, |_| {})
+            .await
+            .expect("downloads and verifies");
+
+        let written = std::fs::metadata(&path).expect("exists").len();
+        assert_eq!(written, smallest.size, "size must match the release");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same download with a deliberately wrong digest must be rejected
+    /// and must leave nothing behind.
+    #[tokio::test]
+    #[ignore = "needs the network"]
+    async fn a_mismatched_checksum_is_rejected_and_the_file_removed() {
+        let client = reqwest::Client::new();
+        let release = super::super::release::fetch_latest(&client)
+            .await
+            .expect("release list");
+
+        let mut tampered = release
+            .assets
+            .iter()
+            .filter(|a| a.sha256.is_some())
+            .min_by_key(|a| a.size)
+            .expect("an asset")
+            .clone();
+        tampered.sha256 = Some("00".repeat(32));
+
+        let dir = std::env::temp_dir().join("dusk-download-bad");
+        let result = fetch(&client, &tampered, &dir, |_| {}).await;
+
+        assert!(matches!(result, Err(DownloadError::Corrupt)));
+        assert!(
+            !dir.join(&tampered.name).exists(),
+            "a failed download must not be left on disk"
+        );
+        assert!(
+            !dir.join(format!("{}.partial", tampered.name)).exists(),
+            "the partial file must be cleaned up too"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn an_asset_with_no_checksum_is_refused_before_anything_is_written() {
         let dir = std::env::temp_dir().join("dusk-test-nochecksum");

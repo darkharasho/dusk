@@ -63,6 +63,29 @@ export function previewSunshineDownload(): Promise<DownloadPreview> {
   return invoke<DownloadPreview>("preview_sunshine_download");
 }
 
+export const DOWNLOAD_EVENT = "dusk://download";
+
+export interface DownloadProgress {
+  received: number;
+  total: number;
+}
+
+export function onDownloadProgress(
+  handler: (p: DownloadProgress) => void,
+): Promise<() => void> {
+  return listen<DownloadProgress>(DOWNLOAD_EVENT, (e) => handler(e.payload));
+}
+
+/** Downloads and installs Sunshine. A real change to the machine. */
+export function installSunshine(): Promise<void> {
+  return invoke("install_sunshine");
+}
+
+/** Windows only; prompts for administrator rights when it runs. */
+export function openFirewall(): Promise<void> {
+  return invoke("open_firewall");
+}
+
 /** Put a macOS privacy pane in front of someone; Dusk cannot grant it. */
 export function openPrivacySettings(
   pane: "screenRecording" | "accessibility",

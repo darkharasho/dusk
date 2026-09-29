@@ -41,7 +41,7 @@ impl Default for CredentialStore {
 
 impl CredentialStore {
     pub async fn load(&self) -> Option<Credentials> {
-        if let Some(found) = self.from_keystore() {
+        if let Some(found) = self.read_keystore() {
             return Some(found);
         }
         self.fallback.read().await.clone()
@@ -56,7 +56,9 @@ impl CredentialStore {
                 Ok(())
             }
             Err(err) => {
-                eprintln!("dusk: keystore unavailable ({err}); holding credentials for this run only");
+                eprintln!(
+                    "dusk: keystore unavailable ({err}); holding credentials for this run only"
+                );
                 *self.keystore_available.write().await = false;
                 *self.fallback.write().await = Some(credentials);
                 Ok(())
@@ -78,7 +80,7 @@ impl CredentialStore {
         *self.keystore_available.read().await && self.fallback.read().await.is_none()
     }
 
-    fn from_keystore(&self) -> Option<Credentials> {
+    fn read_keystore(&self) -> Option<Credentials> {
         let entry = keyring::Entry::new(SERVICE, ACCOUNT).ok()?;
         let raw = entry.get_password().ok()?;
         // Stored as `username\npassword`: the keystore holds one secret per
@@ -93,7 +95,10 @@ impl CredentialStore {
     fn to_keystore(&self, credentials: &Credentials) -> Result<(), String> {
         let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| e.to_string())?;
         entry
-            .set_password(&format!("{}\n{}", credentials.username, credentials.password))
+            .set_password(&format!(
+                "{}\n{}",
+                credentials.username, credentials.password
+            ))
             .map_err(|e| e.to_string())
     }
 }

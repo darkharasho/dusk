@@ -181,7 +181,10 @@ mod tests {
 
     #[test]
     fn a_host_with_no_apps_is_an_empty_list_not_an_error() {
-        assert_eq!(parse(r#"<root status_code="200"></root>"#).unwrap().len(), 0);
+        assert_eq!(
+            parse(r#"<root status_code="200"></root>"#).unwrap().len(),
+            0
+        );
     }
 
     #[test]

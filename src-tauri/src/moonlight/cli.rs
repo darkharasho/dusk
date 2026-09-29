@@ -166,9 +166,7 @@ fn clean_stderr(stderr: &str) -> String {
     let message = stderr
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.starts_with("Redirecting log output"))
-        .next_back()
+        .rfind(|line| !line.is_empty() && !line.starts_with("Redirecting log output"))
         .unwrap_or("");
 
     if message.is_empty() {
@@ -184,9 +182,7 @@ fn candidates() -> Vec<PathBuf> {
         "/Applications/Moonlight.app/Contents/MacOS/Moonlight",
     )];
     if let Some(home) = std::env::var_os("HOME") {
-        out.push(
-            PathBuf::from(home).join("Applications/Moonlight.app/Contents/MacOS/Moonlight"),
-        );
+        out.push(PathBuf::from(home).join("Applications/Moonlight.app/Contents/MacOS/Moonlight"));
     }
     out
 }
@@ -213,9 +209,7 @@ fn candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
         if let Some(base) = std::env::var_os(var) {
-            out.push(
-                PathBuf::from(base).join("Moonlight Game Streaming\\Moonlight.exe"),
-            );
+            out.push(PathBuf::from(base).join("Moonlight Game Streaming\\Moonlight.exe"));
         }
     }
     out.extend(on_path("Moonlight.exe"));
@@ -269,9 +263,7 @@ mod tests {
     #[tokio::test]
     async fn a_command_that_never_returns_is_given_up_on() {
         let moonlight = Moonlight::at(PathBuf::from("/bin/sleep"));
-        let result = moonlight
-            .run(&["60"], Duration::from_millis(250))
-            .await;
+        let result = moonlight.run(&["60"], Duration::from_millis(250)).await;
         assert!(matches!(result, Err(MoonlightError::TimedOut)));
     }
 

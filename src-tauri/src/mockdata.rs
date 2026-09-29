@@ -9,14 +9,17 @@ use crate::model::{Activity, Device, PairingState, Reachability, ServerDetails};
 use crate::registry::Registry;
 
 fn apps() -> Vec<HostApp> {
-    [("881448767", "Desktop", true), ("1ota", "Steam Big Picture", false)]
-        .into_iter()
-        .map(|(id, name, hdr)| HostApp {
-            id: id.into(),
-            name: name.into(),
-            hdr,
-        })
-        .collect()
+    [
+        ("881448767", "Desktop", true),
+        ("1ota", "Steam Big Picture", false),
+    ]
+    .into_iter()
+    .map(|(id, name, hdr)| HostApp {
+        id: id.into(),
+        name: name.into(),
+        hdr,
+    })
+    .collect()
 }
 
 fn device(id: &str, name: &str, address: &str) -> Device {

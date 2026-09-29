@@ -53,11 +53,7 @@ pub async fn run(program: &str, args: &[&str]) -> Result<Run, HostError> {
     run_for(program, args, TIMEOUT).await
 }
 
-pub async fn run_for(
-    program: &str,
-    args: &[&str],
-    budget: Duration,
-) -> Result<Run, HostError> {
+pub async fn run_for(program: &str, args: &[&str], budget: Duration) -> Result<Run, HostError> {
     let child = tokio::process::Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -174,6 +170,20 @@ fn elevation_script(program: &str, args: &[&str]) -> String {
 /// Sunshine installs as a *user agent* rather than a system daemon, so every
 /// `launchctl` verb has to name that domain — a bare label resolves to
 /// nothing and the command fails in a way that reads like "not installed".
+#[cfg(unix)]
+pub fn gui_domain_or_default() -> String {
+    // Safety: getuid reads a process property. It cannot fail and touches no
+    // memory we own.
+    format!("gui/{}", unsafe { libc::getuid() })
+}
+
+/// Only ever called on macOS; defined for other targets so `platform.rs`
+/// keeps compiling everywhere, which is what stops the backends rotting.
+#[cfg(not(unix))]
+pub fn gui_domain_or_default() -> String {
+    "gui/0".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,10 +211,7 @@ mod tests {
 
     #[test]
     fn arguments_are_quoted_individually_so_spaces_do_not_split_them() {
-        let script = elevation_script(
-            "netsh.exe",
-            &["advfirewall", "name=Sunshine (inbound TCP)"],
-        );
+        let script = elevation_script("netsh.exe", &["advfirewall", "name=Sunshine (inbound TCP)"]);
         assert!(
             script.contains("'advfirewall','name=Sunshine (inbound TCP)'"),
             "{script}"
@@ -234,18 +241,4 @@ mod tests {
         assert!(ELEVATED_TIMEOUT > TIMEOUT * 10);
         assert!(INSTALL_TIMEOUT > ELEVATED_TIMEOUT);
     }
-}
-
-#[cfg(unix)]
-pub fn gui_domain_or_default() -> String {
-    // Safety: getuid reads a process property. It cannot fail and touches no
-    // memory we own.
-    format!("gui/{}", unsafe { libc::getuid() })
-}
-
-/// Only ever called on macOS; defined for other targets so `platform.rs`
-/// keeps compiling everywhere, which is what stops the backends rotting.
-#[cfg(not(unix))]
-pub fn gui_domain_or_default() -> String {
-    "gui/0".to_string()
 }

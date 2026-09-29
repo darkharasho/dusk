@@ -18,7 +18,11 @@ pub enum StepId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum StepState {
     Done,
     Todo,
@@ -26,7 +30,9 @@ pub enum StepState {
     /// read, for instance. The person confirms it themselves.
     Unknown,
     /// Not applicable on this machine, with the reason.
-    NotNeeded { reason: String },
+    NotNeeded {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,13 +53,7 @@ pub struct Setup {
     pub steps: Vec<Step>,
 }
 
-fn step(
-    id: StepId,
-    title: &str,
-    detail: &str,
-    state: StepState,
-    automatable: bool,
-) -> Step {
+fn step(id: StepId, title: &str, detail: &str, state: StepState, automatable: bool) -> Step {
     Step {
         id,
         title: title.to_string(),
@@ -82,7 +82,11 @@ pub fn build(
             StepId::InstallSunshine,
             "Install Sunshine",
             "Dusk downloads the official release and checks it before installing.",
-            if installed { StepState::Done } else { StepState::Todo },
+            if installed {
+                StepState::Done
+            } else {
+                StepState::Todo
+            },
             true,
         ),
         step(
@@ -100,7 +104,11 @@ pub fn build(
             StepId::SignIn,
             "Sign in to Sunshine",
             "Lets Dusk configure the host and accept pairing PINs for you.",
-            if signed_in { StepState::Done } else { StepState::Todo },
+            if signed_in {
+                StepState::Done
+            } else {
+                StepState::Todo
+            },
             false,
         ),
     ];
@@ -248,7 +256,13 @@ mod tests {
             false,
         );
         let by = |id: StepId| {
-            setup.steps.iter().find(|s| s.id == id).unwrap().state.clone()
+            setup
+                .steps
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .state
+                .clone()
         };
         assert_eq!(by(StepId::InstallSunshine), StepState::Done);
         assert_eq!(by(StepId::StartService), StepState::Done);

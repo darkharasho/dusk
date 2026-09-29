@@ -32,9 +32,7 @@ impl HostBackend for WindowsHost {
             gamepad_input: true,
             system_audio: true,
             automated_setup: true,
-            caveats: vec![
-                "Starting and stopping the service needs administrator rights.".into(),
-            ],
+            caveats: vec!["Starting and stopping the service needs administrator rights.".into()],
         }
     }
 
@@ -263,7 +261,9 @@ impl HostBackend for MacosHost {
 
     async fn start(&self) -> Result<(), HostError> {
         let domain = service::gui_domain_or_default();
-        let loaded = service::run("launchctl", &["list", MACOS_LABEL]).await?.ok();
+        let loaded = service::run("launchctl", &["list", MACOS_LABEL])
+            .await?
+            .ok();
 
         // A job that was booted out is gone from the domain entirely, so
         // kickstart would fail with "no such process" — it has to be
@@ -329,10 +329,16 @@ mod tests {
     #[test]
     fn sc_state_is_read_from_the_code_not_the_word() {
         // The word beside the code is localised; the number is not.
-        assert!(parse_sc_running("        STATE              : 4  RUNNING \n"));
-        assert!(!parse_sc_running("        STATE              : 1  STOPPED \n"));
+        assert!(parse_sc_running(
+            "        STATE              : 4  RUNNING \n"
+        ));
+        assert!(!parse_sc_running(
+            "        STATE              : 1  STOPPED \n"
+        ));
         // A localised Windows still parses, because only the code is read.
-        assert!(parse_sc_running("        STATE              : 4  EN COURS \n"));
+        assert!(parse_sc_running(
+            "        STATE              : 4  EN COURS \n"
+        ));
         assert!(!parse_sc_running("no state line here"));
     }
 
@@ -340,6 +346,8 @@ mod tests {
     fn a_pending_state_is_not_running() {
         // 2 is START_PENDING — treating it as running would show hosting as
         // on before it can accept a connection.
-        assert!(!parse_sc_running("        STATE              : 2  START_PENDING \n"));
+        assert!(!parse_sc_running(
+            "        STATE              : 2  START_PENDING \n"
+        ));
     }
 }

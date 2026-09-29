@@ -35,7 +35,9 @@ pub struct ServerInfo {
 
 impl ServerInfo {
     fn get(&self, key: &str) -> Option<&str> {
-        self.fields.get(&key.to_ascii_lowercase()).map(String::as_str)
+        self.fields
+            .get(&key.to_ascii_lowercase())
+            .map(String::as_str)
     }
 
     /// Sunshine's stable per-host identifier. Preferred as the device key so
@@ -104,7 +106,12 @@ pub async fn query_http(
     port: u16,
 ) -> Result<ServerInfo, String> {
     let authority = with_port(address, port);
-    query(client, &format!("http://{authority}/serverinfo?uniqueid=0&uuid=0"), false).await
+    query(
+        client,
+        &format!("http://{authority}/serverinfo?uniqueid=0&uuid=0"),
+        false,
+    )
+    .await
 }
 
 /// Query `serverinfo` over TLS with our client certificate presented.
@@ -121,7 +128,12 @@ pub async fn query_https(
     port: u16,
 ) -> Result<ServerInfo, String> {
     let authority = with_port(address, port);
-    query(client, &format!("https://{authority}/serverinfo?uniqueid=0&uuid=0"), true).await
+    query(
+        client,
+        &format!("https://{authority}/serverinfo?uniqueid=0&uuid=0"),
+        true,
+    )
+    .await
 }
 
 async fn query(
@@ -216,9 +228,7 @@ fn parse(xml: &str) -> Result<(u16, HashMap<String, String>), String> {
                 }
                 // Depth 1 is <root>; depth 2 is the fields we want.
                 if depth == 2 {
-                    current = Some(
-                        String::from_utf8_lossy(e.name().as_ref()).to_ascii_lowercase(),
-                    );
+                    current = Some(String::from_utf8_lossy(e.name().as_ref()).to_ascii_lowercase());
                 }
             }
             Ok(Event::Text(e)) => {
@@ -301,10 +311,7 @@ mod tests {
         let i = info(SAMPLE, false);
         assert_eq!(i.hostname(), Some("WORKSHOP"));
         assert_eq!(i.details().local_ip.as_deref(), Some("192.168.1.40"));
-        assert_eq!(
-            i.unique_id(),
-            Some("5c0e2c0e-0000-4000-8000-000000000001")
-        );
+        assert_eq!(i.unique_id(), Some("5c0e2c0e-0000-4000-8000-000000000001"));
     }
 
     #[test]
@@ -317,13 +324,19 @@ mod tests {
     #[test]
     fn busy_state_reads_as_hosting() {
         let xml = SAMPLE.replace("SUNSHINE_SERVER_FREE", "SUNSHINE_SERVER_BUSY");
-        assert!(matches!(info(&xml, false).activity(), Activity::Hosting { .. }));
+        assert!(matches!(
+            info(&xml, false).activity(),
+            Activity::Hosting { .. }
+        ));
         assert_eq!(info(SAMPLE, false).activity(), Activity::Idle);
     }
 
     #[test]
     fn a_running_app_reads_as_hosting_even_when_state_says_free() {
-        let xml = SAMPLE.replace("<currentgame>0</currentgame>", "<currentgame>881448767</currentgame>");
+        let xml = SAMPLE.replace(
+            "<currentgame>0</currentgame>",
+            "<currentgame>881448767</currentgame>",
+        );
         match info(&xml, false).activity() {
             Activity::Hosting { app_id, .. } => {
                 assert_eq!(app_id.as_deref(), Some("881448767"));
@@ -371,8 +384,8 @@ mod tests {
 
     #[test]
     fn a_missing_status_code_attribute_defaults_to_ok() {
-        let (status, _) = parse(SAMPLE.replace(" status_code=\"200\"", "").as_str())
-            .expect("parses");
+        let (status, _) =
+            parse(SAMPLE.replace(" status_code=\"200\"", "").as_str()).expect("parses");
         assert_eq!(status, STATUS_OK);
     }
 }

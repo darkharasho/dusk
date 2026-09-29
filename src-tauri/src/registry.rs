@@ -13,8 +13,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::{
-    Activity, Device, DeviceId, PairingState, Reachability, DEFAULT_HTTP_PORT,
-    DEFAULT_HTTPS_PORT,
+    Activity, Device, DeviceId, PairingState, Reachability, DEFAULT_HTTPS_PORT, DEFAULT_HTTP_PORT,
 };
 use crate::serverinfo::ServerInfo;
 
@@ -458,7 +457,10 @@ mod tests {
         assert_eq!(r.devices().len(), 3); // self + two
 
         let probe = |address: &str| {
-            reached(address, info(&[("uniqueid", "abc-123"), ("hostname", "WORKSHOP")]))
+            reached(
+                address,
+                info(&[("uniqueid", "abc-123"), ("hostname", "WORKSHOP")]),
+            )
         };
         r.apply_probe(&lan, probe("192.168.1.40"));
         r.apply_probe(&vpn, probe("100.84.2.9"));

@@ -99,10 +99,7 @@ mod platform {
 
     fn store_path() -> Option<PathBuf> {
         let home = std::env::var_os("HOME")?;
-        Some(
-            PathBuf::from(home)
-                .join("Library/Preferences/com.moonlight-stream.Moonlight.plist"),
-        )
+        Some(PathBuf::from(home).join("Library/Preferences/com.moonlight-stream.Moonlight.plist"))
     }
 
     pub fn load() -> Option<ClientIdentity> {
@@ -164,13 +161,10 @@ mod platform {
 /// PEM again.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ini_value(text: &str, key: &str) -> Option<Vec<u8>> {
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| {
-            line.split_once('=')
-                .is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case(key))
-        })?;
+    let line = text.lines().map(str::trim).find(|line| {
+        line.split_once('=')
+            .is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case(key))
+    })?;
     let raw = line.split_once('=')?.1.trim();
 
     let payload = raw
@@ -239,8 +233,9 @@ mod tests {
 
     #[test]
     fn combined_pem_puts_the_key_first_and_separates_them() {
-        let id = ClientIdentity::from_parts(CERT.to_vec(), b"-----BEGIN PRIVATE KEY-----\nx".to_vec())
-            .expect("valid");
+        let id =
+            ClientIdentity::from_parts(CERT.to_vec(), b"-----BEGIN PRIVATE KEY-----\nx".to_vec())
+                .expect("valid");
         let pem = id.to_combined_pem();
         let text = String::from_utf8(pem).unwrap();
         assert!(text.starts_with("-----BEGIN PRIVATE KEY-----"));

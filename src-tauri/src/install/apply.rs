@@ -267,7 +267,10 @@ mod tests {
     fn shell_quoting_survives_a_path_with_a_quote_in_it() {
         // The only character that can escape single-quoting is a single
         // quote, so it is the one that has to be handled.
-        assert_eq!(shell_quote("/Volumes/Sun/Sunshine.app"), "'/Volumes/Sun/Sunshine.app'");
+        assert_eq!(
+            shell_quote("/Volumes/Sun/Sunshine.app"),
+            "'/Volumes/Sun/Sunshine.app'"
+        );
         assert_eq!(shell_quote("/tmp/it's here"), r"'/tmp/it'\''s here'");
     }
 

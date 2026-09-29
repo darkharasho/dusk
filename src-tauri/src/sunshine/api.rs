@@ -210,11 +210,9 @@ impl SunshineApi {
         });
 
         if !status.is_success() || !truthy(reply.status.as_ref()) {
-            return Err(ApiError::Failed(
-                reply
-                    .error
-                    .unwrap_or_else(|| "Sunshine did not accept those settings.".into()),
-            ));
+            return Err(ApiError::Failed(reply.error.unwrap_or_else(|| {
+                "Sunshine did not accept those settings.".into()
+            })));
         }
         Ok(())
     }
@@ -323,12 +321,11 @@ mod tests {
     fn metadata_is_stripped_before_a_save_but_settings_are_kept() {
         // Writing `version` or `platform` back would put them in
         // sunshine.conf as though someone had configured them.
-        let mut config: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(
-                r#"{"platform":"macos","version":"2026.1","status":"true",
+        let mut config: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"platform":"macos","version":"2026.1","status":"true",
                     "restart_supported":true,"sunshine_name":"Workshop","qp":"28"}"#,
-            )
-            .expect("parses");
+        )
+        .expect("parses");
 
         for key in METADATA_KEYS {
             config.remove(*key);

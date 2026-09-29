@@ -17,8 +17,7 @@
 
 use serde::Deserialize;
 
-const LATEST_RELEASE: &str =
-    "https://api.github.com/repos/LizardByte/Sunshine/releases/latest";
+const LATEST_RELEASE: &str = "https://api.github.com/repos/LizardByte/Sunshine/releases/latest";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asset {
@@ -78,9 +77,9 @@ pub async fn fetch_latest(client: &reqwest::Client) -> Result<Release, String> {
                 name: a.name,
                 url: a.browser_download_url,
                 size: a.size,
-                sha256: a.digest.and_then(|d| {
-                    d.strip_prefix("sha256:").map(|h| h.to_ascii_lowercase())
-                }),
+                sha256: a
+                    .digest
+                    .and_then(|d| d.strip_prefix("sha256:").map(|h| h.to_ascii_lowercase())),
             })
             .collect(),
     })

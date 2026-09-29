@@ -37,8 +37,17 @@ the rest of the UI should not be blocked on that.
 ```sh
 npm run typecheck                 # frontend
 cd src-tauri && cargo test        # backend
+cd src-tauri && cargo test -- --ignored    # download tests; hit the network
+cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 python3 scripts/make_placeholder_icon.py   # regenerate the placeholder icon
 ```
+
+CI runs the backend on Linux, macOS and Windows. That matrix is the point of
+it: two of the three host backends, the Windows registry reader and every
+elevation path only compile on their own platform, and this is developed on
+a Mac — so without it they would rot unnoticed. The network download tests
+are excluded there, because an outage or a rate limit would produce a red
+build that says nothing about the commit.
 
 ## How it fits together
 

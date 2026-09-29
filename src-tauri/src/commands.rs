@@ -170,7 +170,12 @@ pub async fn launch_app(
             .devices()
             .into_iter()
             .find(|d| d.id == id)
-            .and_then(|d| d.apps.iter().find(|a| a.id == app_id).map(|a| a.name.clone()))
+            .and_then(|d| {
+                d.apps
+                    .iter()
+                    .find(|a| a.id == app_id)
+                    .map(|a| a.name.clone())
+            })
             .ok_or_else(|| "That app is no longer on this machine.".to_string())?
     };
 
@@ -454,9 +459,7 @@ pub async fn open_privacy_settings(pane: String) -> Result<(), String> {
     }
 }
 
-async fn host_api(
-    state: &Arc<AppState>,
-) -> Result<(SunshineApi, Credentials), String> {
+async fn host_api(state: &Arc<AppState>) -> Result<(SunshineApi, Credentials), String> {
     let credentials = state
         .credentials
         .load()
@@ -473,7 +476,9 @@ pub async fn get_host_config(
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let inner = state.inner().clone();
     let (api, credentials) = host_api(&inner).await?;
-    api.get_config(&credentials).await.map_err(|e| e.to_string())
+    api.get_config(&credentials)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Write changed settings, and optionally restart so they take effect.

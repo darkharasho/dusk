@@ -111,12 +111,22 @@ pub fn run() {
                 registry.upsert_manual(&entry.address, entry.port, entry.name.clone());
             }
 
+            // Which client Dusk will run has to be settled first: it
+            // decides which settings store the host list and the identity
+            // below are read from. Two Moonlights on one machine keep
+            // separate stores, and reading the wrong one makes the grid
+            // describe a client Dusk is not going to launch.
+            let moonlight = moonlight::Moonlight::discover();
+            if moonlight.is_none() {
+                eprintln!("dusk: moonlight-qt not found; pairing and streaming are unavailable");
+            }
+
             // Then the machines moonlight-qt remembers. mDNS only finds what
             // is advertising this second, and a host that is asleep — or
             // simply not publishing — is still one of your machines. This is
             // what keeps Dusk's grid from being a shorter list than the one
             // Moonlight shows for the same set of computers.
-            for host in moonlight::hosts::load() {
+            for host in moonlight::hosts::load(moonlight.as_ref()) {
                 registry.upsert_moonlight(&host);
             }
 
@@ -129,16 +139,12 @@ pub fn run() {
             // Adopt moonlight-qt's client identity if it has one. Without it
             // every probe is unauthenticated and pairing state stays unknown,
             // which is a degraded grid rather than a broken one.
-            let tls = moonlight::identity::load().and_then(|id| state::tls_client(&id));
+            let tls =
+                moonlight::identity::load(moonlight.as_ref()).and_then(|id| state::tls_client(&id));
             if tls.is_none() {
                 eprintln!(
                     "dusk: no Moonlight client identity found; pairing state will read as unknown"
                 );
-            }
-
-            let moonlight = moonlight::Moonlight::discover();
-            if moonlight.is_none() {
-                eprintln!("dusk: moonlight-qt not found; pairing and streaming are unavailable");
             }
 
             let state = Arc::new(AppState::new(

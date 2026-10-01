@@ -67,6 +67,12 @@ impl Moonlight {
         Self { binary }
     }
 
+    /// The client Dusk will actually run. Which settings store is the right
+    /// one to read depends on it — see [`crate::moonlight::stores_for`].
+    pub fn binary(&self) -> &std::path::Path {
+        &self.binary
+    }
+
     /// Find moonlight-qt, or `None` if it is not installed.
     ///
     /// `DUSK_MOONLIGHT_BIN` overrides the search, which is what makes a

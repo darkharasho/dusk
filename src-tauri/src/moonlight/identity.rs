@@ -70,12 +70,17 @@ fn looks_like_private_key(bytes: &[u8]) -> bool {
         || starts_with_pem(bytes, b"-----BEGIN EC PRIVATE KEY-----")
 }
 
-/// Read the identity moonlight-qt is using, if it has one yet.
+/// Read the identity `client` is using, if it has one yet.
 ///
-/// Returns `None` rather than an error when moonlight-qt has never paired:
+/// Returns `None` rather than an error when that client has never paired:
 /// that is an ordinary first-run state, not a fault.
-pub fn load() -> Option<ClientIdentity> {
-    platform::load()
+///
+/// It must be *that* client's identity. Dusk probes hosts with this
+/// certificate to decide whether they are paired, and a host answers for
+/// the certificate it was paired with — so borrowing a second Moonlight's
+/// identity makes the grid describe a client Dusk is not going to run.
+pub fn load(client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
+    platform::load(client)
 }
 
 // ------------------------------------------------------------------- macOS
@@ -90,7 +95,9 @@ mod platform {
         Some(PathBuf::from(home).join("Library/Preferences/com.moonlight-stream.Moonlight.plist"))
     }
 
-    pub fn load() -> Option<ClientIdentity> {
+    /// One store per user here, so which client was chosen does not change
+    /// the answer.
+    pub fn load(_client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
         let value = plist::Value::from_file(store_path()?).ok()?;
         let dict = value.as_dictionary()?;
         let read = |k: &str| dict.get(k)?.as_data().map(<[u8]>::to_vec);
@@ -104,11 +111,16 @@ mod platform {
 mod platform {
     use super::*;
 
-    /// The first store that holds a usable identity wins — not the first
-    /// that exists, so a leftover native config without one does not hide
-    /// the Flatpak store that has it.
-    pub fn load() -> Option<ClientIdentity> {
-        crate::moonlight::linux_store_paths()
+    /// Only the chosen client's own store: a Flatpak Moonlight and a native
+    /// one mint separate identities, and the host binds a pairing to the
+    /// certificate. Reading the other one's would have Dusk probe as a
+    /// client it never runs.
+    ///
+    /// Among that client's stores the first holding a usable identity wins —
+    /// not the first that exists, so a config without one does not hide a
+    /// config that has it.
+    pub fn load(client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
+        crate::moonlight::linux_stores_for(client)
             .into_iter()
             .find_map(|path| {
                 let text = std::fs::read_to_string(path).ok()?;
@@ -130,7 +142,9 @@ mod platform {
 
     const SUBKEY: &str = r"Software\Moonlight Game Streaming Project\Moonlight";
 
-    pub fn load() -> Option<ClientIdentity> {
+    /// One store per user here, so which client was chosen does not change
+    /// the answer.
+    pub fn load(_client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
         let key = RegKey::predef(HKEY_CURRENT_USER).open_subkey(SUBKEY).ok()?;
         // QSettings writes a QByteArray to the registry as REG_BINARY.
         let read = |name: &str| -> Option<Vec<u8>> {

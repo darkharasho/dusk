@@ -211,7 +211,9 @@ mod live_probe {
             eprintln!("skipping: set DUSK_TEST_HOST to a paired host's address");
             return;
         };
-        let id = crate::moonlight::identity::load().expect("a moonlight identity");
+        let client_bin = crate::moonlight::Moonlight::discover();
+        let id = crate::moonlight::identity::load(client_bin.as_ref())
+            .expect("a moonlight identity");
         let client = crate::state::tls_client(&id).expect("a TLS client");
 
         for attempt in 1..=8 {

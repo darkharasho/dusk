@@ -17,8 +17,8 @@ Streaming, host control, and the installer are not built yet.
 | --- | --- | --- |
 | M0 | Tauri shell, device model, `HostBackend` trait + mock | done |
 | M1 | mDNS + manual address book, liveness polling, device grid | done |
-| M2 | Client path — pair, list apps, launch via `moonlight-qt` | built, not yet tested against a second machine |
-| M3 | Host path — Sunshine service control on all three platforms | built; probe verified on macOS |
+| M2 | Client path — pair, list apps, launch via `moonlight-qt` | built; identity, remembered hosts and the app list verified on Linux against a real host |
+| M3 | Host path — Sunshine service control on all three platforms | built; probe verified on macOS, probe/start/stop verified on Linux |
 | M4 | Config UI — schema-driven, replaces Sunshine's web UI | built; needs a signed-in host to exercise |
 | M5 | First-run install per platform | built; download path verified against real releases |
 
@@ -186,7 +186,8 @@ cut off a UAC prompt before the command it guards had begun. The script is
 built by a function that is unit-tested from any platform, since that is
 the only way it gets checked before reaching Windows.
 
-None of the Windows or Linux paths have run on a real machine.
+None of the Windows paths have run on a real machine. The Linux ones have —
+see below.
 
 ## Things worth knowing
 
@@ -287,3 +288,49 @@ grants `core:default` to the main window.
 
 **`src/types.ts` mirrors `src-tauri/src/model.rs` by hand.** If it starts
 drifting, generate it (ts-rs or specta) rather than patching it up.
+
+**Three things only a real Linux machine could have found.** All three were
+written against a Mac, all three compiled and passed CI, and each one failed
+silently and completely the first time Dusk ran on a KDE Wayland desktop with
+Flatpak installs — which is to say, on a very ordinary Linux gaming machine.
+
+*Flatpak is where Linux keeps its config.* A Flatpak Moonlight writes its
+settings inside the sandbox, at
+`~/.var/app/com.moonlight_stream.Moonlight/config/...`, not `~/.config`.
+Looking only at the native path found nothing, and that one file holds both
+the client identity and the remembered-host list — so a single wrong path
+lost TLS probing and an entire discovery source at once, with no error
+anywhere. Both paths are searched now, native first, taking the first store
+that *answers* rather than the first that exists.
+
+*QSettings quotes a value when its content requires it.* The certificate's
+base64 padding puts an `=` in it, so that key is written quoted and `key`
+beside it is not — in the same file. The quotes survived the `@ByteArray(...)`
+unwrap and the PEM check then failed, which reads as "moonlight-qt has never
+paired" rather than as a parse error. That is the honest first-run state, so
+nothing looked wrong.
+
+*A Flatpak Sunshine's unit is not called `sunshine`.* It ships one named
+after its application id, `app-dev.lizardbyte.app.Sunshine`. Probing only for
+`sunshine` reported a perfectly good Sunshine as not installed — and on an
+immutable distribution the Flatpak is the only Sunshine there can be.
+
+**WebKit's DMA-BUF renderer cannot draw on a compositor with explicit sync.**
+KWin has it, so on every KDE Wayland session — Bazzite and the Steam Deck
+among them, which a game-streaming app cannot afford to miss — the window
+never appeared. GTK printed one `Error 71 (Protocol error)` line and exited,
+which says nothing about the cause. `WAYLAND_DEBUG=1` gave the real one:
+`wp_linux_drm_syncobj_surface_v1: explicit sync is used, but no acquire point
+is set`. It is a webkit2gtk bug, so the only lever on this side is to not
+take that path: `run` sets `WEBKIT_DISABLE_DMABUF_RENDERER` before GTK
+starts. Scoped to Wayland, since the DMA-BUF renderer is the faster one and
+is sound under X11, and skipped when already set.
+
+### Building on Linux
+
+The system GTK and WebKit development packages are what Tauri needs
+(`webkit2gtk-4.1`, `gtk+-3.0`). If a Homebrew-on-Linux is on `PATH` before
+`/usr/bin`, its `pkg-config` is found first and resolves `cairo` against
+Homebrew's own tree, which is missing the X11 `.pc` files it depends on — the
+build then fails claiming `cairo` is not installed when it plainly is.
+`PKG_CONFIG=/usr/bin/pkg-config` is the fix.

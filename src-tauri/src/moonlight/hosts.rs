@@ -156,24 +156,17 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::Fields;
-    use std::path::PathBuf;
 
-    fn store_path() -> Option<PathBuf> {
-        let base = match std::env::var_os("XDG_CONFIG_HOME") {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
-        };
-        Some(base.join("Moonlight Game Streaming Project/Moonlight.conf"))
-    }
-
+    /// The first store that remembers any host wins. An empty `[hosts]` is
+    /// indistinguishable from an absent one here and both are worth skipping,
+    /// so a stale native config cannot shadow a Flatpak one in use.
     pub fn fields() -> Fields {
-        let Some(path) = store_path() else {
-            return Fields::new();
-        };
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Fields::new();
-        };
-        super::ini_host_fields(&text)
+        crate::moonlight::linux_store_paths()
+            .into_iter()
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .map(|text| super::ini_host_fields(&text))
+            .find(|fields| !fields.is_empty())
+            .unwrap_or_default()
     }
 }
 
@@ -238,7 +231,10 @@ fn ini_host_fields(text: &str) -> Fields {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        out.insert(key.trim().replace('\\', "."), value.trim().to_string());
+        out.insert(
+            key.trim().replace('\\', "."),
+            crate::moonlight::unquote(value.trim()).to_string(),
+        );
     }
     out
 }
@@ -377,5 +373,36 @@ mod tests {
     #[test]
     fn the_ini_backend_survives_a_file_with_no_hosts() {
         assert!(assemble(&ini_host_fields("[General]\nfps=60\n")).is_empty());
+    }
+}
+
+/// Reads the real moonlight-qt store on this machine. Ignored because it can
+/// only say anything on a machine that has one — but on a machine that does,
+/// it is the only check that the path, the INI parse and the quoting all
+/// agree with what moonlight-qt actually wrote.
+#[cfg(all(test, target_os = "linux"))]
+mod live {
+    #[test]
+    #[ignore]
+    fn the_local_store_is_found_and_read() {
+        for path in crate::moonlight::linux_store_paths() {
+            println!("candidate: {} exists={}", path.display(), path.exists());
+        }
+
+        let hosts = super::load();
+        println!("remembered hosts: {}", hosts.len());
+        for host in &hosts {
+            println!("  {host:?}");
+        }
+        println!("identity: {:?}", crate::moonlight::identity::load());
+
+        assert!(
+            !hosts.is_empty(),
+            "no remembered hosts: moonlight-qt has never connected to one, or the store was not found"
+        );
+        assert!(
+            crate::moonlight::identity::load().is_some(),
+            "no client identity: moonlight-qt has never paired, or the store was not found"
+        );
     }
 }

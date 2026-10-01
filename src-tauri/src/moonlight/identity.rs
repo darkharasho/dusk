@@ -103,22 +103,20 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
-    use std::path::PathBuf;
 
-    fn store_path() -> Option<PathBuf> {
-        let base = match std::env::var_os("XDG_CONFIG_HOME") {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
-        };
-        Some(base.join("Moonlight Game Streaming Project/Moonlight.conf"))
-    }
-
+    /// The first store that holds a usable identity wins — not the first
+    /// that exists, so a leftover native config without one does not hide
+    /// the Flatpak store that has it.
     pub fn load() -> Option<ClientIdentity> {
-        let text = std::fs::read_to_string(store_path()?).ok()?;
-        ClientIdentity::from_parts(
-            super::ini_value(&text, "certificate")?,
-            super::ini_value(&text, "key")?,
-        )
+        crate::moonlight::linux_store_paths()
+            .into_iter()
+            .find_map(|path| {
+                let text = std::fs::read_to_string(path).ok()?;
+                ClientIdentity::from_parts(
+                    super::ini_value(&text, "certificate")?,
+                    super::ini_value(&text, "key")?,
+                )
+            })
     }
 }
 
@@ -154,7 +152,7 @@ fn ini_value(text: &str, key: &str) -> Option<Vec<u8>> {
         line.split_once('=')
             .is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case(key))
     })?;
-    let raw = line.split_once('=')?.1.trim();
+    let raw = crate::moonlight::unquote(line.split_once('=')?.1.trim());
 
     let payload = raw
         .strip_prefix("@ByteArray(")
@@ -208,6 +206,25 @@ mod tests {
         // Better no TLS client than one that fails every handshake.
         assert!(ClientIdentity::from_parts(CERT.to_vec(), b"garbage".to_vec()).is_none());
         assert!(ClientIdentity::from_parts(b"".to_vec(), KEY.to_vec()).is_none());
+    }
+
+    #[test]
+    fn a_quoted_bytearray_still_reads_as_pem() {
+        // What moonlight-qt writes on Linux: the certificate's base64
+        // padding forces QSettings to quote it, the key's does not.
+        let ini = concat!(
+            "[General]\n",
+            r#"certificate="@ByteArray(-----BEGIN CERTIFICATE-----\nMII==\n-----END CERTIFICATE-----\n)""#,
+            "\n",
+            r"key=@ByteArray(-----BEGIN PRIVATE KEY-----\nMII\n-----END PRIVATE KEY-----\n)",
+            "\n",
+        );
+
+        let identity = ClientIdentity::from_parts(
+            ini_value(ini, "certificate").expect("certificate"),
+            ini_value(ini, "key").expect("key"),
+        );
+        assert!(identity.is_some(), "a quoted value must still parse as PEM");
     }
 
     #[test]

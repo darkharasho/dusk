@@ -63,7 +63,38 @@ fn local_addresses() -> HashSet<String> {
     addresses
 }
 
+/// Keep WebKit off its DMA-BUF renderer on Wayland.
+///
+/// Without this the window never appears on a Wayland compositor that
+/// implements explicit sync — KWin does, so every KDE Wayland session, which
+/// includes Bazzite and the Steam Deck, two machines a game-streaming app
+/// cannot afford to miss. The failure is total and nearly mute: GTK prints
+/// one `Error 71 (Protocol error)` line and exits. `WAYLAND_DEBUG=1` names
+/// the real cause — `wp_linux_drm_syncobj_surface_v1: explicit sync is used,
+/// but no acquire point is set`, webkit2gtk's buffer going up without the
+/// acquire point the protocol requires. It is a webkit2gtk bug, so the only
+/// lever on this side is to not take that path.
+///
+/// Scoped to Wayland because the DMA-BUF renderer is the faster one and is
+/// perfectly sound under X11, and skipped when already set so anyone
+/// debugging the renderer keeps the final say.
+#[cfg(target_os = "linux")]
+fn avoid_wayland_dmabuf_crash() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return;
+    }
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return;
+    }
+    // Safety: called from `run` before any window, thread or GTK init, so
+    // nothing else can be reading the environment yet.
+    unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+}
+
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    avoid_wayland_dmabuf_crash();
+
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();

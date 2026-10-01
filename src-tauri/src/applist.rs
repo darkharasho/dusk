@@ -67,10 +67,8 @@ fn parse(xml: &str) -> Result<Vec<HostApp>, String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) => {
-                if depth == 0 {
-                    status = root_status(&e).unwrap_or(status);
-                }
+            Ok(Event::Empty(e)) if depth == 0 => {
+                status = root_status(&e).unwrap_or(status);
             }
             Ok(Event::Start(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_ascii_lowercase();

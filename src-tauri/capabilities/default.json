@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Dusk's own commands need no grant, but `listen` does: without core:event the backend's snapshot pushes are dropped and the grid only ever shows its first paint.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

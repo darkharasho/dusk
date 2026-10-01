@@ -43,6 +43,9 @@ pub fn seed(registry: &mut Registry) {
         app_id: Some("881448767".into()),
         app_name: Some("Desktop".into()),
     };
+    // The accent card is now a stream *we* are in, not merely a busy host,
+    // so the fixture has to claim the session to stage that state.
+    hosting.streaming_here = true;
     hosting.apps = apps();
 
     let mut ready = device("2", "Attic", "192.168.1.51");

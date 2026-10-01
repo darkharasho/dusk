@@ -20,7 +20,6 @@ mod sunshine;
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tauri::Manager;
 
@@ -81,13 +80,20 @@ pub fn run() {
                 registry.upsert_manual(&entry.address, entry.port, entry.name.clone());
             }
 
+            // Then the machines moonlight-qt remembers. mDNS only finds what
+            // is advertising this second, and a host that is asleep — or
+            // simply not publishing — is still one of your machines. This is
+            // what keeps Dusk's grid from being a shorter list than the one
+            // Moonlight shows for the same set of computers.
+            for host in moonlight::hosts::load() {
+                registry.upsert_moonlight(&host);
+            }
+
             if mock_mode() {
                 mockdata::seed(&mut registry);
             }
 
-            let http = reqwest::Client::builder()
-                .connect_timeout(Duration::from_millis(1500))
-                .build()?;
+            let http = state::plain_client()?;
 
             // Adopt moonlight-qt's client identity if it has one. Without it
             // every probe is unauthenticated and pairing state stays unknown,

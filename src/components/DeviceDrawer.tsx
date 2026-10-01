@@ -103,14 +103,30 @@ export function DeviceDrawer({ device, moonlightAvailable, onClose }: Props) {
           {online && paired && (
             <>
               {hosting && (
-                <button
-                  type="button"
-                  className="axi-btn"
-                  disabled={busy !== null}
-                  onClick={() => run("quitting", () => quitSession(device.id))}
-                >
-                  {busy === "quitting" ? "Ending session" : "End the session"}
-                </button>
+                <>
+                  {/* A host holds its session open after the client goes
+                      away, so this is routinely a session nobody is in.
+                      Saying so is the difference between a control that
+                      looks wrong and one that explains itself. */}
+                  {!device.streamingHere && (
+                    <p className="axi-ink-dim">
+                      This machine is holding a session open with no client
+                      attached. Streaming will resume it.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="axi-btn"
+                    disabled={busy !== null}
+                    onClick={() => run("quitting", () => quitSession(device.id))}
+                  >
+                    {busy === "quitting"
+                      ? "Ending session"
+                      : device.streamingHere
+                        ? "End the session"
+                        : "End it on the host"}
+                  </button>
+                </>
               )}
 
               <h3 className="axi-eyebrow">Apps</h3>

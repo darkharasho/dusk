@@ -58,6 +58,9 @@ pub enum Activity {
 pub struct DeviceSource {
     pub mdns: bool,
     pub manual: bool,
+    /// Remembered by moonlight-qt. Says the machine is known, not that it is
+    /// reachable — which is the whole reason the source exists.
+    pub moonlight: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +93,14 @@ pub struct Device {
     /// What this host offers to stream. Only populated once we are paired,
     /// because `applist` requires the client certificate.
     pub apps: Vec<crate::applist::HostApp>,
+    /// True when *this* Dusk is streaming from the machine right now.
+    ///
+    /// Distinct from `activity`, which reports what Sunshine says about
+    /// itself. A host holds a session open after its client disconnects —
+    /// that is GameStream working as designed, not a stream you are in —
+    /// so the card has to tell the two apart or it claims you are
+    /// streaming when nothing is on screen.
+    pub streaming_here: bool,
     pub last_seen_ms: Option<u64>,
 
     /// A name the user typed. Survives merges so discovery cannot overwrite
@@ -114,6 +125,7 @@ impl Device {
             activity: Activity::Unknown,
             server: None,
             apps: Vec::new(),
+            streaming_here: false,
             last_seen_ms: None,
             custom_name: None,
         }

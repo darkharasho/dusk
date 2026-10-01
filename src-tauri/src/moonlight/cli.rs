@@ -74,7 +74,20 @@ impl Moonlight {
             eprintln!("dusk: DUSK_MOONLIGHT_BIN is set but {path:?} is not a file");
         }
 
-        candidates().into_iter().find(|p| p.is_file()).map(Self::at)
+        // Dusk's own client wins over any system Moonlight. It is a fork
+        // carrying the in-stream overlay, so picking up a stock install
+        // instead does not fail loudly — it streams perfectly well and the
+        // overlay is simply absent, which reads as a bug in Dusk.
+        if let Some(path) = dusk_client().into_iter().find(|p| p.is_file()) {
+            eprintln!("dusk: using Dusk's Moonlight client at {path:?}");
+            return Some(Self::at(path));
+        }
+
+        let found = candidates().into_iter().find(|p| p.is_file());
+        if let Some(path) = &found {
+            eprintln!("dusk: using system Moonlight at {path:?}; the in-stream overlay will be unavailable");
+        }
+        found.map(Self::at)
     }
 
     /// Pair with a host, sending the PIN the user was shown.
@@ -174,6 +187,44 @@ fn clean_stderr(stderr: &str) -> String {
     } else {
         message.to_string()
     }
+}
+
+/// The forked client Dusk ships, relative to a build or install root.
+#[cfg(target_os = "macos")]
+const CLIENT_RELATIVE: &str = "app/Moonlight.app/Contents/MacOS/Moonlight";
+#[cfg(target_os = "linux")]
+const CLIENT_RELATIVE: &str = "app/moonlight";
+#[cfg(target_os = "windows")]
+const CLIENT_RELATIVE: &str = "app\\release\\Moonlight.exe";
+
+/// Where Dusk's own Moonlight client might be.
+///
+/// Two places, and both are real. Installed, it sits beside the Dusk
+/// executable because that is where the installer puts it. In development
+/// it is a sibling checkout of the Dusk repository, which is the layout the
+/// fork is cloned into — without that, a dev build silently falls through
+/// to whatever Moonlight is installed system-wide and the overlay appears
+/// to be broken when it is merely absent.
+fn dusk_client() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join(CLIENT_RELATIVE));
+            out.push(dir.join("moonlight-qt").join(CLIENT_RELATIVE));
+        }
+    }
+
+    // Development only: a release build must never reach outside itself.
+    #[cfg(debug_assertions)]
+    {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if let Some(workspace) = manifest.parent().and_then(|p| p.parent()) {
+            out.push(workspace.join("moonlight-qt").join(CLIENT_RELATIVE));
+        }
+    }
+
+    out
 }
 
 #[cfg(target_os = "macos")]

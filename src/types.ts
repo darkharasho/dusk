@@ -34,6 +34,8 @@ export type Activity =
 export interface DeviceSource {
   mdns: boolean;
   manual: boolean;
+  /** Remembered by moonlight-qt. Known, not necessarily reachable. */
+  moonlight: boolean;
 }
 
 export interface ServerDetails {
@@ -57,6 +59,8 @@ export interface Device {
   httpPort: number;
   httpsPort: number;
   source: DeviceSource;
+  /** True when this Dusk is streaming from the machine right now. */
+  streamingHere: boolean;
   isSelf: boolean;
   reachability: Reachability;
   pairing: PairingState;

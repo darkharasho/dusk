@@ -39,8 +39,14 @@ export function cardState(device: Device): CardState {
   if (device.reachability.kind === "offline") return of("offline", "Offline");
   if (device.reachability.kind === "unknown") return of("offline", "Checking");
 
-  if (device.activity.kind === "hosting") {
-    const { appName } = device.activity;
+  // Only a stream *we* are in earns the accent. Sunshine holds a session
+  // open after its client disconnects, which is GameStream working as
+  // designed — but a card reading "Streaming Desktop" when nothing is on
+  // screen describes the host's bookkeeping, not anything the user is
+  // doing. That machine is available to them, so it reads as ready.
+  if (device.streamingHere) {
+    const appName =
+      device.activity.kind === "hosting" ? device.activity.appName : null;
     return of("hosting", appName ? `Streaming ${appName}` : "In a session");
   }
 
@@ -58,10 +64,21 @@ export function cardState(device: Device): CardState {
 }
 
 export function originLabel(device: Device): string | null {
-  const { mdns, manual } = device.source;
-  if (mdns && manual) return "Added, discovered";
-  if (manual) return "Added";
-  return null;
+  const { mdns, manual, moonlight } = device.source;
+  // Being found on the network is the ordinary case, so on its own it earns
+  // no label. The other two say something a card cannot otherwise show:
+  // that someone typed this machine in, or that it is only here because
+  // Moonlight remembers it and may never have answered Dusk at all.
+  if (!manual && !moonlight) return null;
+
+  const parts = [
+    manual ? "added" : null,
+    mdns ? "discovered" : null,
+    moonlight ? "from Moonlight" : null,
+  ].filter((part): part is string => part !== null);
+
+  const [first, ...rest] = parts;
+  return [first[0].toUpperCase() + first.slice(1), ...rest].join(", ");
 }
 
 /** Two letters for the card's glyph tile. */

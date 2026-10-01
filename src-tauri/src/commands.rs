@@ -187,13 +187,22 @@ pub async fn launch_app(
     // The session ending is a state change the grid has to notice, and
     // nothing else will tell us — so wait on the child and refresh when it
     // exits rather than leaving the card mid-session until the next poll.
+    // The card follows *our* session, not Sunshine's. Marked before the
+    // watcher so the grid does not have a window where the stream is up
+    // and the card still says Ready.
+    inner.set_session_active(&id, true).await;
+
     let handle = app.clone();
     let watched = inner.clone();
+    let session_id = id.clone();
     tauri::async_runtime::spawn(async move {
         let mut child = child;
         if let Err(err) = child.wait().await {
             eprintln!("dusk: lost track of the Moonlight session: {err}");
         }
+        // Cleared however the client ended, including a crash: leaving it
+        // set would strand the card mid-session forever.
+        watched.set_session_active(&session_id, false).await;
         watched.request_refresh();
         emit_snapshot(&handle, &watched).await;
     });

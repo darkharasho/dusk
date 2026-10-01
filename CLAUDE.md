@@ -22,5 +22,6 @@ A single polished desktop app that wraps Sunshine (host) and Moonlight (client) 
 ## Suggested stack
 
 - **Sunshine (managed as a separate process)** — Proven self-hosted host with a local web API that can be driven programmatically; keeping it a separate process also avoids GPL-3.0 copyleft entanglement with the shell
+- **Moonlight (a GPL-3.0 fork of moonlight-qt, run as a separate process)** — moonlight-common-c is GPL-3.0, not LGPL, so an in-process embed would relicense the shell. A forked client at arm's length keeps that boundary while allowing an in-stream overlay, which lives in the fork rather than in Dusk
 - **Moonlight (moonlight-qt shelled out, moonlight-common-c later)** — Shelling out gets a working app fast; the streaming logic lives in a reusable C library so an embedded window can replace it later without UI changes
 - **Desktop shell framework (undecided)** — Needs native process/service control and a polished custom UI; choice deferred to the first dev session

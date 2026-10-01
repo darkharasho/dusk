@@ -104,3 +104,12 @@ body,
 .dusk-empty__body {
   max-width: 46ch;
 }
+
+/* The brand mark. Sized to sit where the language's lettered sigil did, so
+   the masthead's own spacing still applies. */
+.dusk-mark {
+  width: 34px;
+  height: 34px;
+  display: block;
+  flex: 0 0 auto;
+}

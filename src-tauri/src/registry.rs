@@ -1,8 +1,9 @@
 //! The merged device list.
 //!
-//! Two sources feed it — mDNS and the manual address book — and the same
-//! machine routinely appears in both, or twice over mDNS on two interfaces.
-//! The registry's whole job is making that one card.
+//! Three sources feed it — mDNS, the manual address book, and the machines
+//! moonlight-qt remembers — and the same machine routinely appears in more
+//! than one, or twice over mDNS on two interfaces. The registry's whole job
+//! is making that one card.
 //!
 //! Identity is a two-stage affair. Before a machine answers we only know an
 //! address, so it is keyed by that. Once `serverinfo` gives us Sunshine's
@@ -15,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::model::{
     Activity, Device, DeviceId, PairingState, Reachability, DEFAULT_HTTPS_PORT, DEFAULT_HTTP_PORT,
 };
+use crate::moonlight::hosts::KnownHost;
 use crate::serverinfo::ServerInfo;
 
 pub const SELF_ID: &str = "self";
@@ -25,6 +27,16 @@ fn addr_key(address: &str, port: u16) -> DeviceId {
 
 fn uid_key(unique_id: &str) -> DeviceId {
     format!("sunshine:{unique_id}")
+}
+
+/// Sunshine's TLS port sits five below its HTTP port. Only assume that when
+/// the HTTP port is the stock one; a moved port could have been moved alone.
+fn https_for(http_port: u16) -> u16 {
+    if http_port == DEFAULT_HTTP_PORT {
+        DEFAULT_HTTPS_PORT
+    } else {
+        http_port.saturating_sub(5)
+    }
 }
 
 fn now_ms() -> u64 {
@@ -251,18 +263,55 @@ impl Registry {
 
         entry.source.manual = true;
         entry.http_port = port;
-        // The TLS port sits one below the HTTP port in Sunshine's scheme; only
-        // assume that when the user did not override the HTTP port.
-        entry.https_port = if port == DEFAULT_HTTP_PORT {
-            DEFAULT_HTTPS_PORT
-        } else {
-            port.saturating_sub(5)
-        };
+        entry.https_port = https_for(port);
         entry.add_address(address);
         if let Some(name) = name {
             entry.custom_name = Some(name.clone());
             entry.name = name;
         }
+        id
+    }
+
+    /// Record a machine moonlight-qt remembers.
+    ///
+    /// Unlike the other two sources this one carries Sunshine's `uniqueid`
+    /// up front, so the entry can be filed under its stable key immediately
+    /// instead of living at an address key until the first probe. Anything
+    /// already sitting at that address is folded in on the way.
+    pub fn upsert_moonlight(&mut self, host: &KnownHost) -> DeviceId {
+        if host.addresses.iter().any(|a| self.is_local(a)) {
+            return self.absorb_into_self(&host.addresses);
+        }
+
+        let existing = self.find_by_addresses(&host.addresses, host.port);
+        let id = match host.uuid.as_deref() {
+            Some(uuid) => {
+                let stable = uid_key(uuid);
+                match existing {
+                    Some(existing) => self.rekey(&existing, &stable),
+                    None => stable,
+                }
+            }
+            None => existing.unwrap_or_else(|| addr_key(host.addresses[0].as_str(), host.port)),
+        };
+
+        let entry = self
+            .devices
+            .entry(id.clone())
+            .or_insert_with(|| Device::new(id.clone(), host.name.clone()));
+
+        entry.source.moonlight = true;
+        entry.http_port = host.port;
+        entry.https_port = https_for(host.port);
+        for address in &host.addresses {
+            entry.add_address(address);
+        }
+        if entry.custom_name.is_none() && !host.name.is_empty() {
+            entry.name = host.name.clone();
+        }
+        // No `last_seen_ms`: remembered is not seen. Stamping it here would
+        // make a machine that has been off for a month look freshly present
+        // until the first probe came back and said otherwise.
         id
     }
 
@@ -277,10 +326,14 @@ impl Registry {
             return Err("This machine cannot be removed.".into());
         }
         if !device.source.manual {
-            return Err("That machine was found on the network, not added by hand.".into());
+            return Err(if device.source.moonlight && !device.source.mdns {
+                "That machine came from Moonlight's own list, not added by hand.".into()
+            } else {
+                "That machine was found on the network, not added by hand.".to_string()
+            });
         }
 
-        if device.source.mdns {
+        if device.source.mdns || device.source.moonlight {
             device.source.manual = false;
             device.custom_name = None;
         } else {
@@ -355,6 +408,7 @@ impl Registry {
             Some(existing) => {
                 existing.source.mdns |= moving.source.mdns;
                 existing.source.manual |= moving.source.manual;
+                existing.source.moonlight |= moving.source.moonlight;
                 for address in &moving.addresses {
                     existing.add_address(address);
                 }
@@ -532,6 +586,101 @@ mod tests {
         );
         let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
         assert_eq!(device.pairing, PairingState::NotPaired);
+    }
+
+    fn known(name: &str, address: &str, uuid: Option<&str>) -> KnownHost {
+        KnownHost {
+            name: name.into(),
+            addresses: vec![address.into()],
+            port: DEFAULT_HTTP_PORT,
+            uuid: uuid.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_machine_moonlight_remembers_gets_a_card_without_being_reachable() {
+        // The point of the source: mDNS never saw this host and it may be
+        // switched off, but it is still one of your machines.
+        let mut r = registry();
+        r.upsert_moonlight(&known("bazzite", "192.168.1.40", Some("abc-123")));
+
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert_eq!(device.name, "bazzite");
+        assert!(device.source.moonlight);
+        assert_eq!(device.reachability, Reachability::Unknown);
+        assert_eq!(
+            device.last_seen_ms, None,
+            "remembered is not seen; a stamp here would claim presence"
+        );
+    }
+
+    #[test]
+    fn a_remembered_host_is_already_on_the_key_its_probe_will_use() {
+        // Moonlight's uuid is Sunshine's uniqueid, so the probe must land on
+        // the existing entry rather than minting a second card.
+        let mut r = registry();
+        let id = r.upsert_moonlight(&known("bazzite", "192.168.1.40", Some("abc-123")));
+        let probed = r.apply_probe(
+            &id,
+            reached(
+                "192.168.1.40",
+                info(&[("uniqueid", "abc-123"), ("hostname", "bazzite")]),
+            ),
+        );
+
+        assert_eq!(probed, id);
+        assert_eq!(r.devices().into_iter().filter(|d| !d.is_self).count(), 1);
+    }
+
+    #[test]
+    fn mdns_and_moonlight_finding_the_same_machine_is_one_card() {
+        let mut r = registry();
+        r.upsert_mdns("BAZZITE", &["192.168.1.40".into()], DEFAULT_HTTP_PORT);
+        r.upsert_moonlight(&known("bazzite", "192.168.1.40", Some("abc-123")));
+
+        let remote: Vec<_> = r.devices().into_iter().filter(|d| !d.is_self).collect();
+        assert_eq!(remote.len(), 1);
+        assert!(remote[0].source.mdns && remote[0].source.moonlight);
+        // Folded onto the stable key, not left at the address key.
+        assert_eq!(remote[0].id, uid_key("abc-123"));
+    }
+
+    #[test]
+    fn a_remembered_host_without_a_uuid_still_merges_by_address() {
+        let mut r = registry();
+        r.upsert_mdns("BAZZITE", &["192.168.1.40".into()], DEFAULT_HTTP_PORT);
+        r.upsert_moonlight(&known("bazzite", "192.168.1.40", None));
+        assert_eq!(r.devices().into_iter().filter(|d| !d.is_self).count(), 1);
+    }
+
+    #[test]
+    fn moonlights_entry_for_this_machine_folds_into_self() {
+        // Moonlight remembers the machine you are sitting at, usually as
+        // 127.0.0.1, and that must not become a second card.
+        let mut r = registry();
+        let id = r.upsert_moonlight(&known("Studio", "192.168.1.10", Some("abc-123")));
+        assert_eq!(id, SELF_ID);
+        assert!(r.devices().iter().all(|d| d.is_self));
+    }
+
+    #[test]
+    fn removing_a_manual_entry_keeps_a_machine_moonlight_remembers() {
+        let mut r = registry();
+        r.upsert_moonlight(&known("bazzite", "192.168.1.40", Some("abc-123")));
+        let id = r.upsert_manual("192.168.1.40", None, None);
+
+        r.remove_manual(&id).expect("removes");
+        let remote: Vec<_> = r.devices().into_iter().filter(|d| !d.is_self).collect();
+        assert_eq!(remote.len(), 1);
+        assert!(!remote[0].source.manual && remote[0].source.moonlight);
+    }
+
+    #[test]
+    fn a_purely_remembered_machine_cannot_be_removed_by_hand() {
+        let mut r = registry();
+        let id = r.upsert_moonlight(&known("bazzite", "192.168.1.40", Some("abc-123")));
+        let err = r.remove_manual(&id).expect_err("not a manual entry");
+        assert!(err.contains("Moonlight"));
     }
 
     #[test]

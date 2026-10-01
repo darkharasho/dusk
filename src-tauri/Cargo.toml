@@ -48,3 +48,14 @@ winreg = "0.52"
 version = "0.12"
 default-features = false
 features = ["rustls-tls", "json", "stream"]
+
+# Direct, because Sunshine's TLS server aborts a resumed handshake and
+# reqwest exposes no way to turn resumption off — see `state::tls_client`.
+# "ring" must match the provider reqwest's rustls-tls feature pulls in.
+[dependencies.rustls]
+version = "0.23"
+default-features = false
+features = ["ring", "std", "tls12"]
+
+[dependencies.rustls-pemfile]
+version = "2"

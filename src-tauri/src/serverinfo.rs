@@ -21,6 +21,27 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 pub const STATUS_OK: u16 = 200;
 pub const STATUS_UNAUTHORIZED: u16 = 401;
 
+/// Render a transport error with its causes.
+///
+/// `reqwest::Error`'s own `Display` stops at the outer layer, so a real
+/// failure logs as the useless "error sending request for url (...)" with
+/// the reason — connection closed, certificate rejected, timeout — left in
+/// the source chain. That message cost an afternoon once; it should not
+/// cost a second one.
+pub fn describe(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !out.contains(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        source = cause.source();
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerInfo {
     pub fields: HashMap<String, String>,
@@ -147,14 +168,14 @@ async fn query(
         .timeout(PROBE_TIMEOUT)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| describe(&e))?;
     let rtt_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
 
     if !response.status().is_success() {
         return Err(format!("serverinfo returned {}", response.status()));
     }
 
-    let body = response.text().await.map_err(|e| e.to_string())?;
+    let body = response.text().await.map_err(|e| describe(&e))?;
     let (status_code, fields) = parse(&body)?;
     Ok(ServerInfo {
         fields,
@@ -278,6 +299,47 @@ fn root_status(e: &quick_xml::events::BytesStart<'_>) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|l| l as &dyn std::error::Error)
+        }
+    }
+
+    #[test]
+    fn an_error_is_described_down_to_its_root_cause() {
+        // The outer layer alone is what made a closed connection read as
+        // "error sending request" and nothing else.
+        let err = Layer(
+            "error sending request",
+            Some(Box::new(Layer(
+                "connection closed before message completed",
+                None,
+            ))),
+        );
+        assert_eq!(
+            describe(&err),
+            "error sending request: connection closed before message completed"
+        );
+    }
+
+    #[test]
+    fn a_cause_already_quoted_by_its_parent_is_not_repeated() {
+        let err = Layer(
+            "failed: broken pipe",
+            Some(Box::new(Layer("broken pipe", None))),
+        );
+        assert_eq!(describe(&err), "failed: broken pipe");
+    }
 
     const SAMPLE: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <root status_code="200">

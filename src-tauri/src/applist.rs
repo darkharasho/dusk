@@ -41,13 +41,16 @@ pub async fn query(
         .timeout(TIMEOUT)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::serverinfo::describe(&e))?;
 
     if !response.status().is_success() {
         return Err(format!("applist returned {}", response.status()));
     }
 
-    let body = response.text().await.map_err(|e| e.to_string())?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| crate::serverinfo::describe(&e))?;
     parse(&body)
 }
 
@@ -191,5 +194,33 @@ mod tests {
     fn malformed_xml_is_an_error() {
         assert!(parse("<root><App>").is_err() || parse("<root><App>").unwrap().is_empty());
         assert!(parse("not xml <<<").is_err());
+    }
+}
+
+/// Against a real host, set `DUSK_TEST_HOST` to its address.
+///
+/// This is the regression guard for TLS session resumption: Sunshine aborts
+/// a resumed handshake, and the failure only shows on the *second* request
+/// through a client that has cached a session — so a single-request test
+/// would pass while the app failed every few seconds. Ignored by default
+/// because it needs a paired host on the network.
+#[cfg(test)]
+mod live_probe {
+    #[tokio::test]
+    #[ignore]
+    async fn repeated_requests_through_one_client_all_succeed() {
+        let Ok(addr) = std::env::var("DUSK_TEST_HOST") else {
+            eprintln!("skipping: set DUSK_TEST_HOST to a paired host's address");
+            return;
+        };
+        let id = crate::moonlight::identity::load().expect("a moonlight identity");
+        let client = crate::state::tls_client(&id).expect("a TLS client");
+
+        for attempt in 1..=8 {
+            let apps = super::query(&client, &addr, 47984)
+                .await
+                .unwrap_or_else(|e| panic!("attempt {attempt} failed: {e}"));
+            assert!(!apps.is_empty(), "attempt {attempt} returned no apps");
+        }
     }
 }

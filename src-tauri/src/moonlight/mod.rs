@@ -6,6 +6,7 @@
 //! and why it is already paid for.
 
 pub mod cli;
+pub mod hosts;
 pub mod identity;
 
 pub use cli::Moonlight;

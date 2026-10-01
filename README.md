@@ -26,9 +26,14 @@ Streaming, host control, and the installer are not built yet.
 
 ```sh
 npm install
-npm run tauri dev            # real discovery on the local network
-DUSK_MOCK=1 npm run tauri dev # fixtures, no network, for UI work
+npm run dev                  # real discovery on the local network
+DUSK_MOCK=1 npm run dev      # fixtures, no network, for UI work
 ```
+
+`npm run dev` starts the whole app — Vite and the Tauri window. `dev:vite`
+serves the frontend alone, and exists only because Tauri's `beforeDevCommand`
+has to call something other than `dev` to avoid recursing into itself. Opening
+it in a browser gets you a page with no backend, so it is rarely what you want.
 
 `DUSK_MOCK=1` seeds one device in each card state and swaps in a mock host
 backend. It exists because a Mac cannot usefully run Sunshine (see below), and
@@ -38,8 +43,9 @@ the rest of the UI should not be blocked on that.
 npm run typecheck                 # frontend
 cd src-tauri && cargo test        # backend
 cd src-tauri && cargo test -- --ignored    # download tests; hit the network
+DUSK_TEST_HOST=192.168.1.40 cargo test -- --ignored   # + the TLS guard, needs a paired host
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings
-python3 scripts/make_placeholder_icon.py   # regenerate the placeholder icon
+python3 scripts/make_icon.py      # regenerate the app icon set
 ```
 
 CI runs the backend on Linux, macOS and Windows. That matrix is the point of
@@ -72,16 +78,27 @@ the only place Windows tests actually execute.
 ## How it fits together
 
 ```
-mDNS (_nvstream._tcp) ─┐
-                       ├─→ Registry ─→ poller ─→ serverinfo ─→ Snapshot ─→ UI
-manual address book ───┘
+mDNS (_nvstream._tcp) ──┐
+manual address book ────┼─→ Registry ─→ poller ─→ serverinfo ─→ Snapshot ─→ UI
+moonlight-qt's hosts ───┘
 ```
 
-- **`registry.rs`** is the interesting file. Two sources feed it and the same
+- **`registry.rs`** is the interesting file. Three sources feed it and the same
   machine routinely appears in both, or twice over mDNS on two interfaces.
   Devices are keyed by address until `serverinfo` returns Sunshine's `uniqueid`,
   at which point the entry is re-keyed and merged. That is what makes "one
   machine on LAN and VPN" a single card.
+- **`moonlight/hosts.rs`** is the third source, and the one that stops the
+  grid being shorter than Moonlight's. mDNS only finds what is advertising
+  this second: on the network this was written against, four machines were
+  known to Moonlight, one was advertising, and one of the three missing was
+  up and answering `serverinfo` perfectly well while publishing nothing over
+  multicast. Moonlight shows them because it remembers them, so Dusk reads
+  the same list. Its `uuid` is byte-for-byte Sunshine's `uniqueid`, so a
+  remembered host lands on the key a probe would have given it — the merge
+  is exact rather than an address heuristic. `remoteaddress` is dropped on
+  the way in: it is the public IP, which every machine behind one router
+  shares, so keeping it would fold them all into a single card.
 - **`serverinfo.rs`** talks to the stable GameStream endpoint rather than
   Sunshine's config API. Moonlight depends on it, so it cannot change freely.
 - **`moonlight/cli.rs`** drives moonlight-qt for the three things that need
@@ -197,9 +214,76 @@ have to be granted by hand because no installer can script a TCC prompt. The UI
 flags this rather than promising parity. Streaming *to* a Mac is unaffected and
 first-class.
 
+**moonlight-common-c is GPL-3.0, not LGPL.** The plan recorded here — embed it
+later and keep the shell unencumbered — cannot be done: linking it relicenses
+Dusk. Nor would it save much work, because it is the streaming protocol only.
+`Limelight.h` has no pairing function at all; pairing lives in moonlight-qt's
+`NvPairingManager`, along with the decoders, audio and input.
+
+So the client stays a **separate process**, and the in-stream overlay lives in
+a GPL-3.0 fork of moonlight-qt rather than in Dusk. Arm's-length IPC — CLI
+arguments today, a local socket once the overlay reports back — is aggregation
+rather than a derivative work, which is what keeps the boundary real. The line
+to hold is that they stay separate programs: pipes and sockets are fine,
+linking and shared in-memory structures are not.
+
+Most of that overlay is already built upstream. `overlaymanager.{h,cpp}` keeps
+one `SDL_Surface` per overlay type and **every renderer already composites
+them** — `vt_metal` and `vt_avsamplelayer` on macOS, `d3d11va` and `dxva2` on
+Windows, `vaapi`/`drm`/`eglvid`/Vulkan on Linux, plus the SDL fallback, with
+dedicated overlay shaders. The surface is generic RGBA; text is only what the
+manager happens to draw today. An interactive overlay is a new overlay type, a
+centred rect per renderer, input interception while it is open, and a hotkey
+beside the existing combos in `input/keyboard.cpp`.
+
 **Sunshine is not bundled.** It gets fetched and verified at first run (M5).
 That keeps Dusk out of GPL-3.0 conveying obligations, lets Sunshine ship security
 updates without a Dusk release, and defers to the distro package on Linux.
+
+**Two separate things broke TLS to a host, and one hid the other.** The
+symptom was the same for both — an app list that failed most ticks and a
+pairing state flickering between Paired and Unknown — and both logged only
+`error sending request`, because `reqwest::Error`'s `Display` stops at the
+outer layer. `serverinfo::describe` now walks the source chain, which is
+what made the second cause visible at all.
+
+*Connection pooling.* Sunshine answers without `Connection: close` and then
+closes the socket anyway, on the plain port and the TLS port alike — curl
+reports `left intact` followed immediately by `Connection 0 seems to be
+dead`. curl reconnects; hyper's pool hands out the dead socket and whether
+the next request notices in time is a race. Pooling buys nothing against a
+server that closes every connection, so `pool_max_idle_per_host(0)` on both.
+
+*TLS session resumption.* Sunshine aborts a resumed handshake with
+`received fatal alert: InternalError`. One client reusing its rustls session
+cache goes: first request fine, next two dead, one fine again as rustls
+gives up on the ticket — eight requests through eight fresh clients succeed
+eight times, so the server is healthy and the cache is the whole problem.
+Capping to TLS 1.2 makes it *worse*, so it is not a 1.3-ticket quirk.
+reqwest exposes no resumption knob, which is the only reason `state.rs`
+assembles a `rustls::ClientConfig` by hand instead of using the builder.
+`applist`'s ignored `live_probe` test is the guard: it needs a real paired
+host, and it only fails from the second request onward, which is exactly why
+a single-request test would have passed throughout.
+
+**The keystore is read once per run, not once per snapshot.** `load` is
+called from `AppState::snapshot`, which is built on every poll tick — so
+reading through to the Keychain each time put an authorisation prompt on
+screen every few seconds. It also never settles in development, because the
+Keychain grants access to a *binary* and an unsigned one has a new identity
+after every `cargo build`, which revokes "Always Allow" on each rebuild. The
+answer is cached for the run and writes go through `save`/`forget`, so the
+cache cannot drift. Expect one prompt per rebuild in dev regardless; that one
+only goes away with a signed build.
+
+**A missing capability file made the grid look frozen, not broken.** Tauri v2
+gates `listen` behind `core:event`, and with no `capabilities/` directory at
+all nothing is granted — so `onSnapshot` was rejected, every pushed snapshot
+was dropped, and the UI showed its first `get_snapshot` forever. Machines
+therefore sat on "Checking" while the backend knew perfectly well they were
+online. Nothing logs when this happens: app-defined commands are not gated,
+so `invoke` keeps working and only the push path dies. `capabilities/default.json`
+grants `core:default` to the main window.
 
 **`src/types.ts` mirrors `src-tauri/src/model.rs` by hand.** If it starts
 drifting, generate it (ts-rs or specta) rather than patching it up.

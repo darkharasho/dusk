@@ -24,9 +24,21 @@ function Masthead({ children }: { children?: React.ReactNode }) {
     <header className="axi-mast">
       <div className="axi-mast__in">
         <span className="axi-brand">
-          <span className="axi-sigil" aria-hidden="true">
-            D
-          </span>
+          {/* The mark, not the language's lettered sigil: a crescent with
+              the sun in its curve — Moonlight and Sunshine, two things. */}
+          <svg
+            className="dusk-mark"
+            viewBox="0 0 64 64"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <mask id="dusk-crescent">
+              <circle cx="30" cy="32" r="23" fill="#fff" />
+              <circle cx="40" cy="32" r="20" fill="#000" />
+            </mask>
+            <circle cx="30" cy="32" r="23" fill="#DCE3EE" mask="url(#dusk-crescent)" />
+            <circle cx="40" cy="32" r="10.5" fill="var(--axi-accent)" />
+          </svg>
           <span className="axi-brand__name">
             Dusk
             <small>Sunshine and Moonlight</small>

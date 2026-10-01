@@ -52,17 +52,6 @@ impl ClientIdentity {
             key_pem: key,
         })
     }
-
-    /// The concatenated PEM that `reqwest::Identity::from_pem` wants.
-    pub fn to_combined_pem(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.cert_pem.len() + self.key_pem.len() + 1);
-        out.extend_from_slice(&self.key_pem);
-        if !self.key_pem.ends_with(b"\n") {
-            out.push(b'\n');
-        }
-        out.extend_from_slice(&self.cert_pem);
-        out
-    }
 }
 
 fn starts_with_pem(bytes: &[u8], header: &[u8]) -> bool {
@@ -229,17 +218,6 @@ mod tests {
         ] {
             assert!(ClientIdentity::from_parts(CERT.to_vec(), header.to_vec()).is_some());
         }
-    }
-
-    #[test]
-    fn combined_pem_puts_the_key_first_and_separates_them() {
-        let id =
-            ClientIdentity::from_parts(CERT.to_vec(), b"-----BEGIN PRIVATE KEY-----\nx".to_vec())
-                .expect("valid");
-        let pem = id.to_combined_pem();
-        let text = String::from_utf8(pem).unwrap();
-        assert!(text.starts_with("-----BEGIN PRIVATE KEY-----"));
-        assert!(text.contains("\n-----BEGIN CERTIFICATE-----"));
     }
 
     #[test]

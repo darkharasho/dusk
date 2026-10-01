@@ -329,8 +329,16 @@ is sound under X11, and skipped when already set.
 ### Building on Linux
 
 The system GTK and WebKit development packages are what Tauri needs
-(`webkit2gtk-4.1`, `gtk+-3.0`). If a Homebrew-on-Linux is on `PATH` before
-`/usr/bin`, its `pkg-config` is found first and resolves `cairo` against
-Homebrew's own tree, which is missing the X11 `.pc` files it depends on — the
-build then fails claiming `cairo` is not installed when it plainly is.
-`PKG_CONFIG=/usr/bin/pkg-config` is the fix.
+(`webkit2gtk-4.1`, `gtk+-3.0`). A Homebrew-on-Linux earlier on `PATH` than
+`/usr/bin` shadows the system `pkg-config`, and Homebrew's tree carries no
+X11 or `javascriptcoregtk` `.pc` files — so the build fails claiming `cairo`
+"was not found" while cairo is plainly installed, which sends you hunting a
+package that isn't missing.
+
+Nobody should have to know that to run `npm run dev`, so the npm scripts go
+through `scripts/tauri.mjs`, which probes the `pkg-config` on `PATH` and falls
+back to `/usr/bin/pkg-config` only when the first cannot resolve `gdk-3.0` and
+`javascriptcoregtk-4.1` and the second can. A probe rather than an assumption:
+a healthy machine is untouched, an explicit `PKG_CONFIG` is left alone, and
+nothing runs off Linux. Invoking `cargo` directly bypasses it — that is what
+`PKG_CONFIG=/usr/bin/pkg-config cargo test` is for.

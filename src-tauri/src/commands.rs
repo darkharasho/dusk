@@ -101,6 +101,19 @@ pub async fn refresh_now(state: State<'_, Arc<AppState>>) -> Result<(), String> 
     Ok(())
 }
 
+/// A stream that ended by itself, badly.
+///
+/// Separate from a command's `Err` because it arrives long after the launch
+/// returned — the person has already let go of the button.
+pub const SESSION_FAILED_EVENT: &str = "dusk://session-failed";
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFailed {
+    pub device_id: String,
+    pub message: String,
+}
+
 /// The address to reach a device on, and its human name for messages.
 async fn target_of(state: &Arc<AppState>, id: &str) -> Result<(String, String), String> {
     let registry = state.registry.read().await;
@@ -197,8 +210,17 @@ pub async fn launch_app(
     let session_id = id.clone();
     tauri::async_runtime::spawn(async move {
         let mut child = child;
-        if let Err(err) = child.wait().await {
-            eprintln!("dusk: lost track of the Moonlight session: {err}");
+        if let Err(err) = crate::moonlight::Moonlight::wait_for_session(&mut child).await {
+            // A stream that fails after launch used to be invisible: the
+            // card simply went back to Ready. Say what happened instead.
+            eprintln!("dusk: the Moonlight session ended badly: {err}");
+            let failed = SessionFailed {
+                device_id: session_id.clone(),
+                message: err.to_string(),
+            };
+            if let Err(err) = handle.emit(SESSION_FAILED_EVENT, failed) {
+                eprintln!("dusk: could not report the failed session: {err}");
+            }
         }
         // Cleared however the client ended, including a crash: leaving it
         // set would strand the card mid-session forever.

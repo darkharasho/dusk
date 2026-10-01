@@ -13,10 +13,12 @@
 //!   data, which is why errors here are built from stderr with that banner
 //!   stripped.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 /// Pairing waits on a person walking to another machine and typing four
@@ -27,6 +29,11 @@ const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
 /// against moonlight-qt 6.x, `quit` against a host that will not answer
 /// hangs indefinitely rather than failing — hence a timeout at all.
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How many trailing stderr lines to keep from a running stream. Enough to
+/// carry the reason a session ended plus the context around it, without
+/// holding a whole session's FFmpeg trace in memory.
+const STDERR_TAIL: usize = 40;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MoonlightError {
@@ -140,6 +147,54 @@ impl Moonlight {
             .kill_on_drop(false)
             .spawn()
             .map_err(|e| MoonlightError::Spawn(e.to_string()))
+    }
+
+    /// Wait for a stream to end, draining its stderr the whole time.
+    ///
+    /// Draining is not bookkeeping, it is the difference between a stream
+    /// that explains itself and one that dies in silence. [`Self::stream`]
+    /// hands back a child with stderr on a pipe; left unread, two things go
+    /// wrong. moonlight-qt is extremely chatty — a single decoded frame can
+    /// produce half a dozen lines — so the pipe is a slow fuse under a long
+    /// session. And with nothing kept, a client that exits 255 one second in
+    /// tells us nothing: the card flips back to Ready and the person is left
+    /// looking at a button that apparently did nothing.
+    ///
+    /// Only the tail is kept. The reason a stream failed is always at the
+    /// end, and a session that ran for an hour would otherwise have us
+    /// holding megabytes of FFmpeg trace to quote one line of.
+    pub async fn wait_for_session(child: &mut Child) -> Result<(), MoonlightError> {
+        let drain = child.stderr.take().map(|stderr| {
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                let mut tail: VecDeque<String> = VecDeque::with_capacity(STDERR_TAIL);
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if tail.len() == STDERR_TAIL {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line);
+                }
+                Vec::from(tail).join("\n")
+            })
+        });
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| MoonlightError::Spawn(e.to_string()))?;
+
+        // Awaited after the child is reaped, so the pipe is closed and this
+        // cannot outlive the session it belongs to.
+        let stderr = match drain {
+            Some(handle) => handle.await.unwrap_or_default(),
+            None => String::new(),
+        };
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(MoonlightError::Failed(clean_stderr(&stderr)))
+        }
     }
 
     async fn run(&self, args: &[&str], budget: Duration) -> Result<String, MoonlightError> {
@@ -353,6 +408,55 @@ mod tests {
             .await
             .expect("completes");
         assert_eq!(out.trim(), "ready");
+    }
+
+    /// A child shaped exactly like [`Moonlight::stream`]'s: stderr on a pipe
+    /// that nobody has read yet.
+    #[cfg(unix)]
+    fn a_child_that(script: &str) -> Child {
+        Command::new("/bin/sh")
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn")
+    }
+
+    /// The regression this exists for: a stream that fails after launch used
+    /// to go unreported, because nothing ever read its stderr or looked at
+    /// its exit status.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_that_fails_reports_why() {
+        let mut child = a_child_that("echo 'Host is unreachable' 1>&2; exit 255");
+        let err = Moonlight::wait_for_session(&mut child)
+            .await
+            .expect_err("a non-zero exit is a failure");
+        assert!(matches!(&err, MoonlightError::Failed(m) if m == "Host is unreachable"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_the_person_ended_is_not_an_error() {
+        let mut child = a_child_that("exit 0");
+        assert!(Moonlight::wait_for_session(&mut child).await.is_ok());
+    }
+
+    /// moonlight-qt writes several lines per decoded frame, so an unread
+    /// pipe is a fuse under any long session. Far more than a pipe's worth
+    /// here, and only the reason at the end is kept.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_torrent_of_output_neither_blocks_nor_is_hoarded() {
+        let mut child = a_child_that(
+            "awk 'BEGIN { while (i++ < 20000) print \"FFmpeg: chatter\" }' 1>&2; \
+             echo 'Connection terminated' 1>&2; exit 255",
+        );
+        let err = Moonlight::wait_for_session(&mut child)
+            .await
+            .expect_err("still a failure");
+        assert!(matches!(&err, MoonlightError::Failed(m) if m == "Connection terminated"));
     }
 
     #[test]

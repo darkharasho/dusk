@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Device } from "../types";
 import { cardState } from "../deviceState";
-import { generatePin, launchApp, pairDevice, quitSession } from "../api";
+import { generatePin, launchApp, onSessionFailed, pairDevice, quitSession } from "../api";
 
 interface Props {
   device: Device;
@@ -30,6 +30,26 @@ export function DeviceDrawer({ device, moonlightAvailable, onClose }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, busy]);
+
+  // A stream can die well after the launch call resolved, so its reason
+  // arrives as an event rather than a rejected promise. Same notice either
+  // way: from here it is one failure, however late it turned up.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    onSessionFailed((failure) => {
+      if (!cancelled && failure.deviceId === device.id) setError(failure.message);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [device.id]);
 
   const { label, chipClass } = cardState(device);
   const online = device.reachability.kind === "online";

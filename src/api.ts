@@ -3,6 +3,13 @@ import { listen } from "@tauri-apps/api/event";
 import type { Device, DownloadPreview, Setup, Snapshot } from "./types";
 
 export const SNAPSHOT_EVENT = "dusk://snapshot";
+export const SESSION_FAILED_EVENT = "dusk://session-failed";
+
+/** A stream that died on its own, after the launch call had already returned. */
+export interface SessionFailed {
+  deviceId: string;
+  message: string;
+}
 
 export function getSnapshot(): Promise<Snapshot> {
   return invoke<Snapshot>("get_snapshot");
@@ -129,4 +136,10 @@ export function generatePin(): string {
 /** Backend pushes a full snapshot whenever discovery or polling changes state. */
 export function onSnapshot(handler: (s: Snapshot) => void): Promise<() => void> {
   return listen<Snapshot>(SNAPSHOT_EVENT, (event) => handler(event.payload));
+}
+
+export function onSessionFailed(
+  handler: (failure: SessionFailed) => void,
+): Promise<() => void> {
+  return listen<SessionFailed>(SESSION_FAILED_EVENT, (event) => handler(event.payload));
 }

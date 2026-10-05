@@ -90,6 +90,44 @@ def mark(size, backdrop=True):
     return img.resize((size, size), Image.LANCZOS)
 
 
+# A menu bar / notification area icon is a different drawing problem from an
+# app icon: no backdrop, and the mark fills the square instead of sitting in a
+# tile with breathing room, because the bar supplies the margins itself.
+TRAY_PAD = 0.06
+
+
+def tray_mark(size):
+    """The bare mark, trimmed and centred, for the system tray.
+
+    macOS is handed this as a template image, so only the alpha matters there
+    and the gold reads as solid ink; Windows and Linux use the colour.
+    """
+    big = size * SS
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+
+    layer = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    _disc(ld, big, CRESCENT, MOON)
+    cx, cy, r = BITE
+    ld.ellipse(
+        [(cx - r) * big, (cy - r) * big, (cx + r) * big, (cy + r) * big],
+        fill=(0, 0, 0, 0),
+    )
+    img.alpha_composite(layer)
+    _disc(ImageDraw.Draw(img), big, SUN, SUN_INK)
+
+    # The mark's bounding box is not centred in the unit square — the crescent
+    # and the sun sit off to one side of it — so trim to the ink and recentre,
+    # or the icon looks nudged left in the bar.
+    ink = img.crop(img.getbbox())
+    inner = int(round(big * (1 - TRAY_PAD * 2)))
+    ink.thumbnail((inner, inner), Image.LANCZOS)
+
+    out = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    out.paste(ink, ((big - ink.width) // 2, (big - ink.height) // 2))
+    return out.resize((size, size), Image.LANCZOS)
+
+
 def main():
     os.makedirs(ICONS, exist_ok=True)
 
@@ -104,6 +142,11 @@ def main():
     ]:
         mark(size).save(os.path.join(ICONS, name))
         print("wrote", name)
+
+    # The tray icon. Drawn at 2x and handed to Tauri at that size: the menu
+    # bar scales it down for a 1x display, and a Retina bar wants every pixel.
+    tray_mark(44).save(os.path.join(ICONS, "tray.png"))
+    print("wrote tray.png")
 
     # .ico carries its own sizes; Windows picks per context.
     mark(256).save(

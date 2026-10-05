@@ -245,16 +245,42 @@ pub async fn sign_in_host(
     let inner = state.inner().clone();
     let credentials = Credentials { username, password };
 
-    SunshineApi::new(sunshine::api::DEFAULT_PORT)
-        .map_err(|e| e.to_string())?
-        .verify(&credentials)
-        .await
-        .map_err(|e| e.to_string())?;
+    let api = SunshineApi::new(sunshine::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
+    api.verify(&credentials).await.map_err(|e| e.to_string())?;
 
-    inner.credentials.save(credentials).await?;
+    inner.credentials.save(credentials.clone()).await?;
+
+    // Signing in is the moment Dusk takes over presenting this host, so it is
+    // also the moment Sunshine's own tray icon should go. Doing it here and
+    // not at every launch matters: applying it needs a restart, and
+    // restarting Sunshine on a schedule Dusk chooses would cut off whatever
+    // is streaming. Failing is not worth failing the sign-in over — the
+    // password is saved either way and a second icon is a blemish, not a
+    // breakage.
+    if let Err(err) = hide_sunshine_tray(&api, &credentials).await {
+        eprintln!("dusk: could not hide Sunshine's tray icon: {err}");
+    }
+
     emit_snapshot(&app, &inner).await;
     Ok(())
 }
+
+/// Turn Sunshine's tray icon off and restart it if that changed anything.
+async fn hide_sunshine_tray(api: &SunshineApi, credentials: &Credentials) -> Result<(), String> {
+    let changed = api
+        .set_tray(credentials, false)
+        .await
+        .map_err(|e| e.to_string())?;
+    if changed {
+        api.restart(credentials).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// Putting the icon back needs no command of its own: `system_tray` is an
+// ordinary Sunshine setting, and the settings screen already renders, saves
+// and restarts for every key the host reports. A second path to the same
+// write would only be one more thing to keep in step.
 
 #[tauri::command]
 pub async fn sign_out_host(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {

@@ -14,7 +14,7 @@ use crate::model::{DeviceId, Snapshot};
 use crate::moonlight::{ClientIdentity, Moonlight};
 use crate::registry::Registry;
 use crate::store::Store;
-use crate::sunshine::CredentialStore;
+use crate::sunshine::{CredentialStore, Known};
 
 pub const SNAPSHOT_EVENT: &str = "dusk://snapshot";
 
@@ -260,7 +260,13 @@ impl AppState {
             host: self.host.state().await,
             discovering: self.is_discovering(),
             moonlight_available: self.moonlight.is_some(),
-            host_signed_in: self.credentials.load().await.is_some(),
+            // `peek`, never `load`: a snapshot is on the path to drawing the
+            // window, and a keystore read can block behind a password prompt.
+            host_signed_in: match self.credentials.peek().await {
+                Known::Unknown => None,
+                Known::SignedIn => Some(true),
+                Known::SignedOut => Some(false),
+            },
             host_credentials_persistent: self.credentials.is_persistent().await,
         }
     }
@@ -271,6 +277,11 @@ impl AppState {
 /// payload.
 pub async fn emit_snapshot(app: &AppHandle, state: &Arc<AppState>) {
     let snapshot = state.snapshot().await;
+
+    // The tray menu is another view of the same payload, and updating it here
+    // is what keeps it from drifting out of step with the window.
+    crate::tray::reflect(app, &snapshot);
+
     if let Err(err) = app.emit(SNAPSHOT_EVENT, snapshot) {
         eprintln!("dusk: could not emit snapshot: {err}");
     }

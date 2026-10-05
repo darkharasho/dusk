@@ -48,6 +48,12 @@ export function SelfCard({
   const installed = status.kind === "installed";
   const running = status.kind === "installed" && status.running;
 
+  // Three states, not two. Offering "Sign in to Sunshine" while the keystore
+  // is still being read shows a sign-in form to someone who is already signed
+  // in, which is exactly what it looks like when a password was never saved.
+  const signedIn = snapshot.hostSignedIn === true;
+  const signInKnown = snapshot.hostSignedIn !== null;
+
   const [panel, setPanel] = useState<Panel>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,12 +101,12 @@ export function SelfCard({
           <button type="button" className="axi-btn" onClick={onOpenSetup}>
             Set up hosting
           </button>
-          {installed && snapshot.hostSignedIn && (
+          {installed && signedIn && (
             <button type="button" className="axi-btn" onClick={onOpenSettings}>
               Settings
             </button>
           )}
-          {installed && snapshot.hostSignedIn && (
+          {installed && signedIn && (
             <button
               type="button"
               className="axi-btn"
@@ -110,7 +116,10 @@ export function SelfCard({
               Accept a PIN
             </button>
           )}
-          {installed && !snapshot.hostSignedIn && (
+          {installed && !signInKnown && (
+            <span className="axi-ink-dim">Checking sign-in</span>
+          )}
+          {installed && signInKnown && !signedIn && (
             <button
               type="button"
               className="axi-btn"
@@ -133,7 +142,7 @@ export function SelfCard({
         </div>
       </div>
 
-      {snapshot.hostSignedIn && !snapshot.hostCredentialsPersistent && (
+      {signedIn && !snapshot.hostCredentialsPersistent && (
         <p className="axi-ink-dim">
           {/* Never let someone believe a password was saved when it was not. */}
           No system keystore was available, so this sign-in is only kept until

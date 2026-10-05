@@ -142,7 +142,14 @@ export interface Snapshot {
   /** False when moonlight-qt is missing; nothing client-side works without it. */
   moonlightAvailable: boolean;
   /** Whether Dusk holds this machine's Sunshine sign-in. */
-  hostSignedIn: boolean;
+  /**
+   * Null until the backend has read the keystore, which it does in the
+   * background: on macOS that read can put a system password prompt on
+   * screen, and the grid has to draw either way. Treat null as "not yet
+   * known" rather than as false, or someone already signed in is shown a
+   * sign-in form every launch.
+   */
+  hostSignedIn: boolean | null;
   /** False when the sign-in is only held for this run (no OS keystore). */
   hostCredentialsPersistent: boolean;
 }

@@ -275,6 +275,56 @@ impl SunshineApi {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string))
     }
+
+    /// Turn Sunshine's own tray icon off, so Dusk's is the only one.
+    ///
+    /// Two icons for one thing is the exact seam Dusk exists to hide, and
+    /// Sunshine's menu bar item is the most visible place the illusion
+    /// breaks. `system_tray` covers its desktop notifications too, which is
+    /// the right call for the same reason: a notification from an app the
+    /// person never opened is a notification from the wrong app.
+    ///
+    /// Returns whether anything actually changed, because the change only
+    /// takes effect on restart and restarting Sunshine drops whatever is
+    /// streaming. A caller that restarts unconditionally would end a session
+    /// to apply a setting that was already applied.
+    pub async fn set_tray(
+        &self,
+        credentials: &Credentials,
+        enabled: bool,
+    ) -> Result<bool, ApiError> {
+        let wanted = if enabled { "enabled" } else { "disabled" };
+
+        let config = self.get_config(credentials).await?;
+        if tray_is(&config, wanted) {
+            return Ok(false);
+        }
+
+        let mut changes = serde_json::Map::new();
+        changes.insert(TRAY_KEY.to_string(), serde_json::json!(wanted));
+        self.save_config(credentials, changes).await?;
+        Ok(true)
+    }
+}
+
+/// Sunshine's own key for its tray icon and desktop notifications.
+///
+/// Its web UI writes the strings "enabled" and "disabled" rather than a JSON
+/// bool, and `sunshine.conf` is read back the same way.
+pub const TRAY_KEY: &str = "system_tray";
+
+/// Whether the tray setting already reads as `wanted`.
+///
+/// An absent key means Sunshine is on its default, which is enabled — so a
+/// missing key must not be read as "already whatever we are asking for", or
+/// the very first attempt to hide the icon decides there is nothing to do and
+/// the icon stays up.
+fn tray_is(config: &serde_json::Map<String, serde_json::Value>, wanted: &str) -> bool {
+    config
+        .get(TRAY_KEY)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("enabled")
+        .eq_ignore_ascii_case(wanted)
 }
 
 /// Sunshine has spelled `status` as both a bool and the string "true".
@@ -300,6 +350,24 @@ mod tests {
         assert!(truthy(Some(&serde_json::json!("True"))));
         assert!(!truthy(Some(&serde_json::json!(false))));
         assert!(!truthy(Some(&serde_json::json!("false"))));
+    }
+
+    #[test]
+    fn an_unset_tray_key_counts_as_enabled() {
+        // Sunshine omits the key until someone changes it, and its default is
+        // on. Reading the absence as "already disabled" would mean the icon we
+        // are trying to hide never gets hidden.
+        let empty = serde_json::Map::new();
+        assert!(tray_is(&empty, "enabled"));
+        assert!(!tray_is(&empty, "disabled"));
+    }
+
+    #[test]
+    fn the_tray_key_is_compared_as_sunshine_writes_it() {
+        let config: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(r#"{"system_tray":"disabled"}"#).expect("parses");
+        assert!(tray_is(&config, "disabled"));
+        assert!(!tray_is(&config, "enabled"));
     }
 
     #[test]

@@ -68,6 +68,14 @@ export const SETTINGS: Setting[] = [
   },
 
   {
+    key: "system_tray",
+    label: "Sunshine's own menu bar icon",
+    help: "Dusk turns this off when you sign in, because Dusk puts its own icon there. Turn it back on if you would rather have both.",
+    group: "This host",
+    control: { kind: "toggle" },
+  },
+
+  {
     key: "max_bitrate",
     label: "Bitrate ceiling",
     help: "0 lets the connecting machine decide.",

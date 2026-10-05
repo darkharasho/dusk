@@ -224,7 +224,12 @@ pub struct Snapshot {
     pub moonlight_available: bool,
     /// Whether Dusk holds this machine's Sunshine sign-in. Everything on the
     /// host side beyond start/stop needs it.
-    pub host_signed_in: bool,
+    ///
+    /// `None` until the keystore has answered, which is deliberately not
+    /// waited for: reading it can put a system password prompt on screen, and
+    /// the grid must draw either way. The UI says "checking" rather than
+    /// showing a sign-in form to someone who is already signed in.
+    pub host_signed_in: Option<bool>,
     /// False when the sign-in is only held for this run because the OS
     /// keystore was unavailable. The UI says so rather than letting someone
     /// believe it was saved.

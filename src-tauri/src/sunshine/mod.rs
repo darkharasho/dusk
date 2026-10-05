@@ -9,4 +9,4 @@ pub mod api;
 pub mod credentials;
 
 pub use api::{ApiError, SunshineApi};
-pub use credentials::{CredentialStore, Credentials};
+pub use credentials::{CredentialStore, Credentials, Known};

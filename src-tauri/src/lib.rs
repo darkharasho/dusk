@@ -17,6 +17,7 @@ mod serverinfo;
 mod state;
 mod store;
 mod sunshine;
+mod tray;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -121,9 +122,27 @@ pub fn run() {
             ));
             app.manage(state.clone());
 
+            // Dusk turns Sunshine's own tray icon off, so it owes the person
+            // one of its own. Not fatal if the platform will not give us one.
+            if let Err(err) = tray::install(&handle) {
+                eprintln!("dusk: could not create the tray icon: {err}");
+            }
+
             // Mock fixtures are fixed state; probing them would only mark
             // them offline, and browsing for services we will not use is
             // noise on the network.
+            // Read the keystore once, in the background, and push a snapshot
+            // when it lands. Deliberately not awaited here: on macOS the read
+            // can sit behind a password prompt, and setup running before the
+            // window exists would mean opening to an empty grid until someone
+            // noticed the prompt and answered it.
+            let primed = state.clone();
+            let primed_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                primed.credentials.prime().await;
+                state::emit_snapshot(&primed_handle, &primed).await;
+            });
+
             if !mock_mode() {
                 discovery::spawn(handle.clone(), state.clone());
                 poller::spawn(handle, state);

@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Lets a release build be exercised without cutting a tag. Artifacts are
+  # uploaded, but no GitHub Release is created.
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    # Notarization waits on Apple's service, which is usually a couple of
+    # minutes but has no guaranteed turnaround.
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The Developer ID certificate in 1Password contains only the leaf — no
+      # "Developer ID Certification Authority (G2)" intermediate. Without it
+      # codesign cannot build a chain to the Apple root and fails with
+      # errSecInternalComponent. Apple publishes the intermediate, so fetch it
+      # rather than requiring the stored .p12 to be re-exported.
+      #
+      # It goes in a dedicated keychain appended to the search list: Tauri
+      # creates its own keychain for the signing identity, and codesign builds
+      # the chain across every keychain in the list.
+      - name: Install the Apple Developer ID intermediate
+        run: |
+          set -euo pipefail
+          pw="$(openssl rand -base64 24)"
+          security create-keychain -p "$pw" ci.keychain
+          security set-keychain-settings -lut 21600 ci.keychain
+          security unlock-keychain -p "$pw" ci.keychain
+
+          curl -fsSL --retry 3 -o /tmp/DeveloperIDG2CA.cer \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+
+          # Confirm this is the intermediate the certificate chains to before
+          # trusting it, rather than importing whatever the URL returned.
+          subject="$(openssl x509 -inform DER -in /tmp/DeveloperIDG2CA.cer -noout -subject)"
+          echo "fetched: $subject"
+          case "$subject" in
+            *"Developer ID Certification Authority"*) ;;
+            *) echo "::error::unexpected certificate at Apple's intermediate URL"; exit 1 ;;
+          esac
+
+          security import /tmp/DeveloperIDG2CA.cer -k ci.keychain
+          # Append rather than replace, so Tauri's own keychain still resolves.
+          security list-keychains -d user -s ci.keychain \
+            $(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user
+
+      - name: Build, sign and notarize
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      # Same script the local build runs, so the two cannot drift. It
+      # notarizes and staples the .dmg (Tauri builds the image after stapling
+      # the app, leaving the image itself without a ticket) and fails the job
+      # if either artifact does not pass Gatekeeper.
+      - name: Notarize the disk image and verify
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./scripts/finalize-macos-release.sh
+
+      - name: Collect artifacts
+        id: collect
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find src-tauri/target -maxdepth 5 -name '*.dmg' -exec cp {} artifacts/ \;
+          ls -la artifacts
+          test -n "$(ls -A artifacts)" || { echo "::error::no .dmg produced"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dusk-macos-universal
+          path: artifacts/*.dmg
+          if-no-files-found: error
+
+      - name: Publish the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/*.dmg \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

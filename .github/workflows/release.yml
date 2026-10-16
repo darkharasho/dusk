@@ -1,0 +1,241 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Lets the signing and notarization path be exercised without cutting a tag.
+  # The artifact is uploaded to the run; no release is created or published.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Gates the build, same as axibridge: a tag must not produce a signed,
+  # notarized artifact from code that does not pass its own checks. Runs on
+  # macOS because that is what the release targets — the Windows and Linux
+  # backends are covered by ci.yml on every pull request.
+  test:
+    name: Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # tauri::generate_context! reads the built frontend at compile time, so
+      # the Rust crate cannot be checked until dist/ exists.
+      - name: Typecheck and build the frontend
+        run: npm run build
+
+      - name: Formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Lints
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test
+
+  build:
+    name: Build (macOS universal)
+    needs: [test]
+    runs-on: macos-latest
+    # Notarization waits on Apple's service, usually a couple of minutes but
+    # with no guaranteed turnaround.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The Developer ID certificate in 1Password contains only the leaf — no
+      # "Developer ID Certification Authority (G2)" intermediate. Without it
+      # codesign cannot build a chain to the Apple root and fails with
+      # errSecInternalComponent. Apple publishes the intermediate, so fetch it
+      # rather than requiring the stored .p12 to be re-exported.
+      #
+      # It goes in a dedicated keychain appended to the search list: Tauri
+      # creates its own keychain for the signing identity, and codesign builds
+      # the chain across every keychain in the list.
+      - name: Install the Apple Developer ID intermediate
+        run: |
+          set -euo pipefail
+          pw="$(openssl rand -base64 24)"
+          security create-keychain -p "$pw" ci.keychain
+          security set-keychain-settings -lut 21600 ci.keychain
+          security unlock-keychain -p "$pw" ci.keychain
+
+          curl -fsSL --retry 3 -o /tmp/DeveloperIDG2CA.cer \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+
+          # Confirm this is the intermediate the certificate chains to before
+          # trusting it, rather than importing whatever the URL returned.
+          subject="$(openssl x509 -inform DER -in /tmp/DeveloperIDG2CA.cer -noout -subject)"
+          echo "fetched: $subject"
+          case "$subject" in
+            *"Developer ID Certification Authority"*) ;;
+            *) echo "::error::unexpected certificate at Apple's intermediate URL"; exit 1 ;;
+          esac
+
+          security import /tmp/DeveloperIDG2CA.cer -k ci.keychain
+          # Append rather than replace, so Tauri's own keychain still resolves.
+          security list-keychains -d user -s ci.keychain \
+            $(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user
+
+      - name: Build, sign and notarize
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      # Same script the local build runs, so the two cannot drift. It
+      # notarizes and staples the .dmg (Tauri builds the image after stapling
+      # the app, leaving the image itself without a ticket) and fails the job
+      # if either artifact does not pass Gatekeeper.
+      - name: Notarize the disk image and verify
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./scripts/finalize-macos-release.sh
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find src-tauri/target -maxdepth 5 -name '*.dmg' -exec cp {} artifacts/ \;
+          ls -la artifacts
+          test -n "$(ls -A artifacts)" || { echo "::error::no .dmg produced"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dusk-macos-universal
+          path: artifacts/*.dmg
+          if-no-files-found: error
+
+      # Created as a draft so the publish job can attach notes and flip it
+      # live in one step — a tag never produces a half-populated public
+      # release. Re-runnable: an existing draft has its assets replaced.
+      - name: Attach to a draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" artifacts/*.dmg --clobber
+          else
+            gh release create "$tag" artifacts/*.dmg --draft --title "$tag" --notes "pending"
+          fi
+
+  publish:
+    name: Publish
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same convention as axibridge: notes are written by hand in
+      # RELEASE_NOTES.md and the release fails rather than shipping empty or
+      # stale ones.
+      - name: Set release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+
+          notes=$(awk -v ver="$tag" '
+            /^Version v[0-9]/ { capture = ($2 == ver) ? 1 : 0; next }
+            capture { print }
+          ' RELEASE_NOTES.md)
+
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::No RELEASE_NOTES.md section found for $tag. Add a 'Version $tag — <date>' entry and re-run." >&2
+            exit 1
+          fi
+
+          gh release edit "$tag" --notes "$notes"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release edit "$tag" --draft=false
+
+      - name: Post to Discord
+        if: ${{ vars.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ vars.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+
+          export TAG="$tag"
+          export RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+          NOTES=$(gh release view "$tag" --json body --jq '.body' 2>/dev/null || echo "")
+          export NOTES
+
+          payload=$(python3 -c "
+          import json, os
+
+          notes = os.environ.get('NOTES', '')
+          if len(notes) > 3800:
+              notes = notes[:3800] + '\n\n*... see full notes on GitHub*'
+
+          print(json.dumps({'embeds': [{
+              'title': f\"Dusk {os.environ['TAG']}\",
+              'url': os.environ['RELEASE_URL'],
+              'description': notes or 'A new version of Dusk is available!',
+              'color': 0x6366F1,
+              'footer': {'text': 'Dusk Release'},
+          }]}))
+          ")
+
+          curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL"

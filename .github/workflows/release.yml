@@ -3,9 +3,12 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # Lets a release build be exercised without cutting a tag. Artifacts are
-  # uploaded, but no GitHub Release is created.
+  # Lets the signing and notarization path be exercised without cutting a tag.
+  # The artifact is uploaded to the run; no release is created or published.
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,14 +18,55 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  macos:
-    name: macOS (universal)
+  # Gates the build, same as axibridge: a tag must not produce a signed,
+  # notarized artifact from code that does not pass its own checks. Runs on
+  # macOS because that is what the release targets — the Windows and Linux
+  # backends are covered by ci.yml on every pull request.
+  test:
+    name: Test
     runs-on: macos-latest
-    # Notarization waits on Apple's service, which is usually a couple of
-    # minutes but has no guaranteed turnaround.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # tauri::generate_context! reads the built frontend at compile time, so
+      # the Rust crate cannot be checked until dist/ exists.
+      - name: Typecheck and build the frontend
+        run: npm run build
+
+      - name: Formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Lints
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test
+
+  build:
+    name: Build (macOS universal)
+    needs: [test]
+    runs-on: macos-latest
+    # Notarization waits on Apple's service, usually a couple of minutes but
+    # with no guaranteed turnaround.
     timeout-minutes: 90
-    permissions:
-      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -99,7 +143,6 @@ jobs:
         run: ./scripts/finalize-macos-release.sh
 
       - name: Collect artifacts
-        id: collect
         run: |
           set -euo pipefail
           mkdir -p artifacts
@@ -113,11 +156,86 @@ jobs:
           path: artifacts/*.dmg
           if-no-files-found: error
 
-      - name: Publish the GitHub Release
+      # Created as a draft so the publish job can attach notes and flip it
+      # live in one step — a tag never produces a half-populated public
+      # release. Re-runnable: an existing draft has its assets replaced.
+      - name: Attach to a draft release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" artifacts/*.dmg \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" artifacts/*.dmg --clobber
+          else
+            gh release create "$tag" artifacts/*.dmg --draft --title "$tag" --notes "pending"
+          fi
+
+  publish:
+    name: Publish
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same convention as axibridge: notes are written by hand in
+      # RELEASE_NOTES.md and the release fails rather than shipping empty or
+      # stale ones.
+      - name: Set release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+
+          notes=$(awk -v ver="$tag" '
+            /^Version v[0-9]/ { capture = ($2 == ver) ? 1 : 0; next }
+            capture { print }
+          ' RELEASE_NOTES.md)
+
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::No RELEASE_NOTES.md section found for $tag. Add a 'Version $tag — <date>' entry and re-run." >&2
+            exit 1
+          fi
+
+          gh release edit "$tag" --notes "$notes"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release edit "$tag" --draft=false
+
+      - name: Post to Discord
+        if: ${{ vars.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ vars.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+
+          export TAG="$tag"
+          export RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+          NOTES=$(gh release view "$tag" --json body --jq '.body' 2>/dev/null || echo "")
+          export NOTES
+
+          payload=$(python3 -c "
+          import json, os
+
+          notes = os.environ.get('NOTES', '')
+          if len(notes) > 3800:
+              notes = notes[:3800] + '\n\n*... see full notes on GitHub*'
+
+          print(json.dumps({'embeds': [{
+              'title': f\"Dusk {os.environ['TAG']}\",
+              'url': os.environ['RELEASE_URL'],
+              'description': notes or 'A new version of Dusk is available!',
+              'color': 0x6366F1,
+              'footer': {'text': 'Dusk Release'},
+          }]}))
+          ")
+
+          curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL"

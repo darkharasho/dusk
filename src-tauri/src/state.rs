@@ -34,6 +34,9 @@ pub struct AppState {
     pub moonlight: Option<Moonlight>,
     /// This machine's Sunshine web-UI sign-in, in the OS keystore.
     pub credentials: CredentialStore,
+    /// A request from another Dusk to pair with this machine, waiting on
+    /// someone here to allow it.
+    pub peer: crate::peer::Requests,
     /// Devices this Dusk currently has a Moonlight session open with.
     ///
     /// The host cannot tell us this: Sunshine reports that *a* session
@@ -192,6 +195,7 @@ impl AppState {
             tls: RwLock::new(tls),
             moonlight,
             credentials: CredentialStore::default(),
+            peer: Default::default(),
             sessions: RwLock::new(HashSet::new()),
             discovering: AtomicBool::new(false),
             refresh: Notify::new(),

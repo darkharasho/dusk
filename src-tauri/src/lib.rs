@@ -11,6 +11,7 @@ mod install;
 mod mockdata;
 mod model;
 mod moonlight;
+mod peer;
 mod poller;
 mod registry;
 mod serverinfo;
@@ -187,6 +188,7 @@ pub fn run() {
 
             if !mock_mode() {
                 discovery::spawn(handle.clone(), state.clone());
+                peer::spawn(handle.clone(), state.clone());
                 poller::spawn(handle, state);
             }
 
@@ -204,6 +206,7 @@ pub fn run() {
             commands::stop_hosting,
             commands::provision_host,
             commands::accept_pin,
+            commands::answer_pair_request,
             commands::get_host_config,
             commands::save_host_config,
             commands::get_setup,

@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import type { Device } from "../types";
 import { cardState } from "../deviceState";
-import { generatePin, launchApp, onSessionFailed, pairDevice, quitSession } from "../api";
+import {
+  generatePin,
+  launchApp,
+  onPairProgress,
+  onSessionFailed,
+  pairDevice,
+  quitSession,
+  type PairProgress,
+} from "../api";
 import { StreamStats } from "./StreamStats";
 
 interface Props {
@@ -28,7 +36,25 @@ export function DeviceDrawer({
 }: Props) {
   const [busy, setBusy] = useState<Busy>(null);
   const [pin, setPin] = useState<string | null>(null);
+  const [stage, setStage] = useState<PairProgress["stage"] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Whether the other machine's Dusk took the request, or nobody answered
+  // and the PIN has to be typed there. Only the backend can know.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    onPairProgress((p) => {
+      if (!cancelled && p.deviceId === device.id) setStage(p.stage);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [device.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -73,6 +99,7 @@ export function DeviceDrawer({
     } finally {
       setBusy(null);
       setPin(null);
+      setStage(null);
     }
   }
 
@@ -124,7 +151,13 @@ export function DeviceDrawer({
           {!online && <p className="axi-ink-dim">This machine is not answering.</p>}
 
           {online && moonlightAvailable && !paired && (
-            <PairPanel pin={pin} pairing={busy === "pairing"} onPair={startPairing} />
+            <PairPanel
+              name={device.name}
+              pin={pin}
+              stage={stage}
+              pairing={busy === "pairing"}
+              onPair={startPairing}
+            />
           )}
 
           {online && paired && (
@@ -206,11 +239,15 @@ export function DeviceDrawer({
 }
 
 function PairPanel({
+  name,
   pin,
+  stage,
   pairing,
   onPair,
 }: {
+  name: string;
   pin: string | null;
+  stage: PairProgress["stage"] | null;
   pairing: boolean;
   onPair(): void;
 }) {
@@ -218,8 +255,8 @@ function PairPanel({
     return (
       <div className="axi-stack">
         <p className="axi-ink-dim">
-          Dusk is not paired with this machine yet. Pairing shows a PIN you
-          confirm on the other machine.
+          Dusk is not paired with this machine yet. If it runs Dusk too,
+          someone there presses Allow; otherwise you type a PIN on it.
         </p>
         <button type="button" className="axi-btn axi-btn--primary" onClick={onPair}>
           Pair with this machine
@@ -228,15 +265,29 @@ function PairPanel({
     );
   }
 
+  if (stage === "manual") {
+    return (
+      <div className="axi-stack">
+        <p>Type this PIN on {name} to finish pairing.</p>
+        <p className="dusk-pin">{pin}</p>
+        <p className="axi-ink-dim">
+          {name} is not running Dusk, so it cannot be asked directly. In Dusk
+          that is Accept a PIN; otherwise it is Sunshine&rsquo;s own web page.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="axi-stack">
-      <p>Type this PIN on the other machine to finish pairing.</p>
-      <p className="dusk-pin">{pin}</p>
+      <p>
+        {stage === "waitingForApproval"
+          ? `Waiting for someone at ${name} to press Allow.`
+          : `Asking ${name}.`}
+      </p>
       <p className="axi-ink-dim">
-        {/* Honest about the seam: accepting the PIN natively is M3's job,
-            and until then this is still two programs. */}
-        For now that means Sunshine&rsquo;s own web page on the host. Dusk will
-        accept the PIN itself once it manages the host side.
+        No PIN needed: Dusk on {name} asks whoever is there to allow this
+        machine.
       </p>
     </div>
   );

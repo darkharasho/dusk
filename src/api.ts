@@ -5,6 +5,26 @@ import type { Device, DownloadPreview, Setup, Snapshot } from "./types";
 export const SNAPSHOT_EVENT = "dusk://snapshot";
 export const SESSION_FAILED_EVENT = "dusk://session-failed";
 export const SESSION_STATS_EVENT = "dusk://session-stats";
+export const PAIR_REQUEST_EVENT = "dusk://pair-request";
+export const PAIR_REQUEST_ENDED_EVENT = "dusk://pair-request-ended";
+export const PAIR_PROGRESS_EVENT = "dusk://pair-progress";
+
+/** Another Dusk asking to pair with this machine. */
+export interface PairRequest {
+  id: number;
+  name: string;
+  address: string;
+}
+
+/** How a pairing this machine started is going. */
+export interface PairProgress {
+  deviceId: string;
+  /**
+   * `waitingForApproval`: the other machine's Dusk is asking someone there.
+   * `manual`: no Dusk answered, so the PIN has to be typed on that machine.
+   */
+  stage: "waitingForApproval" | "manual";
+}
 
 /** A stream that died on its own, after the launch call had already returned. */
 export interface SessionFailed {
@@ -171,4 +191,20 @@ export function onSessionStats(
   handler: (update: SessionStats) => void,
 ): Promise<() => void> {
   return listen<SessionStats>(SESSION_STATS_EVENT, (event) => handler(event.payload));
+}
+
+export function answerPairRequest(id: number, allow: boolean): Promise<void> {
+  return invoke("answer_pair_request", { id, allow });
+}
+
+export function onPairRequest(handler: (r: PairRequest) => void): Promise<() => void> {
+  return listen<PairRequest>(PAIR_REQUEST_EVENT, (event) => handler(event.payload));
+}
+
+export function onPairRequestEnded(handler: (id: number) => void): Promise<() => void> {
+  return listen<number>(PAIR_REQUEST_ENDED_EVENT, (event) => handler(event.payload));
+}
+
+export function onPairProgress(handler: (p: PairProgress) => void): Promise<() => void> {
+  return listen<PairProgress>(PAIR_PROGRESS_EVENT, (event) => handler(event.payload));
 }

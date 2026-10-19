@@ -149,11 +149,24 @@ fn moonlight(state: &Arc<AppState>) -> Result<&crate::moonlight::Moonlight, Stri
         .ok_or_else(|| "Moonlight is not installed, or Dusk could not find it.".to_string())
 }
 
+/// How pairing is going, for the drawer that started it.
+pub const PAIR_PROGRESS_EVENT: &str = "dusk://pair-progress";
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairProgress {
+    pub device_id: String,
+    /// `waitingForApproval` once the other machine's Dusk is asking someone;
+    /// `manual` when no Dusk answered and the PIN has to be typed there.
+    pub stage: &'static str,
+}
+
 /// Pair with a host.
 ///
-/// Dusk sends the PIN; the person has to type the same one into the host.
-/// That second half is Sunshine's web page today and becomes a native screen
-/// in M3, which is where this flow stops being two apps.
+/// Moonlight starts pairing with `pin` and waits. Meanwhile the Dusk on the
+/// host, if there is one, is asked to enter the PIN itself once someone
+/// there allows it — see `peer.rs`. If no Dusk answers, the person types
+/// the PIN on the host, as before.
 #[tauri::command]
 pub async fn pair_device(
     app: AppHandle,
@@ -164,10 +177,44 @@ pub async fn pair_device(
     let inner = state.inner().clone();
     let (address, _) = target_of(&inner, &id).await?;
 
-    moonlight(&inner)?
-        .pair(&address, &pin)
-        .await
-        .map_err(|e| e.to_string())?;
+    let pairing = moonlight(&inner)?.pair(&address, &pin);
+    tokio::pin!(pairing);
+
+    let progress = |stage| {
+        let _ = app.emit(
+            PAIR_PROGRESS_EVENT,
+            PairProgress {
+                device_id: id.clone(),
+                stage,
+            },
+        );
+    };
+    let asking = crate::peer::ask(crate::peer::host_part(&address), &pin, || {
+        progress("waitingForApproval")
+    });
+    tokio::pin!(asking);
+
+    let mut asked = false;
+    loop {
+        tokio::select! {
+            done = &mut pairing => {
+                done.map_err(|e| e.to_string())?;
+                break;
+            }
+            outcome = &mut asking, if !asked => {
+                asked = true;
+                match outcome {
+                    crate::peer::Outcome::NoPeer => progress("manual"),
+                    // The PIN is in Sunshine; Moonlight finishes on its own.
+                    crate::peer::Outcome::Accepted => {}
+                    // Returning drops the pairing future, which stops the
+                    // client rather than leaving it waiting on a PIN that
+                    // is never coming.
+                    crate::peer::Outcome::Declined(reason) => return Err(reason),
+                }
+            }
+        }
+    }
 
     // Pairing may have just minted an identity where there was none, so the
     // TLS client has to be rebuilt before the next probe can see the change.
@@ -175,6 +222,21 @@ pub async fn pair_device(
     inner.request_refresh();
     emit_snapshot(&app, &inner).await;
     Ok(())
+}
+
+/// The person at this machine allowed, or did not, another Dusk's request
+/// to pair.
+#[tauri::command]
+pub async fn answer_pair_request(
+    state: State<'_, Arc<AppState>>,
+    id: u64,
+    allow: bool,
+) -> Result<(), String> {
+    if state.peer.answer(id, allow).await {
+        Ok(())
+    } else {
+        Err("That request has already gone away.".into())
+    }
 }
 
 /// Start streaming an app, and watch the session for the card's sake.

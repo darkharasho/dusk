@@ -8,6 +8,7 @@ import { AddDeviceDialog } from "./components/AddDeviceDialog";
 import { DeviceDrawer } from "./components/DeviceDrawer";
 import { HostSettings } from "./components/HostSettings";
 import { SetupChecklist } from "./components/SetupChecklist";
+import { PairRequestPrompt } from "./components/PairRequestPrompt";
 
 /** Lit machines first, then alphabetical, so the actionable ones stay on top. */
 const TONE_ORDER = { hosting: 0, ready: 1, unpaired: 2, offline: 3 } as const;
@@ -164,6 +165,8 @@ export function App() {
           onClose={() => setOpenId(null)}
         />
       )}
+
+      <PairRequestPrompt />
     </>
   );
 }

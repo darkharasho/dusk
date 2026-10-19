@@ -75,6 +75,45 @@ It cross-compiles, it does not run. A test that passes here is a test that
 compiles on Windows perfectly well and then fails at runtime. CI is still
 the only place Windows tests actually execute.
 
+## Releases
+
+Pushing a `v*` tag runs the test gate once and then builds all three
+platforms in parallel. What ships:
+
+| Platform | Artifacts | Signed |
+| --- | --- | --- |
+| macOS | universal `.dmg` | Developer ID, notarized and stapled |
+| Windows | `.msi` and a per-user `-setup.exe` | no |
+| Linux | `.deb` and an `.AppImage` (x86_64) | no |
+
+Two caveats worth stating plainly, because both land on whoever downloads
+the build:
+
+**The Windows installers are unsigned.** SmartScreen shows "Windows
+protected your PC" on first run, and getting past it means clicking *More
+info* → *Run anyway*. Fixing that needs an Authenticode certificate — an
+OV/EV one, or Azure Trusted Signing — and all the options require a verified
+organisation, so it waits until there is demand to justify the cost. Linux
+packages ship unsigned as a matter of course.
+
+**The Windows and Linux builds are compile-checked, not exercised.** Those
+host paths have never run on a real machine (see *First-run setup*), so the
+artifacts exist to get the app into people's hands, not as a claim that
+hosting works there yet.
+
+The jobs build the installers and nothing else; creating the release is the
+`publish` job's alone, which is what keeps three jobs from racing to create
+the same tag. It reads the notes out of `RELEASE_NOTES.md` first and fails
+if the tag has no section, then creates a draft carrying every artifact and
+flips it live — so a tag never produces a public release that is missing a
+platform or a set of notes. `workflow_dispatch` runs the same builds and
+uploads to the run without touching releases, which is how the Apple signing
+path gets exercised without cutting a tag.
+
+Linux builds on `ubuntu-22.04` rather than `latest` deliberately: a `.deb`
+and an AppImage are built against the runner's glibc and webkit2gtk, so a
+newer runner would silently restrict the result to distributions that new.
+
 ## How it fits together
 
 ```

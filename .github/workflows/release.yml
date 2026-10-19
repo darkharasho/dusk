@@ -4,7 +4,7 @@ on:
   push:
     tags: ['v*']
   # Lets the signing and notarization path be exercised without cutting a tag.
-  # The artifact is uploaded to the run; no release is created or published.
+  # Artifacts are uploaded to the run; no release is created or published.
   workflow_dispatch:
 
 permissions:
@@ -18,10 +18,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Gates the build, same as axibridge: a tag must not produce a signed,
-  # notarized artifact from code that does not pass its own checks. Runs on
-  # macOS because that is what the release targets — the Windows and Linux
-  # backends are covered by ci.yml on every pull request.
+  # Gates all three builds, same as axibridge: a tag must not produce a
+  # shippable artifact from code that does not pass its own checks. One
+  # platform is enough for a gate — ci.yml runs the full three-OS matrix on
+  # every pull request, and macOS is the one whose release path is signed.
   test:
     name: Test
     runs-on: macos-latest
@@ -60,7 +60,7 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
-  build:
+  build-macos:
     name: Build (macOS universal)
     needs: [test]
     runs-on: macos-latest
@@ -129,7 +129,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run tauri build -- --target universal-apple-darwin
+        # --bundles is explicit in every build job rather than left to the
+        # config's "all", so each platform ships exactly what is intended and
+        # a new bundler appearing in a Tauri release cannot add an asset to a
+        # release on its own.
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app,dmg
 
       # Same script the local build runs, so the two cannot drift. It
       # notarizes and staples the .dmg (Tauri builds the image after stapling
@@ -150,57 +154,194 @@ jobs:
           ls -la artifacts
           test -n "$(ls -A artifacts)" || { echo "::error::no .dmg produced"; exit 1; }
 
+      # The three build jobs each upload their own artifact and none of them
+      # touches the release. Creating it is the publish job's business alone:
+      # three jobs racing to `gh release create` the same tag is a race with a
+      # torn release at the end of it.
       - uses: actions/upload-artifact@v4
         with:
           name: dusk-macos-universal
           path: artifacts/*.dmg
           if-no-files-found: error
 
-      # Created as a draft so the publish job can attach notes and flip it
-      # live in one step — a tag never produces a half-populated public
-      # release. Re-runnable: an existing draft has its assets replaced.
-      - name: Attach to a draft release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
+  # Unsigned, and visibly so: there is no Authenticode certificate for this
+  # project, so SmartScreen shows "Windows protected your PC" on first run and
+  # the person has to click through More info → Run anyway. Signing it means
+  # either an OV/EV certificate or Azure Trusted Signing, both of which need a
+  # verified organisation, so it waits until there is demand to justify one.
+  build-windows:
+    name: Build (Windows x86_64)
+    needs: [test]
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Both installers, because they are not interchangeable: the MSI is what
+      # a managed or scripted install wants, and NSIS produces the per-user
+      # setup.exe that installs without administrator rights. Dusk itself does
+      # not need elevation to run — only the Sunshine service control inside
+      # it does, and that prompts when used.
+      - name: Build
+        run: npm run tauri build -- --bundles msi,nsis
+
+      - name: Collect artifacts
+        shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF#refs/tags/}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" artifacts/*.dmg --clobber
-          else
-            gh release create "$tag" artifacts/*.dmg --draft --title "$tag" --notes "pending"
-          fi
+          mkdir -p artifacts
+          find src-tauri/target -maxdepth 5 \
+            \( -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} artifacts/ \;
+          ls -la artifacts
+          test -n "$(ls -A artifacts)" || { echo "::error::no installer produced"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dusk-windows-x86_64
+          path: artifacts/*
+          if-no-files-found: error
+
+  build-linux:
+    name: Build (Linux x86_64)
+    needs: [test]
+    # 22.04 rather than latest on purpose. An AppImage and a .deb are built
+    # against the runner's glibc and webkit2gtk, so building on the newest
+    # Ubuntu silently restricts the result to distributions that new. The
+    # oldest runner available sets the floor as low as GitHub allows.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same set ci.yml installs, plus the AppImage bundler's needs: it
+      # reaches for file(1) and fuse to assemble and test the image.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libfuse2 \
+            file
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # deb and AppImage, not rpm. The .deb is the right answer on the
+      # Debian-derived distributions most of this audience runs, and the
+      # AppImage covers everything else without Dusk having to guess a
+      # package manager — the same reasoning that picks the AppImage when
+      # Dusk installs Sunshine itself, in install/release.rs.
+      - name: Build
+        run: npm run tauri build -- --bundles deb,appimage
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find src-tauri/target -maxdepth 5 \
+            \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} artifacts/ \;
+          ls -la artifacts
+          test -n "$(ls -A artifacts)" || { echo "::error::no package produced"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dusk-linux-x86_64
+          path: artifacts/*
+          if-no-files-found: error
 
   publish:
     name: Publish
-    needs: [build]
+    needs: [build-macos, build-windows, build-linux]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # No `name`, so every build job's artifact lands here, one directory
+      # each.
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       # Same convention as axibridge: notes are written by hand in
       # RELEASE_NOTES.md and the release fails rather than shipping empty or
-      # stale ones.
-      - name: Set release notes
+      # stale ones. Read before the release exists, so a tag with no notes
+      # fails having created nothing at all.
+      - name: Read the release notes
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+
+          awk -v ver="$tag" '
+            /^Version v[0-9]/ { capture = ($2 == ver) ? 1 : 0; next }
+            capture { print }
+          ' RELEASE_NOTES.md > /tmp/notes.md
+
+          if [ -z "$(tr -d '[:space:]' < /tmp/notes.md)" ]; then
+            echo "::error::No RELEASE_NOTES.md section found for $tag. Add a 'Version $tag — <date>' entry and re-run." >&2
+            exit 1
+          fi
+
+      # A draft first, so the publish step flips a release that is already
+      # complete — a tag never produces a half-populated public one.
+      # Re-runnable: an existing draft has its assets replaced.
+      - name: Attach the artifacts to a draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="${GITHUB_REF#refs/tags/}"
 
-          notes=$(awk -v ver="$tag" '
-            /^Version v[0-9]/ { capture = ($2 == ver) ? 1 : 0; next }
-            capture { print }
-          ' RELEASE_NOTES.md)
+          # download-artifact nests one directory per build job, so the files
+          # are a level down rather than in artifacts/ itself.
+          mapfile -t files < <(find artifacts -type f | sort)
+          printf '%s\n' "${files[@]}"
 
-          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
-            echo "::error::No RELEASE_NOTES.md section found for $tag. Add a 'Version $tag — <date>' entry and re-run." >&2
-            exit 1
+          # Three platforms, so a missing one has to be caught here: each
+          # build job fails on its own empty output, but a release with the
+          # macOS .dmg and nothing else would otherwise publish quietly.
+          for want in '\.dmg$' '\.msi$' '\.exe$' '\.deb$' '\.AppImage$'; do
+            printf '%s\n' "${files[@]}" | grep -qE "$want" \
+              || { echo "::error::no artifact matching $want"; exit 1; }
+          done
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+            gh release edit "$tag" --notes-file /tmp/notes.md
+          else
+            gh release create "$tag" "${files[@]}" \
+              --draft --title "$tag" --notes-file /tmp/notes.md
           fi
-
-          gh release edit "$tag" --notes "$notes"
 
       - name: Publish release
         env:

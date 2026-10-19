@@ -162,7 +162,13 @@ export function SetupChecklist({ onClose }: Props) {
                   Sunshine {preview.version} · {preview.asset} ·{" "}
                   {megabytes(preview.size)}
                 </p>
-                {preview.verifiable ? (
+                {preview.bundled ? (
+                  <p>
+                    This Sunshine comes with Dusk, so nothing is downloaded.
+                    Dusk checks it against the checksum recorded when this
+                    release was built before installing it.
+                  </p>
+                ) : preview.verifiable ? (
                   <p>
                     {/* Say exactly what the check is worth. The digest comes
                         from the same service as the file, so it proves the
@@ -207,7 +213,11 @@ export function SetupChecklist({ onClose }: Props) {
                         disabled={busy}
                         onClick={runInstall}
                       >
-                        {busy ? "Installing" : "Download and install"}
+                        {busy
+                          ? "Installing"
+                          : preview.bundled
+                            ? "Install"
+                            : "Download and install"}
                       </button>
                       <button
                         type="button"

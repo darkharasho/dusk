@@ -467,11 +467,40 @@ pub async fn get_setup(state: State<'_, Arc<AppState>>) -> Result<install::Setup
 /// download that will be run with elevated rights.
 #[tauri::command]
 pub async fn preview_sunshine_download(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<DownloadPreview, String> {
-    let inner = state.inner().clone();
-    let release = install::release::fetch_latest(&inner.http).await?;
+    let resources = app.path().resource_dir().ok();
+    if let Some(bundled) = install::bundled::find(resources.as_deref()) {
+        return Ok(DownloadPreview {
+            version: bundled.version,
+            asset: bundled
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            size: bundled.size,
+            verifiable: true,
+            bundled: true,
+        });
+    }
 
+    let inner = state.inner().clone();
+    let choice = latest_choice(&inner).await?;
+    Ok(DownloadPreview {
+        version: choice.0,
+        asset: choice.1.asset.name.clone(),
+        size: choice.1.asset.size,
+        verifiable: choice.1.asset.sha256.is_some(),
+        bundled: false,
+    })
+}
+
+/// The newest Sunshine release and the asset in it for this machine.
+async fn latest_choice(
+    inner: &Arc<AppState>,
+) -> Result<(String, install::release::Choice), String> {
+    let release = install::release::fetch_latest(&inner.http).await?;
     let choice = install::release::select(
         &release.assets,
         std::env::consts::OS,
@@ -484,13 +513,7 @@ pub async fn preview_sunshine_download(
             std::env::consts::OS
         )
     })?;
-
-    Ok(DownloadPreview {
-        version: release.version,
-        asset: choice.asset.name.clone(),
-        size: choice.asset.size,
-        verifiable: choice.asset.sha256.is_some(),
-    })
+    Ok((release.version, choice))
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -502,12 +525,15 @@ pub struct DownloadPreview {
     /// False when the release carries no checksum, in which case Dusk
     /// refuses to install rather than running an unverifiable binary.
     pub verifiable: bool,
+    /// True when the installer ships inside Dusk and nothing is downloaded.
+    pub bundled: bool,
 }
 
 /// Progress events while a release downloads.
 pub const DOWNLOAD_EVENT: &str = "dusk://download";
 
-/// Download the right Sunshine build and install it.
+/// Install Sunshine: the build inside Dusk if there is one, otherwise the
+/// newest release, downloaded and checked.
 ///
 /// Both halves are real state changes on the machine, so this only ever runs
 /// from an explicit press — never on a timer, and never as part of a probe.
@@ -517,20 +543,36 @@ pub async fn install_sunshine(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let inner = state.inner().clone();
-    let release = install::release::fetch_latest(&inner.http).await?;
 
-    let choice = install::release::select(
-        &release.assets,
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-    )
-    .ok_or_else(|| {
-        format!(
-            "Sunshine does not publish a build for {} on {}.",
-            std::env::consts::ARCH,
-            std::env::consts::OS
-        )
-    })?;
+    let resources = app.path().resource_dir().ok();
+    if let Some(bundled) = install::bundled::find(resources.as_deref()) {
+        install::bundled::verify(&bundled).await?;
+        install::apply::install(&bundled.path, bundled.kind)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        download_and_install(&app, &inner).await?;
+    }
+
+    // A Sunshine Dusk just installed has no sign-in yet, and nobody should
+    // have to make one up. Skipped when Dusk already holds one, so
+    // reinstalling over a working host does not replace its password.
+    let provisioned = if inner.credentials.load().await.is_none() {
+        provision(&inner)
+            .await
+            .map_err(|e| format!("Sunshine is installed, but Dusk could not set it up: {e}"))
+    } else {
+        Ok(())
+    };
+
+    emit_snapshot(&app, &inner).await;
+    provisioned
+}
+
+/// The fallback for a build with no installer inside it: fetch the newest
+/// release, check it, and install it.
+async fn download_and_install(app: &AppHandle, inner: &Arc<AppState>) -> Result<(), String> {
+    let (_, choice) = latest_choice(inner).await?;
 
     // Downloads land in the app's own cache directory rather than a shared
     // temp path: a verified installer briefly sitting somewhere world
@@ -555,21 +597,7 @@ pub async fn install_sunshine(
     // The installer is a verified copy of a public release, not a secret,
     // but there is no reason to leave 40MB behind either.
     let _ = tokio::fs::remove_file(&path).await;
-    outcome?;
-
-    // A Sunshine Dusk just installed has no sign-in yet, and nobody should
-    // have to make one up. Skipped when Dusk already holds one, so
-    // reinstalling over a working host does not replace its password.
-    let provisioned = if inner.credentials.load().await.is_none() {
-        provision(&inner)
-            .await
-            .map_err(|e| format!("Sunshine is installed, but Dusk could not set it up: {e}"))
-    } else {
-        Ok(())
-    };
-
-    emit_snapshot(&app, &inner).await;
-    provisioned
+    outcome
 }
 
 /// Add firewall rules for Sunshine. Windows only; elevates when it runs.

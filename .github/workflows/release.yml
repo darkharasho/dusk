@@ -26,6 +26,12 @@ env:
   CLIENT_REPO: darkharasho/moonlight-qt
   CLIENT_TAG: dusk-v0.2.2
 
+  # The Sunshine installer this Dusk ships, on Linux and Windows. Pinned for
+  # the same reason as the client, and more so: the settings screen is built
+  # against Sunshine's configuration keys, and a bump means re-testing it.
+  # macOS still downloads at first run; see scripts/stage-sunshine.sh.
+  SUNSHINE_TAG: v2026.914.233613
+
 jobs:
   # Gates all three builds, same as axibridge: a tag must not produce a
   # shippable artifact from code that does not pass its own checks. One
@@ -159,6 +165,11 @@ jobs:
           tar xzf /tmp/client/dusk-client-macos.tar.gz -C /tmp/client
           find /tmp/client/Moonlight.app/Contents/Frameworks -maxdepth 2 -type l | head -3
 
+      # The source offer in licenses/ names exact versions. macOS ships the
+      # client only.
+      - name: Record shipped versions
+        run: echo "moonlight-qt fork  $CLIENT_TAG" > src-tauri/licenses/versions.txt
+
       # The app only. The disk image is built afterwards, by package-macos.sh,
       # because the client has to be inside the app before an image is made
       # around it — and deliberately without APPLE_ID, so Tauri signs but does
@@ -250,6 +261,16 @@ jobs:
           unzip -q /tmp/client/dusk-client-windows-x64.zip -d /tmp/client/deploy
           ./scripts/stage-client.sh /tmp/client/deploy
 
+      - name: Stage Sunshine
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/stage-sunshine.sh "$SUNSHINE_TAG"
+          printf 'moonlight-qt fork  %s\nSunshine           %s\n' \
+            "$CLIENT_TAG" "$SUNSHINE_TAG" > src-tauri/licenses/versions.txt
+
       # Both installers, because they are not interchangeable: the MSI is what
       # a managed or scripted install wants, and NSIS produces the per-user
       # setup.exe that installs without administrator rights. Dusk itself does
@@ -324,6 +345,15 @@ jobs:
             --pattern 'dusk-client-linux-x86_64.tar.gz' --dir /tmp/client
           tar xzf /tmp/client/dusk-client-linux-x86_64.tar.gz -C /tmp/client
           ./scripts/stage-client.sh /tmp/client/moonlight
+
+      - name: Stage Sunshine
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/stage-sunshine.sh "$SUNSHINE_TAG"
+          printf 'moonlight-qt fork  %s\nSunshine           %s\n' \
+            "$CLIENT_TAG" "$SUNSHINE_TAG" > src-tauri/licenses/versions.txt
 
       # deb and AppImage, not rpm. The .deb is the right answer on the
       # Debian-derived distributions most of this audience runs, and the

@@ -11,6 +11,7 @@
 //! and lets any one of them be run on its own.
 
 pub mod apply;
+pub mod bundled;
 pub mod download;
 pub mod release;
 pub mod steps;

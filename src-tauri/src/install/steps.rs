@@ -81,7 +81,7 @@ pub fn build(
         step(
             StepId::InstallSunshine,
             "Install Sunshine",
-            "Dusk downloads the official release and checks it before installing.",
+            "Dusk installs the Sunshine it ships with, checking it first. A build without one downloads the official release instead.",
             if installed {
                 StepState::Done
             } else {

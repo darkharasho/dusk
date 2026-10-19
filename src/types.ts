@@ -132,6 +132,8 @@ export interface DownloadPreview {
   size: number;
   /** False when no checksum exists, in which case Dusk refuses to install. */
   verifiable: boolean;
+  /** True when the installer ships inside Dusk and nothing is downloaded. */
+  bundled: boolean;
 }
 
 /** The single payload the whole UI renders from. */

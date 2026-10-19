@@ -1,9 +1,10 @@
 //! Finding the right Sunshine build to install.
 //!
-//! Dusk does not bundle Sunshine — it fetches the official release at first
-//! run. That keeps Dusk out of GPL-3.0 conveying obligations, lets Sunshine
-//! ship security fixes without a Dusk release, and means one code path
-//! instead of a bundled copy per platform.
+//! A release build of Dusk carries a pinned Sunshine installer and installs
+//! that (see `bundled.rs`). This is the fallback for a build that does not —
+//! a development build, or macOS for now — and fetches the official release
+//! at first run. Bundling accepts GPL-3.0 conveying obligations in exchange
+//! for one installer; `src-tauri/licenses/` is where they are met.
 //!
 //! # What verification does and does not buy
 //!

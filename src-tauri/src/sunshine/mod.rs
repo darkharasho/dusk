@@ -2,8 +2,8 @@
 //!
 //! Sunshine stays a separate process that Dusk manages and configures over
 //! its local API. That is what keeps Dusk's own source out of GPL-3.0
-//! territory, and it is also why the installer fetches Sunshine at first run
-//! rather than bundling it.
+//! territory: Dusk ships Sunshine's installer beside itself, but never links
+//! it.
 
 pub mod api;
 pub mod credentials;

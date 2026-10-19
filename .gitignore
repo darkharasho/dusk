@@ -18,3 +18,11 @@ src-tauri/gen/
 # does not resolve.
 src-tauri/client/*
 !src-tauri/client/README.md
+
+# The staged Sunshine installer. Downloaded by scripts/stage-sunshine.sh;
+# the README is committed for the same reason as the client's.
+src-tauri/sunshine/*
+!src-tauri/sunshine/README.md
+
+# Written by the release workflow with the exact helper versions shipped.
+src-tauri/licenses/versions.txt

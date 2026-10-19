@@ -42,8 +42,8 @@ carry each GPL component's licence text and an offer of its corresponding
 source. Both forks are public, so that is a link and a text file rather than a
 burden.
 
-Note that this **reverses** the reasoning currently written into
-`install/release.rs`, which avoids bundling Sunshine specifically to stay out
+Note that this **reversed** the reasoning once written into
+`install/release.rs`, which avoided bundling Sunshine specifically to stay out
 of conveying obligations. That dodge costs the single-installer goal, so the
 trade is deliberate and should be made with eyes open: accept conveyance, gain
 one installer.
@@ -175,10 +175,14 @@ Ordered so that each one ships something usable on its own.
 | 0 | Bundle the fork, fix the client search path | The overlay works in release builds | **done** |
 | 1 | Rename and identity | The stream stops announcing "Moonlight" | **done** |
 | 2 | Control socket; overlay actions; live stats | The overlay becomes a real interface | **done**; client `dusk-v0.2.2`, not yet in a Dusk release |
-| 3 | Bundle Sunshine, auto-provision credentials, delete the sign-in UI | Sunshine leaves the UI entirely | not started |
-| 4 | One installer, service registration, consented display driver | First run is effortless | not started |
-| 5 | Zero-click pairing | Connecting stops involving a PIN | not started |
-| 6 | Window choreography, and no second dock entry | The seam closes | not started |
+| 3 | Bundle Sunshine, auto-provision credentials, delete the sign-in UI | Sunshine leaves the UI entirely | **built**, Linux and Windows bundle; macOS still downloads |
+| 4 | One installer, service registration, consented display driver | First run is effortless | **built**, except the display driver |
+| 5 | Zero-click pairing | Connecting stops involving a PIN | **built**; one Allow press on the host |
+| 6 | Window choreography, and no second dock entry | The seam closes | **built** on Linux and Windows; macOS dock untouched |
+
+"Built" means compiled, unit-tested and cross-checked for Windows, but not
+yet run end to end on real machines. `docs/pickup.md` lists what each still
+needs.
 
 Phase 0 is verified on all three platforms: a tagged client release is built
 by the fork, downloaded and inserted during Dusk's release, and the resulting

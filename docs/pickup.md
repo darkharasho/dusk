@@ -14,11 +14,15 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 | 0 — bundle the fork, fix the client search path | done, verified in artifacts |
 | 1 — rename and identity | done, verified in artifacts |
 | 2 — control socket, overlay actions, live stats | **done and live-tested; client tagged `dusk-v0.2.2`; no Dusk release carries it yet; quality not started** |
-| 3–6 | not started |
+| 3 — bundle Sunshine, provision credentials | built, not live-tested |
+| 4 — installer, service registration | built, not live-tested; no display driver |
+| 5 — zero-click pairing | built, not live-tested |
+| 6 — window choreography | built, not live-tested |
 
 The fork's half of phase 2 is merged to its `master` and published as
 `dusk-v0.2.2`, which `CLIENT_TAG` now pins. The next Dusk release is the
-first to ship it. See *Phase 2* below.
+first to ship it, and phases 3–6 with it. See *Phase 2* and *Phases 3–6*
+below.
 
 ## The map
 
@@ -198,6 +202,44 @@ Not done yet:
 - Nothing calls `ToClient::ShowOverlay` or `HostDisplay` from Dusk's UI.
 - The client is tagged (`dusk-v0.2.2`) and pinned, but no Dusk release
   carries it until the next `v*` tag.
+
+## Phases 3–6: built, waiting on real machines
+
+All Dusk-side; the fork did not change. Each is unit-tested and the Windows
+build cross-checks clean, and none has run end to end yet.
+
+- **Credentials (3).** `sunshine/provision.rs` makes up a `dusk` / 32-char
+  credential, and `HostBackend::set_credentials` runs `sunshine --creds` with
+  the service's own binary and restarts it. Dusk keeps it in the keystore
+  and checks Sunshine accepts it. It runs after Dusk installs Sunshine, and
+  as **Let Dusk manage this host** for one that was already there — which
+  replaces the password Sunshine's web page knew. The sign-in form is gone.
+  `--creds` was checked against a throwaway config on Bazzite; the full
+  path, which restarts the real service, was not run, so as not to replace
+  the password on this machine unasked.
+- **Bundled Sunshine (3).** `SUNSHINE_TAG` in `release.yml` pins it;
+  `scripts/stage-sunshine.sh` fetches and checks the installer, and
+  `install/bundled.rs` installs from it after re-checking the checksum.
+  Linux and Windows only: a disk image nested in a notarized macOS app is
+  untested with Apple's notary, so macOS still downloads. `src-tauri/licenses/`
+  carries the GPL text and source offer; CI writes `versions.txt`.
+- **Service registration (4).** The AppImage gets a systemd user unit, the
+  macOS app a launch agent; an existing one is left alone. Linux has a new
+  step for the uinput udev rule via polkit, which recognises Bazzite's own
+  rule as done. Windows firewall is one prompt, not two. **Set up this
+  machine** runs every automatable step in order. Not done: a consented
+  virtual display driver install — which driver to trust is a decision, not
+  an implementation detail.
+- **Zero-click pairing (5).** `peer.rs`. Each Dusk listens on TCP 47850.
+  Pairing starts Moonlight with a fresh PIN and sends it to the host's Dusk,
+  which shows **Allow** naming the machine and enters the PIN into Sunshine
+  itself. No Dusk there falls back to showing the PIN. Checked here only as
+  far as the decline path ("not set up to host yet"), because this Dusk does
+  not manage its Sunshine. Firewalls must allow 47850; Windows will prompt.
+- **Choreography (6).** Dusk hides once the client authenticates on the
+  session channel and comes back when it exits, or on a failure. Nothing was
+  done about the macOS dock: hiding the client's dock icon changes focus and
+  input grab, and wants a Mac to test on.
 
 ## Landmines
 

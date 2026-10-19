@@ -49,7 +49,62 @@ async fn macos_dmg(dmg: &Path) -> Result<(), ApplyError> {
     let mount = attach(dmg).await?;
     let result = copy_bundle_from(&mount).await;
     let _ = service::run("hdiutil", &["detach", &mount.to_string_lossy(), "-quiet"]).await;
-    result
+    let bundle = result?;
+    register_launch_agent(&bundle)
+}
+
+/// Give Sunshine a launch agent, so it runs in the background from sign-in
+/// and the host backend has a job to start and stop.
+///
+/// The disk image carries only the app; Sunshine's own docs leave the agent
+/// to the person. An agent that already exists is left alone — it may be
+/// one they wrote, and overwriting it would discard whatever they put in it.
+fn register_launch_agent(bundle: &Path) -> Result<(), ApplyError> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| ApplyError::Failed("Dusk could not find your home directory".into()))?;
+    let dir = PathBuf::from(home).join("Library/LaunchAgents");
+    let plist = dir.join(format!("{MACOS_LABEL}.plist"));
+    if plist.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| ApplyError::Failed(e.to_string()))?;
+    std::fs::write(
+        &plist,
+        launch_agent(&bundle.join("Contents/MacOS/sunshine")),
+    )
+    .map_err(|e| ApplyError::Failed(e.to_string()))
+}
+
+/// The label the host backend looks for.
+const MACOS_LABEL: &str = "dev.lizardbyte.sunshine";
+
+fn launch_agent(program: &Path) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{MACOS_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+"#,
+        xml_escape(&program.to_string_lossy())
+    )
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Attach the image and return where it landed.
@@ -96,7 +151,7 @@ fn mount_point_from_plist(_stdout: &str) -> Option<PathBuf> {
     None
 }
 
-async fn copy_bundle_from(mount: &Path) -> Result<(), ApplyError> {
+async fn copy_bundle_from(mount: &Path) -> Result<PathBuf, ApplyError> {
     let bundle = find_app_bundle(mount)
         .ok_or_else(|| ApplyError::Failed("no application was found in the disk image".into()))?;
     let target = PathBuf::from("/Applications").join(
@@ -115,7 +170,7 @@ async fn copy_bundle_from(mount: &Path) -> Result<(), ApplyError> {
     .map_err(|e| ApplyError::Failed(e.to_string()))?;
 
     if copy.ok() {
-        return Ok(());
+        return Ok(target);
     }
 
     // /Applications is not writable by every account. Ask for rights the way
@@ -132,7 +187,7 @@ async fn copy_bundle_from(mount: &Path) -> Result<(), ApplyError> {
             .map_err(|e| ApplyError::Failed(e.to_string()))?,
         "could not copy Sunshine into Applications",
     )?;
-    Ok(())
+    Ok(target)
 }
 
 fn find_app_bundle(mount: &Path) -> Option<PathBuf> {
@@ -193,41 +248,47 @@ pub async fn open_firewall(program: &Path) -> Result<(), ApplyError> {
         return Err(ApplyError::Unsupported);
     }
 
-    let program = program.to_string_lossy().into_owned();
+    // Both rules in one elevated script, so it costs one prompt rather than
+    // one per protocol.
+    let script = firewall_script(&program.to_string_lossy());
+    let run = service::run_elevated(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            &service::encode_powershell(&script),
+        ],
+        service::ELEVATED_TIMEOUT,
+    )
+    .await
+    .map_err(|e| ApplyError::Failed(e.to_string()))?;
 
-    // One rule per protocol. Each elevates separately, which means two
-    // prompts — unavoidable without writing a script file and running that,
-    // which trades two prompts for a temporary file that runs as admin.
+    if run.ok() {
+        Ok(())
+    } else {
+        Err(ApplyError::Failed(
+            "Could not add the firewall rules for Sunshine.".into(),
+        ))
+    }
+}
+
+/// One `netsh` rule per protocol, stopping at the first that fails.
+fn firewall_script(program: &str) -> String {
+    let mut script = String::new();
     for (name, protocol) in [
         ("Sunshine (inbound TCP)", "TCP"),
         ("Sunshine (inbound UDP)", "UDP"),
     ] {
-        let run = service::run_elevated(
-            "netsh.exe",
-            &[
-                "advfirewall",
-                "firewall",
-                "add",
-                "rule",
-                &format!("name={name}"),
-                "dir=in",
-                "action=allow",
-                &format!("program={program}"),
-                &format!("protocol={protocol}"),
-                "enable=yes",
-            ],
-            service::ELEVATED_TIMEOUT,
-        )
-        .await
-        .map_err(|e| ApplyError::Failed(e.to_string()))?;
-
-        if !run.ok() {
-            return Err(ApplyError::Failed(format!(
-                "Could not add the {protocol} firewall rule."
-            )));
-        }
+        script.push_str(&format!(
+            "& netsh.exe advfirewall firewall add rule {} dir=in action=allow {} protocol={protocol} enable=yes\n\
+             if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n",
+            service::powershell_quote(&format!("name={name}")),
+            service::powershell_quote(&format!("program={program}")),
+        ));
     }
-    Ok(())
+    script.push_str("exit 0");
+    script
 }
 
 // -------------------------------------------------------------------- Linux
@@ -243,7 +304,7 @@ async fn linux_appimage(appimage: &Path) -> Result<(), ApplyError> {
 
     let home = std::env::var_os("HOME")
         .ok_or_else(|| ApplyError::Failed("Dusk could not find your home directory".into()))?;
-    let dir = PathBuf::from(home).join(".local/bin");
+    let dir = PathBuf::from(&home).join(".local/bin");
     std::fs::create_dir_all(&dir).map_err(|e| ApplyError::Failed(e.to_string()))?;
 
     let target = dir.join("sunshine");
@@ -256,12 +317,177 @@ async fn linux_appimage(appimage: &Path) -> Result<(), ApplyError> {
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| ApplyError::Failed(e.to_string()))?;
     }
+
+    register_user_unit(&PathBuf::from(&home), &target).await
+}
+
+/// Give the AppImage a systemd user unit, so it runs in the background from
+/// sign-in and the host backend has a service to start and stop.
+///
+/// An AppImage registers nothing on its own; without this, Dusk installs
+/// Sunshine and then reports it as not installed, because what the backend
+/// looks for is the unit. A unit that already exists is left alone — it may
+/// be the person's own, and overwriting it would discard what is in it.
+async fn register_user_unit(home: &Path, program: &Path) -> Result<(), ApplyError> {
+    let dir = home.join(".config/systemd/user");
+    let unit = dir.join("sunshine.service");
+    if !unit.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| ApplyError::Failed(e.to_string()))?;
+        std::fs::write(&unit, user_unit(program)).map_err(|e| ApplyError::Failed(e.to_string()))?;
+    }
+
+    for args in [
+        &["--user", "daemon-reload"][..],
+        &["--user", "enable", "sunshine"][..],
+    ] {
+        check(
+            service::run("systemctl", args)
+                .await
+                .map_err(|e| ApplyError::Failed(e.to_string()))?,
+            "could not register Sunshine with systemd",
+        )?;
+    }
     Ok(())
+}
+
+/// Where udev reads rules from, packaged and local.
+const UDEV_RULE_DIRS: [&str; 3] = [
+    "/etc/udev/rules.d",
+    "/usr/lib/udev/rules.d",
+    "/lib/udev/rules.d",
+];
+
+/// The rule Sunshine's packages ship: hand `/dev/uinput`, which is how
+/// Sunshine creates the remote machine's keyboard, mouse and controllers, to
+/// whoever is signed in at the seat. An AppImage cannot install it.
+const UINPUT_RULE: &str =
+    "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", OPTIONS+=\"static_node=uinput\", TAG+=\"uaccess\"\n\
+                           KERNEL==\"uhid\", TAG+=\"uaccess\"\n";
+
+/// Whether some rule already grants the seat `/dev/uinput`. Any file will
+/// do, not only Sunshine's: distributions ship their own under other names,
+/// Bazzite's among them.
+pub fn linux_input_ready() -> bool {
+    UDEV_RULE_DIRS.iter().any(|dir| {
+        std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                .any(|text| grants_uinput(&text))
+        })
+    })
+}
+
+fn grants_uinput(rules: &str) -> bool {
+    rules
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .any(|line| line.contains("KERNEL==\"uinput\"") && line.contains("uaccess"))
+}
+
+/// Install the uinput rule and apply it now. Writing under `/etc` needs
+/// root, so this goes through polkit, which shows the desktop's own prompt.
+pub async fn linux_allow_input() -> Result<(), ApplyError> {
+    if !cfg!(target_os = "linux") {
+        return Err(ApplyError::Unsupported);
+    }
+    let script = format!(
+        "printf '%s' '{UINPUT_RULE}' > /etc/udev/rules.d/60-sunshine.rules && \
+         udevadm control --reload-rules && \
+         udevadm trigger --property-match=DEVNAME=/dev/uinput"
+    );
+    check(
+        service::run_for("pkexec", &["sh", "-c", &script], service::ELEVATED_TIMEOUT)
+            .await
+            .map_err(|e| ApplyError::Failed(e.to_string()))?,
+        "could not let Sunshine create input devices",
+    )?;
+    Ok(())
+}
+
+/// Modelled on the unit Sunshine's own packages ship: started with the
+/// desktop session, because capture needs one, and restarted if it falls
+/// over.
+fn user_unit(program: &Path) -> String {
+    format!(
+        "[Unit]\n\
+         Description=Sunshine, managed by Dusk\n\
+         StartLimitIntervalSec=500\n\
+         StartLimitBurst=5\n\
+         After=xdg-desktop-autostart.target\n\
+         \n\
+         [Service]\n\
+         ExecStart=\"{}\"\n\
+         Restart=on-failure\n\
+         RestartSec=5s\n\
+         \n\
+         [Install]\n\
+         WantedBy=xdg-desktop-autostart.target\n",
+        program.display()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_user_unit_runs_the_installed_appimage_and_starts_with_the_session() {
+        let unit = user_unit(Path::new("/home/a b/.local/bin/sunshine"));
+        assert!(
+            unit.contains("ExecStart=\"/home/a b/.local/bin/sunshine\"\n"),
+            "{unit}"
+        );
+        assert!(
+            unit.contains("WantedBy=xdg-desktop-autostart.target"),
+            "{unit}"
+        );
+        assert!(unit.contains("Restart=on-failure"), "{unit}");
+    }
+
+    #[test]
+    fn a_uinput_rule_is_recognised_whoever_wrote_it() {
+        assert!(grants_uinput(UINPUT_RULE));
+        assert!(grants_uinput(
+            "# ublue\nKERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"\n"
+        ));
+        assert!(!grants_uinput("# KERNEL==\"uinput\", TAG+=\"uaccess\"\n"));
+        assert!(!grants_uinput("KERNEL==\"uinput\", MODE=\"0660\"\n"));
+    }
+
+    #[test]
+    fn the_rule_survives_the_shell_it_is_written_through() {
+        // Single-quoted in sh, so a single quote in it would end the string.
+        assert!(!UINPUT_RULE.contains('\''));
+    }
+
+    #[test]
+    fn the_launch_agent_uses_the_label_the_backend_looks_for() {
+        let plist = launch_agent(Path::new(
+            "/Applications/Sunshine.app/Contents/MacOS/sunshine",
+        ));
+        assert!(
+            plist.contains("<string>dev.lizardbyte.sunshine</string>"),
+            "{plist}"
+        );
+        assert!(
+            plist.contains("<string>/Applications/Sunshine.app/Contents/MacOS/sunshine</string>")
+        );
+        assert!(plist.contains("<key>KeepAlive</key>"));
+    }
+
+    #[test]
+    fn both_firewall_rules_go_in_one_script_and_a_failure_stops_it() {
+        let script = firewall_script(r"C:\Program Files\Sunshine\sunshine.exe");
+        assert_eq!(script.matches("netsh.exe").count(), 2, "{script}");
+        assert!(
+            script.contains(r"'program=C:\Program Files\Sunshine\sunshine.exe'"),
+            "{script}"
+        );
+        assert!(script.contains("'name=Sunshine (inbound UDP)'"), "{script}");
+        assert_eq!(script.matches("$LASTEXITCODE").count(), 4, "{script}");
+    }
 
     #[test]
     fn shell_quoting_survives_a_path_with_a_quote_in_it() {

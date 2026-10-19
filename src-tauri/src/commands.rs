@@ -457,6 +457,7 @@ pub async fn get_setup(state: State<'_, Arc<AppState>>) -> Result<install::Setup
         &host.status,
         host.capabilities.support_tier,
         inner.credentials.load().await.is_some(),
+        install::apply::linux_input_ready(),
     ))
 }
 
@@ -598,6 +599,14 @@ async fn download_and_install(app: &AppHandle, inner: &Arc<AppState>) -> Result<
     // but there is no reason to leave 40MB behind either.
     let _ = tokio::fs::remove_file(&path).await;
     outcome
+}
+
+/// Let Sunshine create input devices. Linux only; asks through polkit.
+#[tauri::command]
+pub async fn allow_input() -> Result<(), String> {
+    install::apply::linux_allow_input()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Add firewall rules for Sunshine. Windows only; elevates when it runs.

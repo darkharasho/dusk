@@ -101,6 +101,7 @@ export type StepId =
   | "startService"
   | "provision"
   | "firewall"
+  | "input"
   | "screenRecording"
   | "accessibility"
   | "systemAudio"

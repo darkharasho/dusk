@@ -11,6 +11,7 @@ pub enum StepId {
     StartService,
     Provision,
     Firewall,
+    Input,
     ScreenRecording,
     Accessibility,
     SystemAudio,
@@ -73,6 +74,7 @@ pub fn build(
     status: &HostStatus,
     tier: SupportTier,
     managed: bool,
+    input_ready: bool,
 ) -> Setup {
     let installed = !matches!(status, HostStatus::NotInstalled);
     let running = matches!(status, HostStatus::Installed { running: true, .. });
@@ -160,6 +162,17 @@ pub fn build(
         }
         HostPlatform::Linux => {
             steps.push(step(
+                StepId::Input,
+                "Let other machines control this one",
+                "Adds the system rule that lets Sunshine create a keyboard, mouse and controllers for whoever is streaming. Asks for your password.",
+                if input_ready {
+                    StepState::Done
+                } else {
+                    StepState::Todo
+                },
+                true,
+            ));
+            steps.push(step(
                 StepId::VirtualDisplay,
                 "Set up a virtual display",
                 "Needs a dummy plug or a kernel option. Dusk cannot do this for you.",
@@ -236,6 +249,7 @@ mod tests {
             &HostStatus::NotInstalled,
             SupportTier::Supported,
             false,
+            false,
         );
         let install = setup
             .steps
@@ -253,6 +267,7 @@ mod tests {
             HostPlatform::Windows,
             &installed(true),
             SupportTier::Supported,
+            false,
             false,
         );
         let by = |id: StepId| {
@@ -276,6 +291,7 @@ mod tests {
             &installed(true),
             SupportTier::Experimental,
             true,
+            true,
         );
         for id in [StepId::ScreenRecording, StepId::Accessibility] {
             let s = setup.steps.iter().find(|s| s.id == id).unwrap();
@@ -293,6 +309,7 @@ mod tests {
             &installed(true),
             SupportTier::Experimental,
             true,
+            true,
         );
         let vd = setup.steps.iter().find(|s| s.id == StepId::VirtualDisplay);
         assert!(vd.is_none() || matches!(vd.unwrap().state, StepState::NotNeeded { .. }));
@@ -304,7 +321,13 @@ mod tests {
         // the release Dusk verifies. Automating it would mean loading
         // unverified code into the kernel on someone's behalf.
         for platform in [HostPlatform::Windows, HostPlatform::Linux] {
-            let setup = build(platform, &installed(true), SupportTier::Supported, true);
+            let setup = build(
+                platform,
+                &installed(true),
+                SupportTier::Supported,
+                true,
+                true,
+            );
             let vd = setup
                 .steps
                 .iter()

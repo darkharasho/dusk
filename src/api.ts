@@ -111,6 +111,11 @@ export function openFirewall(): Promise<void> {
   return invoke("open_firewall");
 }
 
+/** Linux: install the udev rule that lets Sunshine create input devices. */
+export function allowInput(): Promise<void> {
+  return invoke("allow_input");
+}
+
 /** Put a macOS privacy pane in front of someone; Dusk cannot grant it. */
 export function openPrivacySettings(
   pane: "screenRecording" | "accessibility",

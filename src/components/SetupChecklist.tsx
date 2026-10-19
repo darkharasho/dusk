@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  allowInput,
   getSetup,
   installSunshine,
   onDownloadProgress,
@@ -88,36 +89,49 @@ export function SetupChecklist({ onClose }: Props) {
     setSetup(await getSetup());
   }
 
+  /** Carry out one step Dusk can do itself. */
+  async function perform(step: Step) {
+    switch (step.id) {
+      case "installSunshine":
+        await installSunshine();
+        setPreview(null);
+        break;
+      case "startService":
+        await startHosting();
+        break;
+      case "provision":
+        await provisionHost();
+        break;
+      case "firewall":
+        await openFirewall();
+        break;
+      case "input":
+        await allowInput();
+        break;
+      default:
+        throw new Error("Dusk cannot do this step for you yet.");
+    }
+  }
+
   async function act(step: Step) {
     setBusy(true);
     setError(null);
     try {
       switch (step.id) {
         case "installSunshine": {
-          // Deliberately a two-step flow: see what would be downloaded and
+          // Deliberately a two-step flow: see what would be installed and
           // whether it can be verified, then decide. This ends up running
           // with elevated rights.
           setPreview(await previewSunshineDownload());
           break;
         }
-        case "startService":
-          await startHosting();
-          await refresh();
-          break;
-        case "provision":
-          await provisionHost();
-          await refresh();
-          break;
         case "screenRecording":
         case "accessibility":
           await openPrivacySettings(step.id);
           break;
-        case "firewall":
-          await openFirewall();
-          await refresh();
-          break;
         default:
-          setError("Dusk cannot do this step for you yet.");
+          await perform(step);
+          await refresh();
       }
     } catch (err) {
       setError(String(err));
@@ -125,6 +139,39 @@ export function SetupChecklist({ onClose }: Props) {
       setBusy(false);
     }
   }
+
+  /**
+   * Every step Dusk can do, in order, from one press. The list of what it
+   * will do is on screen beside the button, so the press is the consent.
+   * Re-reads the checklist after each step, because one step often finishes
+   * another: installing also sets up the sign-in, which also starts Sunshine.
+   */
+  async function setUpEverything() {
+    setBusy(true);
+    setError(null);
+    const tried = new Set<string>();
+    try {
+      for (;;) {
+        const current = await getSetup();
+        setSetup(current);
+        const next = current.steps.find(
+          (s) => s.automatable && s.state.kind === "todo" && !tried.has(s.id),
+        );
+        if (!next) break;
+        tried.add(next.id);
+        await perform(next);
+      }
+    } catch (err) {
+      setError(String(err));
+      await refresh().catch(() => {});
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }
+
+  const automatic =
+    setup?.steps.filter((s) => s.automatable && s.state.kind === "todo") ?? [];
 
   return (
     <>
@@ -235,6 +282,26 @@ export function SetupChecklist({ onClose }: Props) {
           )}
 
           {!setup && !error && <p className="axi-ink-dim">Checking this machine.</p>}
+
+          {automatic.length > 0 && !preview && (
+            <div className="axi-well axi-stack">
+              <p>
+                Dusk can do {automatic.length === 1 ? "this" : "these"} for
+                you: {automatic.map((s) => s.title.toLowerCase()).join(", ")}.
+                Your system may ask for your password.
+              </p>
+              <div className="axi-row">
+                <button
+                  type="button"
+                  className="axi-btn axi-btn--primary"
+                  disabled={busy}
+                  onClick={setUpEverything}
+                >
+                  {busy ? "Setting up" : "Set up this machine"}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="axi-stack">
             {setup?.steps.map((step) => {

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Device } from "../types";
 import { cardState } from "../deviceState";
 import { generatePin, launchApp, onSessionFailed, pairDevice, quitSession } from "../api";
+import { StreamStats } from "./StreamStats";
 
 interface Props {
   device: Device;
@@ -140,6 +141,7 @@ export function DeviceDrawer({
                       attached. Streaming will resume it.
                     </p>
                   )}
+                  {device.streamingHere && <StreamStats deviceId={device.id} />}
                   <button
                     type="button"
                     className="axi-btn"

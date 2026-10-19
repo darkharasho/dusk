@@ -75,10 +75,15 @@ pub enum OverlayAction {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
+    /// Frames rendered per second.
     pub fps: Option<f32>,
+    /// Video bitrate, not counting error correction.
     pub bitrate_kbps: Option<u32>,
+    /// Network round trip to the host.
     pub rtt_ms: Option<f32>,
+    /// Average time to decode one frame.
     pub decode_ms: Option<f32>,
+    /// Percentage of frames the network dropped, 0 to 100.
     pub packet_loss: Option<f32>,
 }
 

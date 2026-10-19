@@ -114,6 +114,17 @@ pub struct SessionFailed {
     pub message: String,
 }
 
+/// How a running stream is doing, as the client measures it, about once a
+/// second. Only a client that speaks the session protocol sends these.
+pub const SESSION_STATS_EVENT: &str = "dusk://session-stats";
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStats {
+    pub device_id: String,
+    pub stats: crate::session::Stats,
+}
+
 /// The address to reach a device on, and its human name for messages.
 async fn target_of(state: &Arc<AppState>, id: &str) -> Result<(String, String), String> {
     let registry = state.registry.read().await;
@@ -220,6 +231,7 @@ pub async fn launch_app(
     // the stream: when this task ends, the Session drops and the socket goes
     // with it.
     let overlay_app = app.clone();
+    let stats_device = id.clone();
     tauri::async_runtime::spawn(async move {
         let session = session;
         let mut effects = effects;
@@ -246,10 +258,18 @@ pub async fn launch_app(
                     // flight needs the client to implement SetQuality first.
                     crate::session::OverlayAction::Quality => {}
                 },
-                // Stats are read but not yet surfaced. Dropping them keeps
-                // the channel draining; putting them on screen is UI work
-                // that belongs with the rest of the session panel.
-                crate::session::Effect::Stats(_) => {}
+                // Passed straight through: the drawer shows them while the
+                // stream is up. A dropped event is a stale second, not an
+                // error worth saying anything about.
+                crate::session::Effect::Stats(stats) => {
+                    let _ = overlay_app.emit(
+                        SESSION_STATS_EVENT,
+                        SessionStats {
+                            device_id: stats_device.clone(),
+                            stats,
+                        },
+                    );
+                }
                 crate::session::Effect::Ended { reason } => match reason {
                     Some(reason) => eprintln!("dusk: the client ended the session: {reason}"),
                     None => eprintln!("dusk: the client ended the session"),

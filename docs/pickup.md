@@ -13,7 +13,7 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 | --- | --- |
 | 0 — bundle the fork, fix the client search path | done, verified in artifacts |
 | 1 — rename and identity | done, verified in artifacts |
-| 2 — control socket, overlay actions, live stats | **both sides done and live-tested; stats not sent; not in a tagged client** |
+| 2 — control socket, overlay actions, live stats | **both sides done; channel live-tested; Open Dusk and stats not yet; not in a tagged client** |
 | 3–6 | not started |
 
 In flight: the fork's half of phase 2 is on **`dusk-session-channel`**
@@ -185,7 +185,9 @@ rather than a summary. Where each side stands:
   event loop is suspended for the whole stream. Messages from Dusk come
   back as SDL events: `disconnect` quits, `show_overlay` opens the menu,
   `host_display` presses Ctrl+Alt+Shift+F*n* on the host. `set_quality`
-  only logs that it is unsupported.
+  only logs that it is unsupported. Each time the decoder rolls its
+  one-second stats window it sends `stats`, measured the way the debug
+  overlay measures them.
 - **Overlay.** Disconnect sends `overlay_action: disconnect` and then quits
   without waiting on Dusk. An **Open Dusk** row, shown only when Dusk
   launched the stream, sends `settings`. It also releases the mouse and
@@ -193,10 +195,11 @@ rather than a summary. Where each side stands:
 - **Dusk** logs the handshake and each overlay action (`dusk: the client
   connected to the session channel`), which is the only way to tell from
   a log that the channel was used: Disconnect ends the stream either way.
+  Stats go to the frontend as `dusk://session-stats`, and the device drawer
+  shows them under *This stream* while that machine is streaming here.
 
 Not done yet:
 
-- No `stats` are sent; Dusk would drop them anyway.
 - `quality` has no row, and `SetQuality` needs the stream renegotiated.
 - Nothing calls `ToClient::ShowOverlay` or `HostDisplay` from Dusk's UI.
 - Released Dusk does not have any of this until a `dusk-v*` tag and a

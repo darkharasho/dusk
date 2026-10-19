@@ -4,11 +4,30 @@ import type { Device, DownloadPreview, Setup, Snapshot } from "./types";
 
 export const SNAPSHOT_EVENT = "dusk://snapshot";
 export const SESSION_FAILED_EVENT = "dusk://session-failed";
+export const SESSION_STATS_EVENT = "dusk://session-stats";
 
 /** A stream that died on its own, after the launch call had already returned. */
 export interface SessionFailed {
   deviceId: string;
   message: string;
+}
+
+/**
+ * How a running stream is doing, about once a second. Any field can be
+ * missing: a client sends what it measured rather than a misleading zero.
+ */
+export interface StreamStats {
+  fps?: number | null;
+  bitrateKbps?: number | null;
+  rttMs?: number | null;
+  decodeMs?: number | null;
+  /** Percentage of frames the network dropped, 0 to 100. */
+  packetLoss?: number | null;
+}
+
+export interface SessionStats {
+  deviceId: string;
+  stats: StreamStats;
 }
 
 export function getSnapshot(): Promise<Snapshot> {
@@ -142,4 +161,10 @@ export function onSessionFailed(
   handler: (failure: SessionFailed) => void,
 ): Promise<() => void> {
   return listen<SessionFailed>(SESSION_FAILED_EVENT, (event) => handler(event.payload));
+}
+
+export function onSessionStats(
+  handler: (update: SessionStats) => void,
+): Promise<() => void> {
+  return listen<SessionStats>(SESSION_STATS_EVENT, (event) => handler(event.payload));
 }

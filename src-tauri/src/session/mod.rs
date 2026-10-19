@@ -25,7 +25,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use protocol::{line, Conversation};
-pub use protocol::{Effect, OverlayAction, ToClient};
+pub use protocol::{Effect, OverlayAction, Stats, ToClient};
 
 /// A listening control channel for one stream.
 pub struct Session {

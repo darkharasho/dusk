@@ -46,6 +46,10 @@ pub struct Step {
     /// True when Dusk can carry the step out itself. False means the person
     /// has to do it, and `detail` says what.
     pub automatable: bool,
+    /// Not something every machine needs. Never part of "Set up this
+    /// machine", and an unfinished one does not count against the checklist.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +65,7 @@ fn step(id: StepId, title: &str, detail: &str, state: StepState, automatable: bo
         detail: detail.to_string(),
         state,
         automatable,
+        optional: false,
     }
 }
 
@@ -75,6 +80,7 @@ pub fn build(
     tier: SupportTier,
     managed: bool,
     input_ready: bool,
+    virtual_display: bool,
 ) -> Setup {
     let installed = !matches!(status, HostStatus::NotInstalled);
     let running = matches!(status, HostStatus::Installed { running: true, .. });
@@ -145,20 +151,26 @@ pub fn build(
             ));
         }
         HostPlatform::Windows => {
-            // Deliberately not automated. A virtual display is a
-            // kernel-mode driver from a third party, outside the Sunshine
-            // release Dusk verifies — so installing one silently would mean
-            // Dusk putting unverified code in the kernel on someone's
-            // behalf. Sunshine's own display-device options cover the
-            // common case of an attached monitor, and someone who genuinely
-            // needs a headless display should choose the driver knowingly.
-            steps.push(step(
+            // Offered, never assumed: see `display_driver` for which driver
+            // and why. Optional, so "Set up this machine" never installs a
+            // driver as a side effect of a single press.
+            let mut vd = step(
                 StepId::VirtualDisplay,
                 "Add a virtual display",
-                "Only needed to stream with no monitor attached, or at a resolution this machine's screen does not have. It means installing a display driver from another project, so Dusk will not do it for you.",
-                StepState::Unknown,
-                false,
-            ));
+                "",
+                if virtual_display {
+                    StepState::Done
+                } else {
+                    StepState::Todo
+                },
+                true,
+            );
+            vd.optional = true;
+            vd.detail = format!(
+                "Only needed to stream with no monitor attached, or at a resolution this machine's screen does not have. Dusk installs version {} of the open-source Virtual Display Driver, checked against a pinned copy, after asking for administrator rights. Remove it in Device Manager under Display adapters.",
+                super::display_driver::VERSION
+            );
+            steps.push(vd);
         }
         HostPlatform::Linux => {
             steps.push(step(
@@ -250,6 +262,7 @@ mod tests {
             SupportTier::Supported,
             false,
             false,
+            false,
         );
         let install = setup
             .steps
@@ -267,6 +280,7 @@ mod tests {
             HostPlatform::Windows,
             &installed(true),
             SupportTier::Supported,
+            false,
             false,
             false,
         );
@@ -292,6 +306,7 @@ mod tests {
             SupportTier::Experimental,
             true,
             true,
+            false,
         );
         for id in [StepId::ScreenRecording, StepId::Accessibility] {
             let s = setup.steps.iter().find(|s| s.id == id).unwrap();
@@ -310,31 +325,64 @@ mod tests {
             SupportTier::Experimental,
             true,
             true,
+            false,
         );
         let vd = setup.steps.iter().find(|s| s.id == StepId::VirtualDisplay);
         assert!(vd.is_none() || matches!(vd.unwrap().state, StepState::NotNeeded { .. }));
     }
 
     #[test]
-    fn dusk_never_offers_to_install_a_kernel_driver_itself() {
-        // A virtual display is a third-party kernel-mode driver, outside
-        // the release Dusk verifies. Automating it would mean loading
-        // unverified code into the kernel on someone's behalf.
-        for platform in [HostPlatform::Windows, HostPlatform::Linux] {
-            let setup = build(
-                platform,
-                &installed(true),
-                SupportTier::Supported,
-                true,
-                true,
-            );
-            let vd = setup
-                .steps
-                .iter()
-                .find(|s| s.id == StepId::VirtualDisplay)
-                .expect("the step exists");
-            assert!(!vd.automatable, "{platform:?} must not automate this");
-        }
+    fn a_driver_is_only_ever_installed_on_its_own_press() {
+        // Windows can install the virtual display, but only as an optional
+        // step, which "Set up this machine" skips. Linux cannot at all.
+        let win = build(
+            HostPlatform::Windows,
+            &installed(true),
+            SupportTier::Supported,
+            true,
+            true,
+            false,
+        );
+        let vd = win
+            .steps
+            .iter()
+            .find(|s| s.id == StepId::VirtualDisplay)
+            .expect("the step exists");
+        assert!(vd.automatable && vd.optional);
+        assert_eq!(vd.state, StepState::Todo);
+
+        let linux = build(
+            HostPlatform::Linux,
+            &installed(true),
+            SupportTier::Supported,
+            true,
+            true,
+            false,
+        );
+        let vd = linux
+            .steps
+            .iter()
+            .find(|s| s.id == StepId::VirtualDisplay)
+            .expect("the step exists");
+        assert!(!vd.automatable);
+    }
+
+    #[test]
+    fn an_installed_virtual_display_reads_as_done() {
+        let setup = build(
+            HostPlatform::Windows,
+            &installed(true),
+            SupportTier::Supported,
+            true,
+            true,
+            true,
+        );
+        let vd = setup
+            .steps
+            .iter()
+            .find(|s| s.id == StepId::VirtualDisplay)
+            .unwrap();
+        assert_eq!(vd.state, StepState::Done);
     }
 
     #[test]

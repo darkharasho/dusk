@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   allowInput,
   getSetup,
+  installDisplayDriver,
   installSunshine,
   onDownloadProgress,
   openFirewall,
@@ -23,7 +24,9 @@ function stateChip(step: Step): { className: string; label: string } {
     case "done":
       return { className: "axi-chip axi-chip--ok", label: "Done" };
     case "todo":
-      return { className: "axi-chip axi-chip--warn", label: "To do" };
+      return step.optional
+        ? { className: "axi-chip axi-chip--meta", label: "Optional" }
+        : { className: "axi-chip axi-chip--warn", label: "To do" };
     case "notNeeded":
       return { className: "axi-chip", label: "Not needed" };
     case "unknown":
@@ -44,6 +47,7 @@ function stateChip(step: Step): { className: string; label: string } {
 export function SetupChecklist() {
   const [setup, setSetup] = useState<Setup | null>(null);
   const [preview, setPreview] = useState<DownloadPreview | null>(null);
+  const [confirmDriver, setConfirmDriver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
@@ -104,6 +108,9 @@ export function SetupChecklist() {
       case "input":
         await allowInput();
         break;
+      case "virtualDisplay":
+        await installDisplayDriver();
+        break;
       default:
         throw new Error("Dusk cannot do this step for you yet.");
     }
@@ -121,6 +128,10 @@ export function SetupChecklist() {
           setPreview(await previewSunshineDownload());
           break;
         }
+        case "virtualDisplay":
+          // A driver gets its own yes, with what it is spelled out first.
+          setConfirmDriver(true);
+          break;
         case "screenRecording":
         case "accessibility":
           await openPrivacySettings(step.id);
@@ -151,7 +162,8 @@ export function SetupChecklist() {
         const current = await getSetup();
         setSetup(current);
         const next = current.steps.find(
-          (s) => s.automatable && s.state.kind === "todo" && !tried.has(s.id),
+          (s) =>
+            s.automatable && !s.optional && s.state.kind === "todo" && !tried.has(s.id),
         );
         if (!next) break;
         tried.add(next.id);
@@ -167,7 +179,21 @@ export function SetupChecklist() {
   }
 
   const automatic =
-    setup?.steps.filter((s) => s.automatable && s.state.kind === "todo") ?? [];
+    setup?.steps.filter((s) => s.automatable && !s.optional && s.state.kind === "todo") ?? [];
+
+  async function runDriverInstall() {
+    setBusy(true);
+    setError(null);
+    try {
+      await installDisplayDriver();
+      setConfirmDriver(false);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+      await refresh().catch(() => {});
+    }
+  }
 
   return (
     <div className="axi-stack">
@@ -257,6 +283,45 @@ export function SetupChecklist() {
                 </div>
               )
             )}
+          </div>
+        </div>
+      )}
+
+      {confirmDriver && (
+        <div className="axi-notice">
+          <span className="axi-notice__icon" aria-hidden="true">
+            ↓
+          </span>
+          <div className="axi-stack">
+            <p>
+              This installs the Virtual Display Driver, an open-source display
+              driver from another project. Windows will treat it as a monitor
+              that is always connected, which hosting can stream from.
+            </p>
+            <p className="axi-ink-dim">
+              Dusk downloads the version it was built to expect and refuses it
+              if it does not match. Windows will ask for administrator rights.
+              You can remove it later in Device Manager under Display
+              adapters.
+            </p>
+            <div className="axi-row">
+              <button
+                type="button"
+                className="axi-btn axi-btn--primary"
+                disabled={busy}
+                onClick={runDriverInstall}
+              >
+                {busy ? "Installing" : "Install the driver"}
+              </button>
+              <button
+                type="button"
+                className="axi-btn axi-btn--ghost"
+                disabled={busy}
+                onClick={() => setConfirmDriver(false)}
+              >
+                Not now
+              </button>
+            </div>
           </div>
         </div>
       )}

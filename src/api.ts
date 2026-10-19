@@ -149,6 +149,11 @@ export function allowInput(): Promise<void> {
   return invoke("allow_input");
 }
 
+/** Windows: install the virtual display driver. Asks for admin rights. */
+export function installDisplayDriver(): Promise<void> {
+  return invoke("install_display_driver");
+}
+
 /** Put a macOS privacy pane in front of someone; Dusk cannot grant it. */
 export function openPrivacySettings(
   pane: "screenRecording" | "accessibility",

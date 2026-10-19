@@ -95,6 +95,11 @@ fn avoid_wayland_dmabuf_crash() {
     unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
 }
 
+/// See [`install::display_driver::run_helper_if_asked`].
+pub fn run_helper_if_asked() -> Option<i32> {
+    install::display_driver::run_helper_if_asked()
+}
+
 pub fn run() {
     #[cfg(target_os = "linux")]
     avoid_wayland_dmabuf_crash();
@@ -225,6 +230,7 @@ pub fn run() {
             commands::install_sunshine,
             commands::open_firewall,
             commands::allow_input,
+            commands::install_display_driver,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dusk");

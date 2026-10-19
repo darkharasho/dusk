@@ -51,6 +51,9 @@ plist = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
+# SetupAPI, to create the device a virtual display driver installs onto.
+# The version the rest of the tree already pulls in.
+windows-sys = { version = "0.59", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation"] }
 
 # rustls rather than the platform TLS stack: both Sunshine's GameStream port
 # and its config API serve self-signed certificates, and client-certificate

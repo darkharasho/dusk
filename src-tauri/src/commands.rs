@@ -599,6 +599,7 @@ pub async fn get_setup(state: State<'_, Arc<AppState>>) -> Result<install::Setup
         host.capabilities.support_tier,
         inner.credentials.load().await.is_some(),
         install::apply::linux_input_ready(),
+        install::display_driver::installed(),
     ))
 }
 
@@ -740,6 +741,22 @@ async fn download_and_install(app: &AppHandle, inner: &Arc<AppState>) -> Result<
     // but there is no reason to leave 40MB behind either.
     let _ = tokio::fs::remove_file(&path).await;
     outcome
+}
+
+/// Install the virtual display driver. Windows only; asks for administrator
+/// rights once. Only ever run from its own button, never as part of setting
+/// up everything at once.
+#[tauri::command]
+pub async fn install_display_driver(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("downloads");
+    install::display_driver::install(&state.http, &dir).await
 }
 
 /// Let Sunshine create input devices. Linux only; asks through polkit.

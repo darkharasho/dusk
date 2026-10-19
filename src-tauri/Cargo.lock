@@ -785,6 +785,7 @@ dependencies = [
  "tauri-build",
  "thiserror 1.0.69",
  "tokio",
+ "windows-sys 0.59.0",
  "winreg 0.52.0",
 ]
 

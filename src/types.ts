@@ -121,6 +121,8 @@ export interface Step {
   state: StepState;
   /** False means the person has to do it, and `detail` says what. */
   automatable: boolean;
+  /** Not every machine needs it, so "Set up this machine" leaves it alone. */
+  optional: boolean;
 }
 
 export interface Setup {

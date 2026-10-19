@@ -150,6 +150,9 @@ only visible program — Sunshine and Moonlight as implementation details nobody
 is introduced to — along with the phases that get there and the GPL-3.0
 boundary that shapes all of it.
 
+[`docs/pickup.md`](docs/pickup.md) is where that plan actually stands, how to
+set up on another machine, and the landmines worth not rediscovering.
+
 ## How it fits together
 
 ```

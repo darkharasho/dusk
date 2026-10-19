@@ -172,13 +172,23 @@ Ordered so that each one ships something usable on its own.
 
 | # | Phase | Payoff | State |
 | --- | --- | --- | --- |
-| 0 | Bundle the fork, fix the client search path | The overlay works in release builds | in progress |
-| 1 | Rename and identity; no second dock entry | The stream stops announcing "Moonlight" | not started |
+| 0 | Bundle the fork, fix the client search path | The overlay works in release builds | **done** |
+| 1 | Rename and identity | The stream stops announcing "Moonlight" | **done** |
 | 2 | Control socket; overlay actions; live stats | The overlay becomes a real interface | not started |
 | 3 | Bundle Sunshine, auto-provision credentials, delete the sign-in UI | Sunshine leaves the UI entirely | not started |
 | 4 | One installer, service registration, consented display driver | First run is effortless | not started |
 | 5 | Zero-click pairing | Connecting stops involving a PIN | not started |
-| 6 | Window choreography | The seam closes | not started |
+| 6 | Window choreography, and no second dock entry | The seam closes | not started |
+
+Phase 0 is verified on all three platforms: a tagged client release is built
+by the fork, downloaded and inserted during Dusk's release, and the resulting
+macOS bundle passes notarization with the client nested inside it.
+
+Suppressing the second dock and taskbar entry moved from phase 1 into phase 6.
+It is `LSUIElement` on macOS and window-style changes elsewhere, and a
+UIElement app has different focus and input-grab behaviour — which is exactly
+what a fullscreen game stream depends on. It belongs where it can be tested
+against a real session rather than reasoned about.
 
 ## Risks worth pricing now
 

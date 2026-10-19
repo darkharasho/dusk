@@ -225,14 +225,21 @@ pub async fn launch_app(
         let mut effects = effects;
         while let Some(effect) = effects.recv().await {
             match effect {
+                // Logged because nothing else shows the channel is in use:
+                // the overlay's Disconnect ends the stream either way.
+                crate::session::Effect::Authenticated => {
+                    eprintln!("dusk: the client connected to the session channel");
+                }
                 crate::session::Effect::Overlay(action) => match action {
                     // Asked rather than killed: a client that is told to go
                     // can tear its stream down cleanly, and the watcher
                     // below still catches it however it actually ends.
                     crate::session::OverlayAction::Disconnect => {
+                        eprintln!("dusk: the overlay asked to disconnect");
                         session.send(crate::session::ToClient::Disconnect);
                     }
                     crate::session::OverlayAction::Settings => {
+                        eprintln!("dusk: the overlay asked for Dusk");
                         crate::tray::show_window(&overlay_app);
                     }
                     // Nothing to answer with yet — changing quality in
@@ -243,11 +250,10 @@ pub async fn launch_app(
                 // the channel draining; putting them on screen is UI work
                 // that belongs with the rest of the session panel.
                 crate::session::Effect::Stats(_) => {}
-                crate::session::Effect::Ended {
-                    reason: Some(reason),
-                } => {
-                    eprintln!("dusk: the client ended the session: {reason}");
-                }
+                crate::session::Effect::Ended { reason } => match reason {
+                    Some(reason) => eprintln!("dusk: the client ended the session: {reason}"),
+                    None => eprintln!("dusk: the client ended the session"),
+                },
                 _ => {}
             }
         }

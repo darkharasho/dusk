@@ -401,7 +401,7 @@ mod live {
     #[test]
     #[ignore]
     fn the_local_store_is_found_and_read() {
-        let client = crate::moonlight::Moonlight::discover();
+        let client = crate::moonlight::Moonlight::discover(None);
         println!("client: {:?}", client.as_ref().map(|c| c.binary()));
         for path in crate::moonlight::linux_stores_for(client.as_ref()) {
             println!("candidate: {} exists={}", path.display(), path.exists());

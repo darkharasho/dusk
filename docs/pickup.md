@@ -13,10 +13,11 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 | --- | --- |
 | 0 — bundle the fork, fix the client search path | done, verified in artifacts |
 | 1 — rename and identity | done, verified in artifacts |
-| 2 — control socket, overlay actions, live stats | **Dusk side done; fork side not started** |
+| 2 — control socket, overlay actions, live stats | **both sides done and live-tested; stats not sent; not in a tagged client** |
 | 3–6 | not started |
 
-Everything is merged to `main` / `master`. Nothing is in flight.
+In flight: the fork's half of phase 2 is on **`dusk-session-channel`**
+(branched from `dusk-overlay`), unmerged and untagged. See *Phase 2* below.
 
 ## The map
 
@@ -41,6 +42,10 @@ the cursor to the overlay while the stream holds the mouse. Neither is in
 the pinned client. If phase 2's fork half is the next job, that branch is
 probably the base you want rather than `master`. Everything else over there
 (`SDL3`, `weblate`, `appimage_kms`, dependabot) is inherited from upstream.
+
+Phase 2's fork half sits on top of that, on `dusk-session-channel`. Merging
+it brings `dusk-overlay` along; the pinned client gets neither until a new
+`dusk-v*` tag and a `CLIENT_TAG` bump.
 
 `linux-first-run` is **merged** — what it carried is described under
 *Flatpak* below, and it matters on this machine.
@@ -73,6 +78,12 @@ npm install
 npm run dev
 ```
 
+On the Bazzite machine this was written for, none of that turned out to be
+needed: Node (nvm) and Rust run on the host, and `npm run dev` works there.
+`npm run dev` quietly swaps in `/usr/bin/pkg-config` when a linuxbrew one
+shadows it (`scripts/tauri.mjs`); running `cargo` directly does not, so use
+`PKG_CONFIG=/usr/bin/pkg-config cargo test`.
+
 ### Getting the overlay in a dev build
 
 A debug build looks for the forked client in a **sibling checkout** at
@@ -88,15 +99,41 @@ mkdir -p ../moonlight-qt/app && mv moonlight ../moonlight-qt/app/moonlight
 chmod +x ../moonlight-qt/app/moonlight
 ```
 
-It is an AppImage, so FUSE has to work — on Bazzite it does. Dusk logs which
-client it picked at startup; `using Dusk's Moonlight client at ...` is the
+It is an AppImage, so FUSE has to work — on Bazzite it does.
+
+To change the fork you do have to build it, and on Bazzite that is minutes,
+not hours: the `fedora44-build` distrobox has the Qt6/SDL2/FFmpeg `-devel`
+packages, and the binary it makes runs on the host because the sonames
+match. Two catches. The host has no `libSDL2_ttf-2.0.so.0`, so copy it into
+`app/` and give the binary an `$ORIGIN` rpath; and every relink drops that
+rpath, so re-run `patchelf` after each `make`. Both tools live in the box:
+
+```sh
+distrobox enter fedora44-build -- bash -lc '
+  cd ~/Documents/GitHub/moonlight-qt && qmake6 moonlight-qt.pro && make -j8 &&
+  cp -L /usr/lib64/libSDL2_ttf-2.0.so.0 app/ &&
+  patchelf --set-rpath "\$ORIGIN" app/moonlight'
+./app/moonlight --version    # "Dusk fork: in-stream overlay menu available"
+```
+
+Either way, Dusk logs which client it picked at startup; `using Dusk's Moonlight client at ...` is the
 line you want, and `using system Moonlight ...; the in-stream overlay will be
 unavailable` means it did not find this.
 
 ## What this machine makes possible for the first time
 
-Bazzite is a real Sunshine host, and it is already in the grid. Two things
-have never been exercised by anyone:
+Bazzite is a real Sunshine host, and it is already in the grid. What has
+now been checked there, and what still has not:
+
+- Dusk picks the sibling fork client, the "This machine" panel reads
+  Sunshine as hosting, and paired hosts come up READY with their app lists,
+  so the identity store resolves.
+- A stream launched from Dusk, ended from the overlay's Disconnect, works.
+- **Not yet run:** Dusk starting and stopping Sunshine. Sunshine here is a
+  linuxbrew binary behind a user unit called `sunshine.service`, which
+  `LINUX_UNITS` already covers. Flatpak Sunshine is installed too.
+
+The original notes, for context:
 
 **Flatpak, and why it matters here.** A Flatpak Moonlight — how most
 distributions ship it, and the only way to install one on an immutable
@@ -125,10 +162,10 @@ client and Bazzite the host, which is the pair that has been missing.
 Both are more valuable than any amount of further building, because they are
 the parts the plan assumes work.
 
-## Next work: phase 2's fork half
+## Phase 2: the control channel
 
-Dusk's side is done and dormant. It binds a socket per session and hands the
-client two environment variables:
+Dusk binds a socket per session and hands the client two environment
+variables:
 
 ```
 DUSK_SESSION_ENDPOINT   unix socket path (named pipe on Windows)
@@ -137,42 +174,33 @@ DUSK_SESSION_TOKEN      32 hex characters, one session only
 
 Environment and not argv on purpose: moonlight-qt rejects arguments it does
 not recognise, so an argument would break every client that has not learned
-the protocol. Unknown environment variables are ignored, which is why Dusk's
-half could ship first.
+the protocol. Unknown environment variables are ignored.
 
-What the fork has to do:
+The protocol is specified in `src-tauri/src/session/protocol.rs`; read that
+rather than a summary. Where each side stands:
 
-1. On startup, if both variables are set, connect to the endpoint.
-2. Send `{"type":"ready","token":"<token>"}` first. Nothing else is acted on
-   until that lands, and a wrong token closes the connection.
-3. When the overlay menu dispatches an action, send
-   `{"type":"overlay_action","action":"disconnect"}` — or `settings`, or
-   `quality`.
-4. Optionally send `{"type":"stats","fps":59.5,"bitrateKbps":18000}`. Every
-   field is optional; Dusk parses and currently drops them.
+- **Fork, `app/streaming/duskchannel.{h,cpp}`.** Connects once the stream is
+  up, sends `ready` first, and says `disconnected` at teardown. The socket
+  has its own thread because `Session::exec` holds the main thread and Qt's
+  event loop is suspended for the whole stream. Messages from Dusk come
+  back as SDL events: `disconnect` quits, `show_overlay` opens the menu,
+  `host_display` presses Ctrl+Alt+Shift+F*n* on the host. `set_quality`
+  only logs that it is unsupported.
+- **Overlay.** Disconnect sends `overlay_action: disconnect` and then quits
+  without waiting on Dusk. An **Open Dusk** row, shown only when Dusk
+  launched the stream, sends `settings`. It also releases the mouse and
+  minimises a full-screen stream, so the window Dusk raises is not hidden.
+- **Dusk** logs the handshake and each overlay action (`dusk: the client
+  connected to the session channel`), which is the only way to tell from
+  a log that the channel was used: Disconnect ends the stream either way.
 
-The hook point already exists. `app/streaming/video/duskoverlay.h` has:
+Not done yet:
 
-```cpp
-enum Action {
-    ActionStats, ActionSwitchDisplay, ActionFullScreen,
-    ActionReleaseMouse, ActionMinimize, ActionDisconnect, ActionMax
-};
-```
-
-`ActionDisconnect` is the one to mirror out over the socket first — it is the
-whole point of the floating button. The protocol and every message is
-specified in `src-tauri/src/session/protocol.rs`, which is the file to read
-rather than this summary.
-
-Dusk already answers `overlay_action: settings` by raising its window, and
-`disconnect` by asking the client to end cleanly. `ToClient::SetQuality`,
-`ShowOverlay` and `HostDisplay` are defined and have no caller yet, by
-design, so the fork has something fixed to implement against.
-
-**This is the first piece that cannot be verified from a keyboard alone.**
-It needs a real stream against a real host to know the overlay actually
-drives Dusk.
+- No `stats` are sent; Dusk would drop them anyway.
+- `quality` has no row, and `SetQuality` needs the stream renegotiated.
+- Nothing calls `ToClient::ShowOverlay` or `HostDisplay` from Dusk's UI.
+- Released Dusk does not have any of this until a `dusk-v*` tag and a
+  `CLIENT_TAG` bump.
 
 ## Landmines
 

@@ -107,6 +107,14 @@ pub fn show_window(app: &AppHandle) {
     let _ = window.set_focus();
 }
 
+/// Take the window out of the way, taskbar entry and all, without quitting.
+/// The tray icon is how it comes back if nothing else brings it.
+pub fn hide_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
 fn toggle_hosting(app: AppHandle) {
     let Some(state) = app.try_state::<Arc<AppState>>() else {
         return;

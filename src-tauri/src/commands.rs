@@ -294,6 +294,10 @@ pub async fn launch_app(
     // with it.
     let overlay_app = app.clone();
     let stats_device = id.clone();
+    // Whether Dusk stepped aside for this stream, so the watcher below knows
+    // to bring it back. Shared because the two halves are separate tasks.
+    let stepped_aside = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let aside = stepped_aside.clone();
     tauri::async_runtime::spawn(async move {
         let session = session;
         let mut effects = effects;
@@ -301,8 +305,19 @@ pub async fn launch_app(
             match effect {
                 // Logged because nothing else shows the channel is in use:
                 // the overlay's Disconnect ends the stream either way.
+                //
+                // It is also the moment the stream is really up, so Dusk
+                // steps out of the way: the stream window becomes the one
+                // thing on screen and in the taskbar, as though Dusk opened
+                // it, which in effect it did. Not at launch, because a stream
+                // that fails to connect would leave Dusk hidden behind
+                // nothing; and not for a client without the channel, which
+                // never sends this, because then nothing would say when the
+                // stream is up.
                 crate::session::Effect::Authenticated => {
                     eprintln!("dusk: the client connected to the session channel");
+                    aside.store(true, std::sync::atomic::Ordering::Relaxed);
+                    crate::tray::hide_window(&overlay_app);
                 }
                 crate::session::Effect::Overlay(action) => match action {
                     // Asked rather than killed: a client that is told to go
@@ -346,7 +361,15 @@ pub async fn launch_app(
     let session_id = id.clone();
     tauri::async_runtime::spawn(async move {
         let mut child = child;
-        if let Err(err) = crate::moonlight::Moonlight::wait_for_session(&mut child).await {
+        let ended = crate::moonlight::Moonlight::wait_for_session(&mut child).await;
+
+        // Back where the person left it, however the stream ended — and on a
+        // failure even if Dusk never stepped aside, so the reason is seen.
+        if ended.is_err() || stepped_aside.load(std::sync::atomic::Ordering::Relaxed) {
+            crate::tray::show_window(&handle);
+        }
+
+        if let Err(err) = ended {
             // A stream that fails after launch used to be invisible: the
             // card simply went back to Ready. Say what happened instead.
             eprintln!("dusk: the Moonlight session ended badly: {err}");

@@ -174,7 +174,7 @@ Ordered so that each one ships something usable on its own.
 | --- | --- | --- | --- |
 | 0 | Bundle the fork, fix the client search path | The overlay works in release builds | **done** |
 | 1 | Rename and identity | The stream stops announcing "Moonlight" | **done** |
-| 2 | Control socket; overlay actions; live stats | The overlay becomes a real interface | **built**, not yet in a tagged client |
+| 2 | Control socket; overlay actions; live stats | The overlay becomes a real interface | **done**; client `dusk-v0.2.2`, not yet in a Dusk release |
 | 3 | Bundle Sunshine, auto-provision credentials, delete the sign-in UI | Sunshine leaves the UI entirely | not started |
 | 4 | One installer, service registration, consented display driver | First run is effortless | not started |
 | 5 | Zero-click pairing | Connecting stops involving a PIN | not started |

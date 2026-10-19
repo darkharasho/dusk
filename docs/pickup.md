@@ -13,11 +13,12 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 | --- | --- |
 | 0 — bundle the fork, fix the client search path | done, verified in artifacts |
 | 1 — rename and identity | done, verified in artifacts |
-| 2 — control socket, overlay actions, live stats | **both sides done; channel live-tested; Open Dusk and stats not yet; not in a tagged client** |
+| 2 — control socket, overlay actions, live stats | **done and live-tested; client tagged `dusk-v0.2.2`; no Dusk release carries it yet; quality not started** |
 | 3–6 | not started |
 
-In flight: the fork's half of phase 2 is on **`dusk-session-channel`**
-(branched from `dusk-overlay`), unmerged and untagged. See *Phase 2* below.
+The fork's half of phase 2 is merged to its `master` and published as
+`dusk-v0.2.2`, which `CLIENT_TAG` now pins. The next Dusk release is the
+first to ship it. See *Phase 2* below.
 
 ## The map
 
@@ -26,26 +27,19 @@ Two repositories, side by side. Several things assume they are siblings.
 ```
 <parent>/
 ├── dusk/            main @ 2a2cba4   tags v0.1.0, v0.2.0
-└── moonlight-qt/    master @ 199cc93a  tags dusk-v0.1.0, dusk-v0.2.0, dusk-v0.2.1
+└── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
 ```
 
 The fork builds and publishes a client; Dusk downloads a pinned one at
 release time. That pin is one line — `CLIENT_TAG` in
-`.github/workflows/release.yml`, currently `dusk-v0.2.1`. Bumping the client
+`.github/workflows/release.yml`, currently `dusk-v0.2.2`. Bumping the client
 means tagging `dusk-v*` in the fork, waiting for its release, and editing
 that line.
 
-`main` is the only branch left in dusk; the merged ones are gone. The fork
-still has one of ours, **`dusk-overlay`**, two commits ahead of `master`:
-anchoring the handle inside the video rather than the window, and handing
-the cursor to the overlay while the stream holds the mouse. Neither is in
-the pinned client. If phase 2's fork half is the next job, that branch is
-probably the base you want rather than `master`. Everything else over there
-(`SDL3`, `weblate`, `appimage_kms`, dependabot) is inherited from upstream.
-
-Phase 2's fork half sits on top of that, on `dusk-session-channel`. Merging
-it brings `dusk-overlay` along; the pinned client gets neither until a new
-`dusk-v*` tag and a `CLIENT_TAG` bump.
+`main` is the only branch left in dusk. In the fork, `dusk-overlay` and
+`dusk-session-channel` are both merged into `master`, so new fork work
+starts from `master`. Everything else over there (`SDL3`, `weblate`,
+`appimage_kms`, dependabot) is inherited from upstream.
 
 `linux-first-run` is **merged** — what it carried is described under
 *Flatpak* below, and it matters on this machine.
@@ -92,7 +86,7 @@ FFmpeg and libplacebo from source — hours. Don't. Download the published
 client instead and put it where the search already looks:
 
 ```sh
-gh release download dusk-v0.2.1 --repo darkharasho/moonlight-qt \
+gh release download dusk-v0.2.2 --repo darkharasho/moonlight-qt \
   --pattern 'dusk-client-linux-x86_64.tar.gz'
 tar xzf dusk-client-linux-x86_64.tar.gz
 mkdir -p ../moonlight-qt/app && mv moonlight ../moonlight-qt/app/moonlight
@@ -202,8 +196,8 @@ Not done yet:
 
 - `quality` has no row, and `SetQuality` needs the stream renegotiated.
 - Nothing calls `ToClient::ShowOverlay` or `HostDisplay` from Dusk's UI.
-- Released Dusk does not have any of this until a `dusk-v*` tag and a
-  `CLIENT_TAG` bump.
+- The client is tagged (`dusk-v0.2.2`) and pinned, but no Dusk release
+  carries it until the next `v*` tag.
 
 ## Landmines
 

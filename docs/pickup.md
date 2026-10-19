@@ -24,7 +24,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main @ 95e24f1   tags v0.1.0, v0.2.0
+├── dusk/            main @ 2a2cba4   tags v0.1.0, v0.2.0
 └── moonlight-qt/    master @ 199cc93a  tags dusk-v0.1.0, dusk-v0.2.0, dusk-v0.2.1
 ```
 
@@ -34,8 +34,16 @@ release time. That pin is one line — `CLIENT_TAG` in
 means tagging `dusk-v*` in the fork, waiting for its release, and editing
 that line.
 
-Merged branches still on the remotes and safe to delete whenever:
-`windows-linux-release`, `dusk-release-workflow`, `dusk-identity`.
+`main` is the only branch left in dusk; the merged ones are gone. The fork
+still has one of ours, **`dusk-overlay`**, two commits ahead of `master`:
+anchoring the handle inside the video rather than the window, and handing
+the cursor to the overlay while the stream holds the mouse. Neither is in
+the pinned client. If phase 2's fork half is the next job, that branch is
+probably the base you want rather than `master`. Everything else over there
+(`SDL3`, `weblate`, `appimage_kms`, dependabot) is inherited from upstream.
+
+`linux-first-run` is **merged** — what it carried is described under
+*Flatpak* below, and it matters on this machine.
 
 ## Setting up on Bazzite
 
@@ -89,6 +97,19 @@ unavailable` means it did not find this.
 
 Bazzite is a real Sunshine host, and it is already in the grid. Two things
 have never been exercised by anyone:
+
+**Flatpak, and why it matters here.** A Flatpak Moonlight — how most
+distributions ship it, and the only way to install one on an immutable
+system — writes its settings *inside the sandbox*, at
+`~/.var/app/com.moonlight_stream.Moonlight/config`, not `~/.config`. That one
+file holds both the client identity and the remembered-host list, so looking
+only at the native path loses TLS probing and a whole discovery source at
+once, silently. Dusk now checks both, and narrows to the store belonging to
+the client it will actually launch — a Flatpak and a native client keep
+separate identities, and reading the wrong one makes Dusk offer to stream to
+a host the client it runs has never paired with. See
+`src-tauri/src/moonlight/mod.rs`. If pairing state looks wrong on Bazzite,
+start there and check which client `discover` picked.
 
 **The Linux host backend.** `host/platform.rs` drives Sunshine through
 `systemctl --user` — Sunshine ships a *user* unit, so every call carries

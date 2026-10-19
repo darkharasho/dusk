@@ -146,31 +146,42 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      - name: Stage the Moonlight client
+      - name: Fetch the Moonlight client
         env:
           GH_TOKEN: ${{ github.token }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          CLIENT_KEYCHAIN: ci.keychain
         run: |
           set -euo pipefail
           gh release download "$CLIENT_TAG" --repo "$CLIENT_REPO" \
             --pattern 'dusk-client-macos.tar.gz' --dir /tmp/client
+          # tar, not unzip: the framework symlinks have to survive, and
+          # losing them here would fail notarization a quarter of an hour
+          # later with nothing pointing back at this step.
           tar xzf /tmp/client/dusk-client-macos.tar.gz -C /tmp/client
-          ./scripts/stage-client.sh /tmp/client/Moonlight.app
+          find /tmp/client/Moonlight.app/Contents/Frameworks -maxdepth 2 -type l | head -3
 
-      - name: Build, sign and notarize
+      # The app only. The disk image is built afterwards, by package-macos.sh,
+      # because the client has to be inside the app before an image is made
+      # around it — and deliberately without APPLE_ID, so Tauri signs but does
+      # not notarize: notarizing here would staple a ticket to a bundle that
+      # is about to change.
+      - name: Build and sign
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app
+
+      # Insert, sign inside out, re-sign the app, notarize it, build the
+      # image. See the note at the top of the script for why none of this can
+      # go through Tauri's bundle.resources.
+      - name: Insert the client, sign and package
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # --bundles is explicit in every build job rather than left to the
-        # config's "all", so each platform ships exactly what is intended and
-        # a new bundler appearing in a Tauri release cannot add an asset to a
-        # release on its own.
-        run: npm run tauri build -- --target universal-apple-darwin --bundles app,dmg
+          CLIENT_KEYCHAIN: ci.keychain
+        run: ./scripts/package-macos.sh /tmp/client/Moonlight.app
 
       # Same script the local build runs, so the two cannot drift. It
       # notarizes and staples the .dmg (Tauri builds the image after stapling

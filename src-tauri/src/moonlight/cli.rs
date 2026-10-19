@@ -269,12 +269,24 @@ const BUILT_CLIENT: &str = "app\\release\\Moonlight.exe";
 /// A flat `client/` rather than the fork's build layout: what Dusk ships is
 /// an artifact, and reproducing qmake's directory names inside a shipped
 /// bundle would tie the install layout to how the fork happens to build.
-#[cfg(target_os = "macos")]
-const BUNDLED_CLIENT: &str = "client/Moonlight.app/Contents/MacOS/Moonlight";
 #[cfg(target_os = "linux")]
 const BUNDLED_CLIENT: &str = "client/moonlight";
 #[cfg(target_os = "windows")]
 const BUNDLED_CLIENT: &str = "client\\Moonlight.exe";
+
+/// The forked client inside a macOS bundle, relative to Dusk's executable.
+///
+/// `Contents/Helpers` rather than `Contents/Resources`, and found from the
+/// executable rather than from the resource directory, because Tauri's
+/// resource copier does not preserve symlinks. A Qt framework is a versioned
+/// bundle whose top-level binary is a symlink into `Versions/Current`;
+/// flattening that duplicates every framework binary and breaks the structure
+/// the signature seals, which notarization rejects with "the signature of the
+/// binary is invalid". So the client is inserted after Tauri has bundled, by
+/// scripts/package-macos.sh, into the directory Apple expects nested helper
+/// apps to live in.
+#[cfg(target_os = "macos")]
+const HELPER_CLIENT: &str = "../Helpers/Moonlight.app/Contents/MacOS/Moonlight";
 
 /// Where Dusk's own Moonlight client might be.
 ///
@@ -293,7 +305,21 @@ const BUNDLED_CLIENT: &str = "client\\Moonlight.exe";
 /// exactly why every release build so far has streamed without an overlay.
 fn dusk_client(resources: Option<&Path>) -> Vec<PathBuf> {
     let mut out = Vec::new();
+    let _ = &resources;
 
+    // macOS keeps its client beside the executable in Contents/Helpers, for
+    // the symlink reason spelled out on HELPER_CLIENT.
+    #[cfg(target_os = "macos")]
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join(HELPER_CLIENT));
+        }
+    }
+
+    // Windows and Linux have no symlinks to lose — a flat directory of DLLs
+    // and a single AppImage — so there the resource directory is the simpler
+    // mechanism and keeps working.
+    #[cfg(not(target_os = "macos"))]
     if let Some(dir) = resources {
         out.push(dir.join(BUNDLED_CLIENT));
     }
@@ -458,6 +484,7 @@ mod tests {
     /// The regression this whole change exists for: a packaged build looked
     /// only in a `cfg(debug_assertions)` sibling checkout, so every release
     /// fell through to a stock Moonlight and streamed without an overlay.
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn a_bundled_client_is_found_in_the_resource_directory() {
         let dir = std::env::temp_dir().join("dusk-bundled-client-test");
@@ -473,16 +500,40 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// macOS looks beside the executable instead, in Contents/Helpers, and
+    /// must *not* look in the resource directory: Tauri's resource copier
+    /// flattens the symlinks a Qt framework is built from, which produces a
+    /// bundle that notarization rejects. Searching there anyway would make a
+    /// broken copy win over a correct one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_client_is_sought_beside_the_executable_not_in_resources() {
+        let resources = std::env::temp_dir().join("dusk-macos-client-test");
+        let found = dusk_client(Some(&resources));
+
+        assert!(
+            found.iter().any(|p| p.ends_with(HELPER_CLIENT)),
+            "Contents/Helpers has to be searched: {found:?}"
+        );
+        assert!(
+            !found.iter().any(|p| p.starts_with(&resources)),
+            "the resource directory must not be searched on macOS: {found:?}"
+        );
+    }
+
     #[test]
     fn without_a_resource_directory_nothing_is_invented() {
-        // A release build has no sibling checkout to fall back on, so this
-        // must be empty rather than quietly probing paths outside the app.
-        #[cfg(not(debug_assertions))]
-        assert!(dusk_client(None).is_empty());
-
-        // In development the sibling checkout is the whole point.
-        #[cfg(debug_assertions)]
-        assert!(dusk_client(None).iter().all(|p| p.ends_with(BUILT_CLIENT)));
+        // Every candidate has to be one Dusk ships or one a developer
+        // checked out — never a guess at some other Moonlight on the
+        // machine, which is what the ordinary system search is for.
+        for path in dusk_client(None) {
+            let shipped = cfg!(target_os = "macos") && path.ends_with(HELPER_CLIENT);
+            let checked_out = cfg!(debug_assertions) && path.ends_with(BUILT_CLIENT);
+            assert!(
+                shipped || checked_out,
+                "unexpected candidate with no resource directory: {path:?}"
+            );
+        }
     }
 
     #[test]

@@ -183,8 +183,12 @@ Ordered so that each one ships something usable on its own.
 ## Risks worth pricing now
 
 - **Notarizing nested helpers.** Inside-out signing, hardened runtime on each
-  nested binary. This gets fiddly before it gets reliable, and it gates every
-  macOS release once the helpers ship.
+  nested binary. This got fiddly before it got reliable, and it gates every
+  macOS release once the helpers ship. The hard-won parts are written up at
+  the top of `scripts/package-macos.sh`: Tauri's resource copier flattens the
+  symlinks a Qt framework is built from, a bundle's main executable cannot be
+  signed on its own, and `codesign` reads standard input, which silently ends
+  the loop that is signing everything else.
 - **Artifact size.** Roughly 71 MB for the client helper and 100 MB for
   Sunshine, on top of Dusk. Installers go from about 10 MB to around 200 MB.
 - **Fork maintenance.** Dusk now carries a moonlight-qt fork against upstream

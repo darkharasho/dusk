@@ -45,10 +45,34 @@ else
   echo "==> Signing and notarizing"
 fi
 
+# Dusk ships a forked Moonlight client. It is built by its own repository, so
+# a local release build needs one to hand — the released artifact, or a local
+# build of the fork.
+client="${DUSK_CLIENT_APP:-../moonlight-qt/app/Moonlight.app}"
+if [ ! -d "$client" ]; then
+  echo "error: no Moonlight client at $client" >&2
+  echo "       Set DUSK_CLIENT_APP, or download the dusk-v* release of" >&2
+  echo "       darkharasho/moonlight-qt and point at the .app inside it." >&2
+  exit 1
+fi
+
+# The app only. The image is built by package-macos.sh once the client is
+# inside, and APPLE_ID is withheld here so Tauri signs without notarizing —
+# a ticket stapled now would be invalidated by the insert.
+#
 # `op run` resolves every op:// reference and execs the build with those values
 # in its environment. The first run of a session raises an auth prompt.
 # Masking is left on so a secret cannot surface in build output.
-op run --env-file="$env_file" -- npm run tauri build
+build_env="$(mktemp -t dusk-build-env)"
+trap 'rm -f "$build_env"' EXIT
+grep -v -E '^APPLE_(ID|PASSWORD|TEAM_ID)=' "$env_file" > "$build_env"
+op run --env-file="$build_env" -- npm run tauri build -- \
+  --target universal-apple-darwin --bundles app
+
+package_args=""
+[ "$notarize" -eq 0 ] && package_args="--no-notarize"
+# shellcheck disable=SC2086
+op run --env-file="$env_file" -- ./scripts/package-macos.sh "$client" $package_args
 
 # Notarizing the image and verifying the result is shared with the release
 # workflow, which has no `op` — so it reads credentials from the environment

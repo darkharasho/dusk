@@ -13,14 +13,12 @@
 # fork's business and doing it here would put a second Qt toolchain in this
 # repo to maintain.
 #
+# Linux and Windows only. macOS inserts its client after bundling instead —
+# see scripts/package-macos.sh, and the Darwin branch below for why.
+#
 # Usage:
 #   ./scripts/stage-client.sh                 # from the sibling checkout
 #   ./scripts/stage-client.sh /path/to/app    # from somewhere else
-#
-# On macOS, set APPLE_SIGNING_IDENTITY to sign the nested bundle. That has to
-# happen here rather than after bundling: a signature lives inside the bundle
-# it covers, so it survives the copy Tauri does, and signing the outer app
-# afterwards does not reach inside a nested one.
 
 set -euo pipefail
 
@@ -32,7 +30,20 @@ dest="src-tauri/client"
 # .exe among them. `staged` is where Dusk's `BUNDLED_CLIENT` constant looks.
 case "$(uname -s)" in
   Darwin)
-    built="app/Moonlight.app"; staged="$dest/Moonlight.app" ;;
+    # macOS does not stage, deliberately. Tauri's resource copier flattens
+    # symlinks, and a Qt framework's top-level binary is a symlink into
+    # Versions/Current — so staging here would ship a bundle whose frameworks
+    # are duplicated and whose signatures notarization rejects. The client is
+    # inserted after bundling instead.
+    cat >&2 <<'EOF'
+error: macOS inserts the client after bundling, not before.
+
+  npm run tauri build -- --bundles app
+  ./scripts/package-macos.sh <client.app>
+
+See the note at the top of scripts/package-macos.sh for why.
+EOF
+    exit 1 ;;
   Linux)
     built="app/moonlight"; staged="$dest/moonlight" ;;
   MINGW*|MSYS*|CYGWIN*)
@@ -63,9 +74,10 @@ fi
 # build that the new one no longer ships would otherwise be bundled forever.
 find "$dest" -mindepth 1 ! -name README.md -exec rm -rf {} + 2>/dev/null || true
 
-# -R rather than -a: the fork's macOS bundle has no symlinks in it (macdeployqt
-# flattens them), and -R preserves the executable bits, which is the part that
-# matters.
+# -R preserves the executable bits, which is what matters here. Neither
+# platform this runs on has symlinks to lose: Linux ships a single AppImage
+# and Windows a flat directory of DLLs. macOS does, which is exactly why it
+# is not handled here.
 if [[ -d "$source_app" && "$staged" == "$dest" ]]; then
   cp -R "$source_app"/. "$staged"/
 else
@@ -75,29 +87,9 @@ fi
 # Fail here rather than letting a bundle ship that Dusk will silently fall
 # back from at run time, which is the failure this whole path exists to stop.
 case "$(uname -s)" in
-  Darwin)       probe="$staged/Contents/MacOS/Moonlight" ;;
   Linux)        probe="$staged" ;;
   MINGW*|MSYS*|CYGWIN*) probe="$staged/Moonlight.exe" ;;
 esac
 [[ -f "$probe" ]] || { echo "error: no client executable at $probe" >&2; exit 1; }
-
-if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
-  echo "Signing the nested client..."
-  # --options runtime because the outer app is notarized, and notarization
-  # rejects a bundle containing code without the hardened runtime. Inside-out
-  # is codesign's requirement, which --deep satisfies for a leaf bundle.
-  # CLIENT_KEYCHAIN names the keychain holding the identity. On CI that is a
-  # dedicated one, so codesign cannot pick a same-named identity out of
-  # another keychain in the search list.
-  keychain=()
-  [[ -n "${CLIENT_KEYCHAIN:-}" ]] && keychain=(--keychain "$CLIENT_KEYCHAIN")
-
-  codesign --force --deep --timestamp --options runtime \
-    "${keychain[@]}" --sign "$APPLE_SIGNING_IDENTITY" "$staged"
-  codesign --verify --strict --verbose=2 "$staged"
-elif [[ "$(uname -s)" == "Darwin" ]]; then
-  echo "note: APPLE_SIGNING_IDENTITY is unset, so the client is unsigned." >&2
-  echo "      Fine for a local build; notarization will reject it." >&2
-fi
 
 echo "Staged $(du -sh "$staged" | cut -f1) at $staged"

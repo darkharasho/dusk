@@ -1,7 +1,7 @@
 [package]
 name = "dusk"
 version = "0.2.0"
-description = "One shell over Sunshine and Moonlight"
+description = "Your machines, one app: host and stream across them"
 edition = "2021"
 rust-version = "1.77"
 
@@ -31,6 +31,10 @@ sha2 = "0.10"
 # The control socket's one-time token. Already in the tree under rustls;
 # naming it directly beats hand-rolling randomness out of the clock.
 getrandom = "0.2"
+# Each machine's signing key, for vouching to your other machines that a
+# pairing request really comes from one of yours. Already in the tree under
+# rustls.
+ring = "0.17"
 if-addrs = "0.13"
 # The Sunshine web-UI password belongs in the OS keystore, not a JSON file.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

@@ -37,6 +37,9 @@ pub struct AppState {
     /// A request from another Dusk to pair with this machine, waiting on
     /// someone here to allow it.
     pub peer: crate::peer::Requests,
+    /// The GitHub sign-in that lets this machine's own other machines pair
+    /// without being asked.
+    pub account: crate::account::AccountState,
     /// Devices this Dusk currently has a Moonlight session open with.
     ///
     /// The host cannot tell us this: Sunshine reports that *a* session
@@ -196,6 +199,7 @@ impl AppState {
             moonlight,
             credentials: CredentialStore::default(),
             peer: Default::default(),
+            account: Default::default(),
             sessions: RwLock::new(HashSet::new()),
             discovering: AtomicBool::new(false),
             refresh: Notify::new(),

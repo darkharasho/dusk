@@ -142,7 +142,7 @@ export interface Snapshot {
   devices: Device[];
   host: HostState;
   discovering: boolean;
-  /** False when moonlight-qt is missing; nothing client-side works without it. */
+  /** False when the streaming client is missing; nothing client-side works without it. */
   moonlightAvailable: boolean;
   /**
    * Whether the client Dusk found carries the in-stream overlay. Only Dusk's
@@ -151,7 +151,7 @@ export interface Snapshot {
    * pointed at a binary by hand and cannot tell.
    */
   overlayAvailable: boolean | null;
-  /** Whether Dusk holds this machine's Sunshine sign-in. */
+  /** Whether Dusk holds this machine's hosting sign-in. */
   /**
    * Null until the backend has read the keystore, which it does in the
    * background: on macOS that read can put a system password prompt on
@@ -162,4 +162,26 @@ export interface Snapshot {
   hostSignedIn: boolean | null;
   /** False when the sign-in is only held for this run (no OS keystore). */
   hostCredentialsPersistent: boolean;
+}
+
+export interface GithubUser {
+  id: number;
+  login: string;
+  avatarUrl: string;
+}
+
+/** The GitHub sign-in and the machines on its account. */
+export interface AccountView {
+  /** False when this build has no GitHub sign-in at all. */
+  available: boolean;
+  user: GithubUser | null;
+  machines: { name: string; thisMachine: boolean }[];
+  /** False when the sign-in is only held for this run (no OS keystore). */
+  persistent: boolean;
+}
+
+export interface SignInCode {
+  userCode: string;
+  verificationUrl: string;
+  expiresIn: number;
 }

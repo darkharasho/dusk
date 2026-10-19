@@ -57,7 +57,7 @@ export function App() {
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("machines");
-  const [section, setSection] = useState<SettingsSection>("hosting");
+  const [section, setSection] = useState<SettingsSection>("account");
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

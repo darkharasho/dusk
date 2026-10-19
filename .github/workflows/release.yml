@@ -32,6 +32,11 @@ env:
   # macOS still downloads at first run; see scripts/stage-sunshine.sh.
   SUNSHINE_TAG: v2026.914.233613
 
+  # The GitHub OAuth app behind "Sign in with GitHub". A client ID, not a
+  # secret: the device flow has none, so it is baked into the binary. Set it
+  # as a repository variable; unset, the build ships with sign-in disabled.
+  DUSK_GITHUB_CLIENT_ID: ${{ vars.DUSK_GITHUB_CLIENT_ID }}
+
 jobs:
   # Gates all three builds, same as axibridge: a tag must not produce a
   # shippable artifact from code that does not pass its own checks. One

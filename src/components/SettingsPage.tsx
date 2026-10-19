@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import type { Snapshot } from "../types";
+import { AccountSection } from "./AccountSection";
 import { HostingPanel } from "./HostingPanel";
 import { HostSettings } from "./HostSettings";
 import { SetupChecklist } from "./SetupChecklist";
 
-export type SettingsSection = "hosting" | "setup" | "host" | "about";
+export type SettingsSection = "account" | "hosting" | "setup" | "host" | "about";
 
 const SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: "account", label: "Account" },
   { id: "hosting", label: "Hosting" },
   { id: "setup", label: "Setup" },
   { id: "host", label: "Host settings" },
@@ -44,6 +46,8 @@ export function SettingsPage({ name, snapshot, section, onSection }: Props) {
 
       <section className="axi-stack dusk-settings-body">
         <h2>{SECTIONS.find((s) => s.id === section)?.label}</h2>
+
+        {section === "account" && <AccountSection />}
 
         {section === "hosting" && <HostingPanel name={name} snapshot={snapshot} />}
 

@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Device, DownloadPreview, Setup, Snapshot } from "./types";
+import type {
+  AccountView,
+  Device,
+  DownloadPreview,
+  Setup,
+  SignInCode,
+  Snapshot,
+} from "./types";
 
 export const SNAPSHOT_EVENT = "dusk://snapshot";
 export const SESSION_FAILED_EVENT = "dusk://session-failed";
@@ -8,6 +15,7 @@ export const SESSION_STATS_EVENT = "dusk://session-stats";
 export const PAIR_REQUEST_EVENT = "dusk://pair-request";
 export const PAIR_REQUEST_ENDED_EVENT = "dusk://pair-request-ended";
 export const PAIR_PROGRESS_EVENT = "dusk://pair-progress";
+export const ACCOUNT_EVENT = "dusk://account";
 
 /** Another Dusk asking to pair with this machine. */
 export interface PairRequest {
@@ -207,4 +215,32 @@ export function onPairRequestEnded(handler: (id: number) => void): Promise<() =>
 
 export function onPairProgress(handler: (p: PairProgress) => void): Promise<() => void> {
   return listen<PairProgress>(PAIR_PROGRESS_EVENT, (event) => handler(event.payload));
+}
+
+export function getAccount(): Promise<AccountView> {
+  return invoke<AccountView>("get_account");
+}
+
+/** Start a GitHub sign-in; the result arrives later through `onAccount`. */
+export function signInWithGithub(): Promise<SignInCode> {
+  return invoke<SignInCode>("sign_in_with_github");
+}
+
+export function cancelSignIn(): Promise<void> {
+  return invoke("cancel_sign_in");
+}
+
+export function signOutOfGithub(): Promise<void> {
+  return invoke("sign_out_of_github");
+}
+
+export function openSignInPage(): Promise<void> {
+  return invoke("open_sign_in_page");
+}
+
+/** A background sign-in finished; `error` is null when it worked. */
+export function onAccount(
+  handler: (e: { error: string | null }) => void,
+): Promise<() => void> {
+  return listen<{ error: string | null }>(ACCOUNT_EVENT, (event) => handler(event.payload));
 }

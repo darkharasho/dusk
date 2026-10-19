@@ -13,6 +13,12 @@
 //! is the whole difference from typing a PIN, and it is enough — the press
 //! is the consent the PIN used to stand for.
 //!
+//! The one exception is a machine signed in to the same account as this
+//! one. Its request carries a signature over the PIN, made with a key whose
+//! public half is on the account's machine list; when that checks out, the
+//! person already said yes by signing both machines in, and nothing is
+//! asked. See [`crate::account`].
+//!
 //! The PIN crosses the network in the clear, so someone already able to
 //! intercept and rewrite traffic on the LAN at that moment could interpose
 //! on the pairing. That is the same network Dusk already trusts for
@@ -24,7 +30,9 @@
 //! One TCP connection per request, newline-delimited JSON:
 //!
 //! ```text
-//! connecting → host   {"type":"pair","pin":"1234","name":"Mac mini"}
+//! connecting → host   {"type":"pair","pin":"1234","name":"Mac mini",
+//!                      "proof":{"account":1,"machine":"…","signature":"…"}}
+//!                                                   proof only when signed in
 //! host → connecting   {"type":"waiting"}            someone is being asked
 //!                     {"type":"accepted"}           the PIN is in Sunshine
 //!                     {"type":"declined","reason":"..."}
@@ -63,10 +71,19 @@ pub const PAIR_REQUEST_ENDED_EVENT: &str = "dusk://pair-request-ended";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
-    Pair { pin: String, name: String },
+    Pair {
+        pin: String,
+        name: String,
+        /// Present when the asking machine is signed in: its signature over
+        /// the PIN, which lets a machine on the same account skip the prompt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proof: Option<crate::account::Proof>,
+    },
     Waiting,
     Accepted,
-    Declined { reason: String },
+    Declined {
+        reason: String,
+    },
 }
 
 /// What the host's window is asked.
@@ -155,18 +172,44 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
         return;
     };
     let reply = match serde_json::from_str::<Message>(&line) {
-        Ok(Message::Pair { pin, name }) if valid_pin(&pin) => {
+        Ok(Message::Pair { pin, name, proof }) if valid_pin(&pin) => {
             let name = clean_name(&name).unwrap_or_else(|| address.clone());
             // A dropped connection means the asking side gave up; the
             // prompt should go with it.
             let gone = async { while let Ok(Some(_)) = lines.next_line().await {} };
-            handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await
+            match pair_for_account(&state, &pin, &name, proof.as_ref()).await {
+                Some(reply) => reply,
+                None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
+            }
         }
         _ => Message::Declined {
             reason: "Dusk did not understand that request.".into(),
         },
     };
     let _ = send(&mut write, &reply).await;
+}
+
+/// Pair without asking, when the request is signed by another machine on
+/// this machine's own account: the question the prompt would ask was
+/// answered when both were signed in. `None` means ask as usual.
+async fn pair_for_account(
+    state: &Arc<AppState>,
+    pin: &str,
+    name: &str,
+    proof: Option<&crate::account::Proof>,
+) -> Option<Message> {
+    let proof = proof?;
+    let credentials = state.credentials.load().await?;
+    if !state.account.vouches(&state.http, proof, pin).await {
+        return None;
+    }
+    eprintln!("dusk: {name} is on this account; pairing without asking");
+    Some(match enter_pin(&credentials, pin, name).await {
+        Ok(()) => Message::Accepted,
+        Err(err) => Message::Declined {
+            reason: err.to_string(),
+        },
+    })
 }
 
 async fn handle_pair(
@@ -245,7 +288,7 @@ async fn enter_pin(
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     Err(last.unwrap_or(sunshine::ApiError::Failed(
-        "Sunshine did not take the PIN.".into(),
+        "The host did not take the PIN.".into(),
     )))
 }
 
@@ -262,11 +305,22 @@ pub enum Outcome {
 
 /// Ask the Dusk at `address` to enter `pin`. `on_waiting` runs once someone
 /// on the other end is being asked, so the UI can say so.
-pub async fn ask(address: &str, pin: &str, on_waiting: impl FnOnce()) -> Outcome {
-    ask_at(address, PORT, pin, on_waiting).await
+pub async fn ask(
+    address: &str,
+    pin: &str,
+    proof: Option<crate::account::Proof>,
+    on_waiting: impl FnOnce(),
+) -> Outcome {
+    ask_at(address, PORT, pin, proof, on_waiting).await
 }
 
-async fn ask_at(address: &str, port: u16, pin: &str, on_waiting: impl FnOnce()) -> Outcome {
+async fn ask_at(
+    address: &str,
+    port: u16,
+    pin: &str,
+    proof: Option<crate::account::Proof>,
+    on_waiting: impl FnOnce(),
+) -> Outcome {
     let connect = TcpStream::connect((address, port));
     let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), connect).await else {
         return Outcome::NoPeer;
@@ -275,6 +329,7 @@ async fn ask_at(address: &str, port: u16, pin: &str, on_waiting: impl FnOnce()) 
     let request = Message::Pair {
         pin: pin.to_string(),
         name: host_name(),
+        proof,
     };
     if send(&mut write, &request).await.is_err() {
         return Outcome::NoPeer;
@@ -341,7 +396,7 @@ fn clean_name(name: &str) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
-fn host_name() -> String {
+pub fn host_name() -> String {
     gethostname::gethostname()
         .to_string_lossy()
         .trim_end_matches(".local")
@@ -353,10 +408,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_request_without_a_proof_still_parses_and_one_with_it_round_trips() {
+        let old = r#"{"type":"pair","pin":"0042","name":"Mac mini"}"#;
+        assert!(matches!(
+            serde_json::from_str::<Message>(old).unwrap(),
+            Message::Pair { proof: None, .. }
+        ));
+        let signed = Message::Pair {
+            pin: "0042".into(),
+            name: "Mac mini".into(),
+            proof: Some(crate::account::Proof {
+                account: 1,
+                machine: "ab".into(),
+                signature: "cd".into(),
+            }),
+        };
+        let line = serde_json::to_string(&signed).unwrap();
+        assert!(line.len() < MAX_LINE);
+        assert_eq!(serde_json::from_str::<Message>(&line).unwrap(), signed);
+    }
+
+    #[test]
     fn the_wire_format_is_the_one_documented() {
         let pair = Message::Pair {
             pin: "0042".into(),
             name: "Mac mini".into(),
+            proof: None,
         };
         assert_eq!(
             serde_json::to_string(&pair).unwrap(),
@@ -419,7 +496,10 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        let outcome = ask_at("127.0.0.1", port, "1234", || panic!("nobody to wait on")).await;
+        let outcome = ask_at("127.0.0.1", port, "1234", None, || {
+            panic!("nobody to wait on")
+        })
+        .await;
         assert_eq!(outcome, Outcome::NoPeer);
     }
 
@@ -432,7 +512,7 @@ mod tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await;
         });
-        let outcome = ask_at("127.0.0.1", port, "1234", || {}).await;
+        let outcome = ask_at("127.0.0.1", port, "1234", None, || {}).await;
         assert_eq!(outcome, Outcome::NoPeer);
     }
 
@@ -455,7 +535,7 @@ mod tests {
         });
 
         let mut waited = false;
-        let outcome = ask_at("127.0.0.1", port, "1234", || waited = true).await;
+        let outcome = ask_at("127.0.0.1", port, "1234", None, || waited = true).await;
         assert_eq!(outcome, Outcome::Accepted);
         assert!(waited);
     }

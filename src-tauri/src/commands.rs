@@ -143,10 +143,9 @@ async fn target_of(state: &Arc<AppState>, id: &str) -> Result<(String, String), 
 }
 
 fn moonlight(state: &Arc<AppState>) -> Result<&crate::moonlight::Moonlight, String> {
-    state
-        .moonlight
-        .as_ref()
-        .ok_or_else(|| "Moonlight is not installed, or Dusk could not find it.".to_string())
+    state.moonlight.as_ref().ok_or_else(|| {
+        "Dusk's streaming client is missing. Reinstalling Dusk should fix this.".to_string()
+    })
 }
 
 /// How pairing is going, for the drawer that started it.
@@ -189,7 +188,8 @@ pub async fn pair_device(
             },
         );
     };
-    let asking = crate::peer::ask(crate::peer::host_part(&address), &pin, || {
+    let proof = inner.account.proof(&pin).await;
+    let asking = crate::peer::ask(crate::peer::host_part(&address), &pin, proof, || {
         progress("waitingForApproval")
     });
     tokio::pin!(asking);
@@ -237,6 +237,62 @@ pub async fn answer_pair_request(
     } else {
         Err("That request has already gone away.".into())
     }
+}
+
+/// The GitHub sign-in, and the machines on its account.
+#[tauri::command]
+pub async fn get_account(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::account::AccountView, String> {
+    Ok(state.account.view().await)
+}
+
+/// Start a GitHub sign-in. Returns the code to type at GitHub; how it ends
+/// arrives later as an account event.
+#[tauri::command]
+pub async fn sign_in_with_github(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::account::SignInCode, String> {
+    crate::account::begin(app, state.inner().clone()).await
+}
+
+#[tauri::command]
+pub async fn cancel_sign_in(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    crate::account::cancel(&state).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sign_out_of_github(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    crate::account::sign_out(&state).await
+}
+
+/// Open GitHub's code entry page in the browser. Takes no URL from the page
+/// on purpose: the one place this opens is fixed here.
+#[tauri::command]
+pub async fn open_sign_in_page() -> Result<(), String> {
+    let url = crate::account::github::VERIFICATION_URL;
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer.exe"
+    } else {
+        "xdg-open"
+    };
+    // Not waited on with its output piped: an opener may hand off to a
+    // browser that inherits the pipes and outlives any timeout.
+    let mut child = std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not open the browser: {e}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Start streaming an app, and watch the session for the card's sake.
@@ -464,14 +520,14 @@ async fn wait_until_accepted(api: &SunshineApi, credentials: &Credentials) -> Re
             Ok(_) => return Ok(()),
             // Answering and refusing is a real failure, not a slow start.
             Err(sunshine::ApiError::Unauthorized) => {
-                return Err("Sunshine restarted but did not accept the sign-in Dusk set.".into())
+                return Err("Hosting restarted but did not accept the sign-in Dusk set.".into())
             }
             Err(err) => last = err.to_string(),
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     Err(format!(
-        "Sunshine did not come back after restarting: {last}"
+        "Hosting did not come back after restarting: {last}"
     ))
 }
 
@@ -594,7 +650,7 @@ async fn latest_choice(
     )
     .ok_or_else(|| {
         format!(
-            "Sunshine does not publish a build for {} on {}.",
+            "Hosting is not available for {} on {}.",
             std::env::consts::ARCH,
             std::env::consts::OS
         )
@@ -644,9 +700,9 @@ pub async fn install_sunshine(
     // have to make one up. Skipped when Dusk already holds one, so
     // reinstalling over a working host does not replace its password.
     let provisioned = if inner.credentials.load().await.is_none() {
-        provision(&inner)
-            .await
-            .map_err(|e| format!("Sunshine is installed, but Dusk could not set it up: {e}"))
+        provision(&inner).await.map_err(|e| {
+            format!("Hosting is installed, but Dusk could not finish setting it up: {e}")
+        })
     } else {
         Ok(())
     };

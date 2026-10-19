@@ -1,6 +1,6 @@
 ## Project Context
 
-A single polished desktop app that wraps Sunshine (host) and Moonlight (client) behind one device-centric UI, so hosting and connecting stop feeling like two separate programs. Sunshine runs as a managed background service configured through the app's own screens via its local API; Moonlight handles the stream, shelled out to moonlight-qt at first with an embedded moonlight-common-c renderer as a later swap. Networking is accepted as-is — LAN or the user's own VPN, with Sunshine's existing pairing and mDNS discovery — so there are no accounts, rendezvous servers, or relay infrastructure to run. The core payoff is a device grid where every machine appears as a card showing online, paired, and hosting/available state.
+A single polished desktop app that wraps Sunshine (host) and Moonlight (client) behind one device-centric UI, so hosting and connecting stop feeling like two separate programs. Sunshine runs as a managed background service configured through the app's own screens via its local API; Moonlight handles the stream, shelled out to moonlight-qt at first with an embedded moonlight-common-c renderer as a later swap. Networking is accepted as-is — LAN or the user's own VPN, with Sunshine's existing pairing and mDNS discovery — so there are no rendezvous servers or relay infrastructure to run. An optional GitHub sign-in lets a person's own machines trust each other and pair without a PIN; it needs no server of Dusk's own. The UI presents all of this as Dusk itself and does not name Sunshine or Moonlight outside the licence notice. The core payoff is a device grid where every machine appears as a card showing online, paired, and hosting/available state.
 
 ## Goals
 
@@ -13,7 +13,7 @@ A single polished desktop app that wraps Sunshine (host) and Moonlight (client) 
 
 ## Out of scope
 
-- No account system, rendezvous service, or user identity layer
+- No account system of Dusk's own, rendezvous service, or identity server (GitHub sign-in is optional and only vouches for your own machines)
 - No UDP hole punching, NAT traversal, or TURN-style relay fallback
 - No reimplementation of the streaming protocol, encoders, or input handling
 - Not a true Parsec replacement for arbitrary internet connections — LAN or user-provided VPN only

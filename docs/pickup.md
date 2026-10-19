@@ -241,6 +241,31 @@ build cross-checks clean, and none has run end to end yet.
   done about the macOS dock: hiding the client's dock icon changes focus and
   input grab, and wants a Mac to test on.
 
+## Its own app: rebrand, Settings tab, GitHub sign-in (uncommitted until live-tested)
+
+- **No Sunshine or Moonlight in the UI.** User-visible copy says "hosting" and
+  "streaming client". The code keeps its module names. Two deliberate leftovers:
+  the GPL notice under Settings › About › Open-source licences (the licence
+  asks for it to be reachable), and the macOS privacy steps, because System
+  Settings lists the app as "Sunshine" and nothing else would be findable.
+- **Settings tab.** `SettingsPage.tsx` has the sections Account, Hosting
+  (`HostingPanel.tsx`, the old SelfCard), Setup, Host settings and About.
+  `SelfCard.tsx` is now a summary on the Machines tab that links into it.
+- **Sign in with GitHub** (`src-tauri/src/account/`). Uses the device flow,
+  with scope `gist` and no backend. Each machine has an Ed25519 key in the
+  keystore and publishes its public key to one secret gist, "Dusk machines",
+  with one file per machine. A pair request from a signed-in machine carries
+  `proof` (account id, machine id, and a signature over the PIN). The host
+  pairs without a prompt when the account matches and the key checks out
+  against the gist; anything else falls back to the Allow prompt.
+  - **Needs an OAuth App:** GitHub › Settings › Developer settings › OAuth
+    Apps › New, with **Enable Device Flow** ticked. Set its client ID as the
+    repo variable `DUSK_GITHUB_CLIENT_ID`; `release.yml` bakes it in. For dev,
+    export `DUSK_GITHUB_CLIENT_ID` before `npm run dev`. Without it, the
+    Account section says the build has no sign-in.
+  - This deliberately revises CLAUDE.md's "no account system". GitHub is the
+    only party; there is still nothing Dusk hosts.
+
 ## Landmines
 
 Things that cost real time. Most were invisible to a green build.

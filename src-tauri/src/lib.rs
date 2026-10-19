@@ -1,8 +1,9 @@
-//! Dusk — one device-centric shell over Sunshine and Moonlight.
+//! Dusk — every machine you own in one app, hosting and streaming alike.
 //!
 //! M0/M1 scope: the device grid. Discovery and liveness are real; host
 //! control and streaming are the next two milestones.
 
+mod account;
 mod applist;
 mod commands;
 mod discovery;
@@ -184,6 +185,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 primed.credentials.prime().await;
                 state::emit_snapshot(&primed_handle, &primed).await;
+                // After, not alongside: two keystore prompts at once on
+                // macOS is one too many to make sense of.
+                primed.account.prime(&primed.http).await;
             });
 
             if !mock_mode() {
@@ -207,6 +211,11 @@ pub fn run() {
             commands::provision_host,
             commands::accept_pin,
             commands::answer_pair_request,
+            commands::get_account,
+            commands::sign_in_with_github,
+            commands::cancel_sign_in,
+            commands::sign_out_of_github,
+            commands::open_sign_in_page,
             commands::get_host_config,
             commands::save_host_config,
             commands::get_setup,

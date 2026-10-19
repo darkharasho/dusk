@@ -35,10 +35,17 @@ done
 # Tauri decides whether to notarize purely by whether APPLE_ID is present in
 # the environment, so dropping those three variables is how a build is kept
 # signed-but-not-notarized.
+# One handler for every temporary file this script makes. A second
+# `trap ... EXIT` would replace this rather than add to it, which is how the
+# first of them came to be left behind.
+scratch=""
+cleanup() { [ -n "$scratch" ] && rm -f $scratch; }
+trap cleanup EXIT
+
 env_file=scripts/release.env.tpl
 if [ "$notarize" -eq 0 ]; then
   env_file="$(mktemp -t dusk-release-env)"
-  trap 'rm -f "$env_file"' EXIT
+  scratch="$scratch $env_file"
   grep -v -E '^APPLE_(ID|PASSWORD|TEAM_ID)=' scripts/release.env.tpl > "$env_file"
   echo "==> Signing only (notarization skipped)"
 else
@@ -64,7 +71,7 @@ fi
 # in its environment. The first run of a session raises an auth prompt.
 # Masking is left on so a secret cannot surface in build output.
 build_env="$(mktemp -t dusk-build-env)"
-trap 'rm -f "$build_env"' EXIT
+scratch="$scratch $build_env"
 grep -v -E '^APPLE_(ID|PASSWORD|TEAM_ID)=' "$env_file" > "$build_env"
 op run --env-file="$build_env" -- npm run tauri build -- \
   --target universal-apple-darwin --bundles app

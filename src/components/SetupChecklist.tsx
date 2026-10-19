@@ -13,10 +13,6 @@ import {
 } from "../api";
 import type { DownloadPreview, Setup, Step } from "../types";
 
-interface Props {
-  onClose(): void;
-}
-
 /** Bytes as something a person reads, not a number with nine digits. */
 function megabytes(bytes: number): string {
   return `${Math.round(bytes / 1_000_000)} MB`;
@@ -41,11 +37,11 @@ function stateChip(step: Step): { className: string; label: string } {
  * First-run setup, as a checklist rather than a wizard.
  *
  * A wizard assumes nothing is done, which is wrong for most people here —
- * Sunshine is often already installed and running, and the only outstanding
+ * hosting is often already installed and running, and the only outstanding
  * item might be a firewall rule. Every step shows its own state and can be
  * run on its own.
  */
-export function SetupChecklist({ onClose }: Props) {
+export function SetupChecklist() {
   const [setup, setSetup] = useState<Setup | null>(null);
   const [preview, setPreview] = useState<DownloadPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,7 +140,7 @@ export function SetupChecklist({ onClose }: Props) {
    * Every step Dusk can do, in order, from one press. The list of what it
    * will do is on screen beside the button, so the press is the consent.
    * Re-reads the checklist after each step, because one step often finishes
-   * another: installing also sets up the sign-in, which also starts Sunshine.
+   * another: installing also sets up the sign-in, which also starts hosting.
    */
   async function setUpEverything() {
     setBusy(true);
@@ -174,177 +170,159 @@ export function SetupChecklist({ onClose }: Props) {
     setup?.steps.filter((s) => s.automatable && s.state.kind === "todo") ?? [];
 
   return (
-    <>
-      <div className="axi-scrim" onClick={onClose} />
-      <aside className="axi-drawer" role="dialog" aria-label="Set up hosting">
-        <div className="axi-drawer__head">
-          <h2>Set up hosting</h2>
-          <button
-            type="button"
-            className="axi-drawer__close"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ×
-          </button>
+    <div className="axi-stack">
+      {error && (
+        <div className="axi-notice axi-notice--danger">
+          <span className="axi-notice__icon" aria-hidden="true">
+            !
+          </span>
+          <p>{error}</p>
         </div>
+      )}
 
-        <div className="axi-drawer__body axi-stack dusk-settings">
-          {error && (
-            <div className="axi-notice axi-notice--danger">
-              <span className="axi-notice__icon" aria-hidden="true">
-                !
-              </span>
-              <p>{error}</p>
-            </div>
-          )}
-
-          {preview && (
-            <div className="axi-notice">
-              <span className="axi-notice__icon" aria-hidden="true">
-                ↓
-              </span>
-              <div className="axi-stack">
-                <p>
-                  Sunshine {preview.version} · {preview.asset} ·{" "}
-                  {megabytes(preview.size)}
-                </p>
-                {preview.bundled ? (
-                  <p>
-                    This Sunshine comes with Dusk, so nothing is downloaded.
-                    Dusk checks it against the checksum recorded when this
-                    release was built before installing it.
-                  </p>
-                ) : preview.verifiable ? (
-                  <p>
-                    {/* Say exactly what the check is worth. The digest comes
-                        from the same service as the file, so it proves the
-                        bytes arrived intact — not that the release is
-                        genuine. */}
-                    Dusk will check the download against the checksum GitHub
-                    publishes for it. That confirms the file arrived intact,
-                    not who built it.
-                  </p>
-                ) : (
-                  <p className="axi-ink-danger">
-                    This release has no checksum, so Dusk will not install it.
-                  </p>
-                )}
-                {progress && progress.total > 0 ? (
-                  <>
-                    {/* Rule 9: a proportion is drawn as length at full
-                        strength, never as a faded fill. */}
-                    <div className="axi-meter">
-                      <span
-                        className="axi-meter__fill"
-                        style={
-                          {
-                            "--axi-meter-v": `${Math.round(
-                              (progress.received / progress.total) * 100,
-                            )}%`,
-                          } as React.CSSProperties
-                        }
-                      />
-                    </div>
-                    <p className="axi-ink-faint">
-                      {megabytes(progress.received)} of{" "}
-                      {megabytes(progress.total)}
-                    </p>
-                  </>
-                ) : (
-                  preview.verifiable && (
-                    <div className="axi-row">
-                      <button
-                        type="button"
-                        className="axi-btn axi-btn--primary"
-                        disabled={busy}
-                        onClick={runInstall}
-                      >
-                        {busy
-                          ? "Installing"
-                          : preview.bundled
-                            ? "Install"
-                            : "Download and install"}
-                      </button>
-                      <button
-                        type="button"
-                        className="axi-btn axi-btn--ghost"
-                        disabled={busy}
-                        onClick={() => setPreview(null)}
-                      >
-                        Not now
-                      </button>
-                    </div>
-                  )
-                )}
-              </div>
-            </div>
-          )}
-
-          {!setup && !error && <p className="axi-ink-dim">Checking this machine.</p>}
-
-          {automatic.length > 0 && !preview && (
-            <div className="axi-well axi-stack">
-              <p>
-                Dusk can do {automatic.length === 1 ? "this" : "these"} for
-                you: {automatic.map((s) => s.title.toLowerCase()).join(", ")}.
-                Your system may ask for your password.
-              </p>
-              <div className="axi-row">
-                <button
-                  type="button"
-                  className="axi-btn axi-btn--primary"
-                  disabled={busy}
-                  onClick={setUpEverything}
-                >
-                  {busy ? "Setting up" : "Set up this machine"}
-                </button>
-              </div>
-            </div>
-          )}
-
+      {preview && (
+        <div className="axi-notice">
+          <span className="axi-notice__icon" aria-hidden="true">
+            ↓
+          </span>
           <div className="axi-stack">
-            {setup?.steps.map((step) => {
-              const chip = stateChip(step);
-              const done = step.state.kind === "done";
-              const skip = step.state.kind === "notNeeded";
-              return (
-                <div className="axi-panel axi-panel--tile axi-stack" key={step.id}>
-                  <div className="axi-row">
-                    <strong>{step.title}</strong>
-                    <span className={`${chip.className} dusk-row__end`}>
-                      {chip.label}
-                    </span>
-                  </div>
-                  <p className="axi-ink-dim">
-                    {step.state.kind === "notNeeded"
-                      ? step.state.reason
-                      : step.detail}
-                  </p>
-                  {!done && !skip && (
-                    <div className="axi-row">
-                      <button
-                        type="button"
-                        className="axi-btn axi-btn--sm"
-                        disabled={busy}
-                        onClick={() => act(step)}
-                      >
-                        {step.automatable ? "Do this" : "Show me"}
-                      </button>
-                    </div>
-                  )}
+            <p>
+              Hosting {preview.version} · {megabytes(preview.size)}
+            </p>
+            {preview.bundled ? (
+              <p>
+                This comes with Dusk, so nothing is downloaded.
+                Dusk checks it against the checksum recorded when this
+                release was built before installing it.
+              </p>
+            ) : preview.verifiable ? (
+              <p>
+                {/* Say exactly what the check is worth. The digest comes
+                    from the same service as the file, so it proves the
+                    bytes arrived intact — not that the release is
+                    genuine. */}
+                Dusk will check the download against the checksum GitHub
+                publishes for it. That confirms the file arrived intact,
+                not who built it.
+              </p>
+            ) : (
+              <p className="axi-ink-danger">
+                This release has no checksum, so Dusk will not install it.
+              </p>
+            )}
+            {progress && progress.total > 0 ? (
+              <>
+                {/* Rule 9: a proportion is drawn as length at full
+                    strength, never as a faded fill. */}
+                <div className="axi-meter">
+                  <span
+                    className="axi-meter__fill"
+                    style={
+                      {
+                        "--axi-meter-v": `${Math.round(
+                          (progress.received / progress.total) * 100,
+                        )}%`,
+                      } as React.CSSProperties
+                    }
+                  />
                 </div>
-              );
-            })}
+                <p className="axi-ink-faint">
+                  {megabytes(progress.received)} of{" "}
+                  {megabytes(progress.total)}
+                </p>
+              </>
+            ) : (
+              preview.verifiable && (
+                <div className="axi-row">
+                  <button
+                    type="button"
+                    className="axi-btn axi-btn--primary"
+                    disabled={busy}
+                    onClick={runInstall}
+                  >
+                    {busy
+                      ? "Installing"
+                      : preview.bundled
+                        ? "Install"
+                        : "Download and install"}
+                  </button>
+                  <button
+                    type="button"
+                    className="axi-btn axi-btn--ghost"
+                    disabled={busy}
+                    onClick={() => setPreview(null)}
+                  >
+                    Not now
+                  </button>
+                </div>
+              )
+            )}
           </div>
+        </div>
+      )}
 
+      {!setup && !error && <p className="axi-ink-dim">Checking this machine.</p>}
+
+      {automatic.length > 0 && !preview && (
+        <div className="axi-well axi-stack">
+          <p>
+            Dusk can do {automatic.length === 1 ? "this" : "these"} for
+            you: {automatic.map((s) => s.title.toLowerCase()).join(", ")}.
+            Your system may ask for your password.
+          </p>
           <div className="axi-row">
-            <button type="button" className="axi-btn axi-btn--ghost" onClick={refresh}>
-              Check again
+            <button
+              type="button"
+              className="axi-btn axi-btn--primary"
+              disabled={busy}
+              onClick={setUpEverything}
+            >
+              {busy ? "Setting up" : "Set up this machine"}
             </button>
           </div>
         </div>
-      </aside>
-    </>
+      )}
+
+      <div className="axi-stack">
+        {setup?.steps.map((step) => {
+          const chip = stateChip(step);
+          const done = step.state.kind === "done";
+          const skip = step.state.kind === "notNeeded";
+          return (
+            <div className="axi-panel axi-panel--tile axi-stack" key={step.id}>
+              <div className="axi-row">
+                <strong>{step.title}</strong>
+                <span className={`${chip.className} dusk-row__end`}>
+                  {chip.label}
+                </span>
+              </div>
+              <p className="axi-ink-dim">
+                {step.state.kind === "notNeeded"
+                  ? step.state.reason
+                  : step.detail}
+              </p>
+              {!done && !skip && (
+                <div className="axi-row">
+                  <button
+                    type="button"
+                    className="axi-btn axi-btn--sm"
+                    disabled={busy}
+                    onClick={() => act(step)}
+                  >
+                    {step.automatable ? "Do this" : "Show me"}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="axi-row">
+        <button type="button" className="axi-btn axi-btn--ghost" onClick={refresh}>
+          Check again
+        </button>
+      </div>
+    </div>
   );
 }

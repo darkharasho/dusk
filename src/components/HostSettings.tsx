@@ -8,11 +8,7 @@ import {
   type Setting,
 } from "../sunshineSchema";
 
-interface Props {
-  onClose(): void;
-}
-
-/** Sunshine reports almost everything as a string, so that is what we send. */
+/** The host reports almost everything as a string, so that is what we send. */
 function toWire(control: Control, raw: string | boolean): string {
   if (control.kind === "toggle") return raw ? "enabled" : "disabled";
   return String(raw);
@@ -24,14 +20,14 @@ function isOn(value: unknown): boolean {
 }
 
 /**
- * The host's settings, replacing Sunshine's web UI.
+ * The host's settings, drawn natively from what the host reports.
  *
  * Curated settings get a considered control; everything else is rendered
  * from its own value into "Everything else". That is what makes coverage
  * total without hand-mirroring a hundred fields — and it means a setting
- * added by a future Sunshine appears here on its own.
+ * added by a future host version appears here on its own.
  */
-export function HostSettings({ onClose }: Props) {
+export function HostSettings() {
   const [config, setConfig] = useState<HostConfig | null>(null);
   const [edits, setEdits] = useState<HostConfig>({});
   const [error, setError] = useState<string | null>(null);
@@ -91,79 +87,58 @@ export function HostSettings({ onClose }: Props) {
   }
 
   return (
-    <>
-      <div className="axi-scrim" onClick={onClose} />
-      <aside
-        className="axi-drawer axi-drawer--full"
-        role="dialog"
-        aria-label="Host settings"
-      >
-        <div className="axi-drawer__head">
-          <h2>Host settings</h2>
+    <div className="axi-stack dusk-settings">
+      {error && (
+        <div className="axi-notice axi-notice--danger">
+          <span className="axi-notice__icon" aria-hidden="true">
+            !
+          </span>
+          <p>{error}</p>
+        </div>
+      )}
+
+      {!config && !error && <p className="axi-ink-dim">Reading settings.</p>}
+
+      {groups.map((group) => (
+        <section key={group.name}>
+          <h3 className="axi-eyebrow">{group.name}</h3>
+          <div className="axi-stack">
+            {group.items.map(({ setting, value }) => (
+              <Field
+                key={setting.key}
+                setting={setting}
+                value={edits[setting.key] ?? value}
+                changed={setting.key in edits}
+                onChange={(v) => set(setting.key, v)}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+
+      {config && (
+        <div className="axi-row dusk-savebar">
+          {saved && <span className="axi-ink-ok dusk-row__end">Saved.</span>}
+          <span className={saved ? "" : "dusk-row__end"} />
           <button
             type="button"
-            className="axi-drawer__close"
-            onClick={onClose}
-            aria-label="Close"
+            className="axi-btn"
+            disabled={!dirty || saving}
+            onClick={() => save(false)}
           >
-            ×
+            {saving ? "Saving" : `Save${dirty ? ` ${dirty}` : ""}`}
+          </button>
+          <button
+            type="button"
+            className="axi-btn axi-btn--primary"
+            disabled={!dirty || saving}
+            onClick={() => save(true)}
+          >
+            Save and restart
           </button>
         </div>
-
-        <div className="axi-drawer__body axi-stack dusk-settings">
-          {error && (
-            <div className="axi-notice axi-notice--danger">
-              <span className="axi-notice__icon" aria-hidden="true">
-                !
-              </span>
-              <p>{error}</p>
-            </div>
-          )}
-
-          {!config && !error && <p className="axi-ink-dim">Reading settings.</p>}
-
-          {groups.map((group) => (
-            <section key={group.name}>
-              <h3 className="axi-eyebrow">{group.name}</h3>
-              <div className="axi-stack">
-                {group.items.map(({ setting, value }) => (
-                  <Field
-                    key={setting.key}
-                    setting={setting}
-                    value={edits[setting.key] ?? value}
-                    changed={setting.key in edits}
-                    onChange={(v) => set(setting.key, v)}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-
-        {config && (
-          <div className="axi-modal__foot">
-            {saved && <span className="axi-ink-ok dusk-row__end">Saved.</span>}
-            <span className={saved ? "" : "dusk-row__end"} />
-            <button
-              type="button"
-              className="axi-btn"
-              disabled={!dirty || saving}
-              onClick={() => save(false)}
-            >
-              {saving ? "Saving" : `Save${dirty ? ` ${dirty}` : ""}`}
-            </button>
-            <button
-              type="button"
-              className="axi-btn axi-btn--primary"
-              disabled={!dirty || saving}
-              onClick={() => save(true)}
-            >
-              Save and restart
-            </button>
-          </div>
-        )}
-      </aside>
-    </>
+      )}
+    </div>
   );
 }
 

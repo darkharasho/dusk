@@ -113,3 +113,70 @@ body,
   display: block;
   flex: 0 0 auto;
 }
+
+/* Settings: a column of sections beside the one being shown. */
+.dusk-settings-page {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+.dusk-settings-nav {
+  display: grid;
+  gap: 2px;
+  position: sticky;
+  top: 16px;
+}
+
+.dusk-settings-nav__item {
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--axi-radius);
+  background: none;
+  color: var(--axi-text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dusk-settings-nav__item:hover {
+  color: var(--axi-text);
+  border-color: var(--axi-rule);
+}
+
+.dusk-settings-nav__item[aria-current="page"] {
+  color: var(--axi-text);
+  background: var(--axi-surface-raised);
+}
+
+.dusk-settings-body {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .dusk-settings-page {
+    grid-template-columns: 1fr;
+  }
+  .dusk-settings-nav {
+    position: static;
+    grid-auto-flow: column;
+    overflow-x: auto;
+  }
+}
+
+/* The host settings form is long, so Save follows it down the page. */
+.dusk-savebar {
+  position: sticky;
+  bottom: 0;
+  padding-block: 12px;
+  background: var(--axi-ground);
+  border-top: 1px solid var(--axi-rule);
+}
+
+.dusk-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: block;
+}

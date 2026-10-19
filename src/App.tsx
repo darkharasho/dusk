@@ -6,9 +6,10 @@ import { DeviceCard } from "./components/DeviceCard";
 import { SelfCard } from "./components/SelfCard";
 import { AddDeviceDialog } from "./components/AddDeviceDialog";
 import { DeviceDrawer } from "./components/DeviceDrawer";
-import { HostSettings } from "./components/HostSettings";
-import { SetupChecklist } from "./components/SetupChecklist";
 import { PairRequestPrompt } from "./components/PairRequestPrompt";
+import { SettingsPage, type SettingsSection } from "./components/SettingsPage";
+
+type Tab = "machines" | "settings";
 
 /** Lit machines first, then alphabetical, so the actionable ones stay on top. */
 const TONE_ORDER = { hosting: 0, ready: 1, unpaired: 2, offline: 3 } as const;
@@ -26,7 +27,7 @@ function Masthead({ children }: { children?: React.ReactNode }) {
       <div className="axi-mast__in">
         <span className="axi-brand">
           {/* The mark, not the language's lettered sigil: a crescent with
-              the sun in its curve — Moonlight and Sunshine, two things. */}
+              the sun in its curve — the hour between day and night. */}
           <svg
             className="dusk-mark"
             viewBox="0 0 64 64"
@@ -42,7 +43,7 @@ function Masthead({ children }: { children?: React.ReactNode }) {
           </svg>
           <span className="axi-brand__name">
             Dusk
-            <small>Sunshine and Moonlight</small>
+            <small>All your machines</small>
           </span>
         </span>
         {children}
@@ -55,8 +56,8 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [setupOpen, setSetupOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("machines");
+  const [section, setSection] = useState<SettingsSection>("hosting");
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -84,66 +85,99 @@ export function App() {
   const remote = sortDevices(snapshot.devices.filter((d) => !d.isSelf));
   const open = openId ? snapshot.devices.find((d) => d.id === openId) : undefined;
 
+  function openSettings(next: SettingsSection) {
+    setSection(next);
+    setTab("settings");
+  }
+
   return (
     <>
       <Masthead>
-        <div className="axi-row dusk-row__end">
-          {snapshot.discovering && (
-            <>
-              {/* Rule 11: an indicator of work animates a composited
-                  property, so a stalled main thread cannot freeze it into a
-                  lie about the app having crashed. */}
-              <span className="axi-spinner" style={{ "--axi-spinner-size": "14px" } as React.CSSProperties} />
-              <span className="axi-ink-dim">Looking for machines</span>
-            </>
-          )}
-          <button type="button" className="axi-btn axi-btn--ghost" onClick={() => refreshNow()}>
-            Refresh
+        <nav className="axi-tabs" aria-label="Sections">
+          <button
+            type="button"
+            aria-current={tab === "machines" ? "page" : undefined}
+            onClick={() => setTab("machines")}
+          >
+            Machines
           </button>
-          <button type="button" className="axi-btn" onClick={() => setAdding(true)}>
-            Add machine
+          <button
+            type="button"
+            aria-current={tab === "settings" ? "page" : undefined}
+            onClick={() => setTab("settings")}
+          >
+            Settings
           </button>
-        </div>
+        </nav>
+        {tab === "machines" && (
+          <div className="axi-row">
+            {snapshot.discovering && (
+              <>
+                {/* Rule 11: an indicator of work animates a composited
+                    property, so a stalled main thread cannot freeze it into a
+                    lie about the app having crashed. */}
+                <span className="axi-spinner" style={{ "--axi-spinner-size": "14px" } as React.CSSProperties} />
+                <span className="axi-ink-dim">Looking for machines</span>
+              </>
+            )}
+            <button type="button" className="axi-btn axi-btn--ghost" onClick={() => refreshNow()}>
+              Refresh
+            </button>
+            <button type="button" className="axi-btn" onClick={() => setAdding(true)}>
+              Add machine
+            </button>
+          </div>
+        )}
       </Masthead>
 
-      <main className="axi-page dusk-page">
-        <section className="dusk-section">
-          <h2 className="axi-eyebrow">This machine</h2>
-          <SelfCard
+      {tab === "settings" ? (
+        <main className="axi-page dusk-page">
+          <SettingsPage
             name={self?.name ?? "This machine"}
             snapshot={snapshot}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onOpenSetup={() => setSetupOpen(true)}
+            section={section}
+            onSection={setSection}
           />
-        </section>
+        </main>
+      ) : (
+        <main className="axi-page dusk-page">
+          <section className="dusk-section">
+            <h2 className="axi-eyebrow">This machine</h2>
+            <SelfCard
+              name={self?.name ?? "This machine"}
+              snapshot={snapshot}
+              onOpenSettings={openSettings}
+            />
+          </section>
 
-        <section className="dusk-section">
-          <h2 className="axi-eyebrow">Your machines</h2>
-          {remote.length === 0 ? (
-            <div className="axi-panel dusk-empty axi-stack">
-              <strong>No other machines yet</strong>
-              <p className="axi-ink-dim dusk-empty__body">
-                Dusk watches the local network for machines running Sunshine.
-                One reached over a VPN will not announce itself, so add it by
-                address.
-              </p>
-              <button type="button" className="axi-btn" onClick={() => setAdding(true)}>
-                Add machine
-              </button>
-            </div>
-          ) : (
-            <div className="axi-grid" style={{ "--axi-grid-min": "260px" } as React.CSSProperties}>
-              {remote.map((device) => (
-                <DeviceCard
-                  key={device.id}
-                  device={device}
-                  onOpen={() => setOpenId(device.id)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      </main>
+          <section className="dusk-section">
+            <h2 className="axi-eyebrow">Your machines</h2>
+            {remote.length === 0 ? (
+              <div className="axi-panel dusk-empty axi-stack">
+                <strong>No other machines yet</strong>
+                <p className="axi-ink-dim dusk-empty__body">
+                  Dusk watches the local network for machines that can host.
+                  One reached over a VPN will not announce itself, so add it
+                  by address.
+                </p>
+                <button type="button" className="axi-btn" onClick={() => setAdding(true)}>
+                  Add machine
+                </button>
+              </div>
+            ) : (
+              <div className="axi-grid" style={{ "--axi-grid-min": "260px" } as React.CSSProperties}>
+                {remote.map((device) => (
+                  <DeviceCard
+                    key={device.id}
+                    device={device}
+                    onOpen={() => setOpenId(device.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        </main>
+      )}
 
       {adding && (
         <AddDeviceDialog onAdd={handleAdd} onClose={() => setAdding(false)} />
@@ -151,12 +185,6 @@ export function App() {
 
       {/* Resolved from the live snapshot rather than held in state, so an
           open drawer keeps updating as the machine's state changes under it. */}
-      {settingsOpen && <HostSettings onClose={() => setSettingsOpen(false)} />}
-
-      {setupOpen && (
-        <SetupChecklist onClose={() => setSetupOpen(false)} />
-      )}
-
       {open && (
         <DeviceDrawer
           device={open}

@@ -41,15 +41,25 @@ the rest of the UI should not be blocked on that.
 
 Dusk streams through its own [fork of moonlight-qt](https://github.com/darkharasho/moonlight-qt),
 which carries the in-stream overlay. A dev build finds it in a sibling
-checkout; a packaged build carries it as a bundled resource, staged first:
+checkout. A packaged build carries its own copy, and how it gets there
+differs by platform:
 
 ```sh
-./scripts/stage-client.sh         # copies the built fork into src-tauri/client
+./scripts/stage-client.sh                    # Linux and Windows: before the build
+./scripts/package-macos.sh <client.app>      # macOS: after it
 ```
 
-Without it a build still works — Dusk falls back to whatever Moonlight is
-installed, which streams normally and has no overlay. The device drawer says
-so, rather than leaving a missing floating handle to look like a bug.
+macOS is the odd one because Tauri's resource copier does not preserve
+symlinks, and a Qt framework's top-level binary is a symlink into
+`Versions/Current`. Staging one that way duplicates every framework binary
+and breaks the structure its signature seals, which notarization rejects. So
+the client is inserted into `Contents/Helpers` after bundling, signed inside
+out, and the disk image built around the result. The reasoning is written out
+at the top of `scripts/package-macos.sh`.
+
+Without a client a build still works — Dusk falls back to whatever Moonlight
+is installed, which streams normally and has no overlay. The device drawer
+says so, rather than leaving a missing floating handle to look like a bug.
 
 ```sh
 npm run typecheck                 # frontend

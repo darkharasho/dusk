@@ -170,11 +170,17 @@ impl Moonlight {
 
     /// Launch a stream. The child runs for the life of the session, so this
     /// hands it back rather than waiting on it.
+    ///
+    /// `env` carries the control channel's address and token. It goes in the
+    /// environment rather than argv because moonlight-qt rejects arguments it
+    /// does not recognise — so a client that has not learned the protocol
+    /// ignores these, where an argument would stop it starting at all.
     pub fn stream(
         &self,
         host: &str,
         app: &str,
         options: &StreamOptions,
+        env: &[(&'static str, String)],
     ) -> Result<Child, MoonlightError> {
         let mut args: Vec<String> = vec!["stream".into(), host.into(), app.into()];
 
@@ -195,12 +201,19 @@ impl Moonlight {
             args.push(mode.clone());
         }
 
-        Command::new(&self.binary)
+        let mut command = Command::new(&self.binary);
+        command
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .kill_on_drop(false)
+            .kill_on_drop(false);
+
+        for (key, value) in env {
+            command.env(key, value);
+        }
+
+        command
             .spawn()
             .map_err(|e| MoonlightError::Spawn(e.to_string()))
     }
@@ -527,8 +540,19 @@ mod tests {
         // checked out — never a guess at some other Moonlight on the
         // machine, which is what the ordinary system search is for.
         for path in dusk_client(None) {
-            let shipped = cfg!(target_os = "macos") && path.ends_with(HELPER_CLIENT);
-            let checked_out = cfg!(debug_assertions) && path.ends_with(BUILT_CLIENT);
+            // `#[cfg]` and not `cfg!`: the constants themselves only exist
+            // on the platforms that use them, so a runtime check would still
+            // have to name one that is not compiled. Windows caught this.
+            #[cfg(target_os = "macos")]
+            let shipped = path.ends_with(HELPER_CLIENT);
+            #[cfg(not(target_os = "macos"))]
+            let shipped = false;
+
+            #[cfg(debug_assertions)]
+            let checked_out = path.ends_with(BUILT_CLIENT);
+            #[cfg(not(debug_assertions))]
+            let checked_out = false;
+
             assert!(
                 shipped || checked_out,
                 "unexpected candidate with no resource directory: {path:?}"

@@ -98,7 +98,7 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
 ///
 /// All three of these are needed: a window can be hidden, minimised, or simply
 /// behind something, and only the last is fixed by focusing alone.
-fn show_window(app: &AppHandle) {
+pub fn show_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

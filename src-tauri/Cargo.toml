@@ -18,7 +18,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
+# "net" and "io-util" are for the per-session control socket the stream
+# client talks back over — a unix socket here, a named pipe on Windows.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "net", "io-util"] }
 futures-util = "0.3"
 mdns-sd = "0.11"
 quick-xml = "0.36"
@@ -26,6 +28,9 @@ thiserror = "1"
 gethostname = "0.5"
 async-trait = "0.1"
 sha2 = "0.10"
+# The control socket's one-time token. Already in the tree under rustls;
+# naming it directly beats hand-rolling randomness out of the clock.
+getrandom = "0.2"
 if-addrs = "0.13"
 # The Sunshine web-UI password belongs in the OS keystore, not a JSON file.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

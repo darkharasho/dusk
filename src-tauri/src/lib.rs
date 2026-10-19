@@ -14,6 +14,7 @@ mod moonlight;
 mod poller;
 mod registry;
 mod serverinfo;
+mod session;
 mod state;
 mod store;
 mod sunshine;

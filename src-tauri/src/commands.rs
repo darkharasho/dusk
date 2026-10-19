@@ -179,9 +179,16 @@ pub async fn launch_app(
             .ok_or_else(|| "That app is no longer on this machine.".to_string())?
     };
 
+    // The control channel is bound before the client is started, so the
+    // socket is there by the time it is told where to find it. A client that
+    // does not speak the protocol never connects, which costs nothing.
+    let (session, effects) = crate::session::start()
+        .await
+        .map_err(|e| format!("could not open a control channel: {e}"))?;
+
     // moonlight-qt takes the app's title, not its id.
     let child = moonlight(&inner)?
-        .stream(&address, &app_name, &Default::default())
+        .stream(&address, &app_name, &Default::default(), &session.env())
         .map_err(|e| e.to_string())?;
 
     // The session ending is a state change the grid has to notice, and
@@ -191,6 +198,47 @@ pub async fn launch_app(
     // watcher so the grid does not have a window where the stream is up
     // and the card still says Ready.
     inner.set_session_active(&id, true).await;
+
+    // What the in-stream overlay asks for. The overlay raises an intent and
+    // Dusk decides what it means, which is what keeps the policy on this
+    // side of the process boundary.
+    //
+    // The session is moved in here so the socket lives exactly as long as
+    // the stream: when this task ends, the Session drops and the socket goes
+    // with it.
+    let overlay_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let session = session;
+        let mut effects = effects;
+        while let Some(effect) = effects.recv().await {
+            match effect {
+                crate::session::Effect::Overlay(action) => match action {
+                    // Asked rather than killed: a client that is told to go
+                    // can tear its stream down cleanly, and the watcher
+                    // below still catches it however it actually ends.
+                    crate::session::OverlayAction::Disconnect => {
+                        session.send(crate::session::ToClient::Disconnect);
+                    }
+                    crate::session::OverlayAction::Settings => {
+                        crate::tray::show_window(&overlay_app);
+                    }
+                    // Nothing to answer with yet — changing quality in
+                    // flight needs the client to implement SetQuality first.
+                    crate::session::OverlayAction::Quality => {}
+                },
+                // Stats are read but not yet surfaced. Dropping them keeps
+                // the channel draining; putting them on screen is UI work
+                // that belongs with the rest of the session panel.
+                crate::session::Effect::Stats(_) => {}
+                crate::session::Effect::Ended {
+                    reason: Some(reason),
+                } => {
+                    eprintln!("dusk: the client ended the session: {reason}");
+                }
+                _ => {}
+            }
+        }
+    });
 
     let handle = app.clone();
     let watched = inner.clone();

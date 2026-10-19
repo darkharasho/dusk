@@ -206,6 +206,7 @@ pub fn run() {
             commands::pair_device,
             commands::launch_app,
             commands::quit_session,
+            commands::leave_stream,
             commands::start_hosting,
             commands::stop_hosting,
             commands::provision_host,

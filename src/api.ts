@@ -87,6 +87,11 @@ export function launchApp(id: string, appId: string): Promise<void> {
   return invoke("launch_app", { id, appId });
 }
 
+/** Disconnect from a stream, leaving what it runs going on the host. */
+export function leaveStream(id: string): Promise<void> {
+  return invoke("leave_stream", { id });
+}
+
 export function quitSession(id: string): Promise<void> {
   return invoke("quit_session", { id });
 }

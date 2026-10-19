@@ -339,7 +339,7 @@ pub async fn launch_app(
     // The card follows *our* session, not Sunshine's. Marked before the
     // watcher so the grid does not have a window where the stream is up
     // and the card still says Ready.
-    inner.set_session_active(&id, true).await;
+    inner.session_started(&id, session.control()).await;
 
     // What the in-stream overlay asks for. The overlay raises an intent and
     // Dusk decides what it means, which is what keeps the policy on this
@@ -439,7 +439,7 @@ pub async fn launch_app(
         }
         // Cleared however the client ended, including a crash: leaving it
         // set would strand the card mid-session forever.
-        watched.set_session_active(&session_id, false).await;
+        watched.session_ended(&session_id).await;
         watched.request_refresh();
         emit_snapshot(&handle, &watched).await;
     });
@@ -842,6 +842,19 @@ pub async fn save_host_config(
     }
 
     emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
+/// Leave the stream running from this machine, without ending what it is
+/// running. Only a client that speaks the session protocol hears this; the
+/// window only offers it once that client has said something.
+#[tauri::command]
+pub async fn leave_stream(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+    let control = state
+        .session_control(&id)
+        .await
+        .ok_or_else(|| "Nothing is streaming from that machine.".to_string())?;
+    control.send(crate::session::ToClient::Disconnect);
     Ok(())
 }
 

@@ -51,6 +51,24 @@ impl Session {
     pub fn send(&self, message: ToClient) {
         let _ = self.outgoing.send(message);
     }
+
+    /// A handle that can talk to the client from elsewhere in Dusk, such as
+    /// a button in the window, without owning the session.
+    pub fn control(&self) -> Control {
+        Control(self.outgoing.clone())
+    }
+}
+
+/// Somewhere to send messages to one stream's client. Held outside the
+/// session, so it never keeps the socket alive: once the session drops,
+/// sending through this goes nowhere, as it would to a client that left.
+#[derive(Clone)]
+pub struct Control(mpsc::UnboundedSender<ToClient>);
+
+impl Control {
+    pub fn send(&self, message: ToClient) {
+        let _ = self.0.send(message);
+    }
 }
 
 impl Drop for Session {

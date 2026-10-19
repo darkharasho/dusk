@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { onSessionStats, type StreamStats as Stats } from "../api";
+import { leaveStream, onSessionStats, type StreamStats as Stats } from "../api";
 
 /**
  * Live numbers for the stream running from one machine.
@@ -8,15 +8,22 @@ import { onSessionStats, type StreamStats as Stats } from "../api";
  * stock Moonlight this renders nothing rather than a panel of dashes that
  * looks broken. It also starts empty for each stream: the last session's
  * figures are not this one's.
+ *
+ * The same goes for leaving the stream from here: it is asked of the client
+ * over that channel, so it is only offered once the client has spoken on it.
  */
 export function StreamStats({ deviceId }: { deviceId: string }) {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
     setStats(null);
+    setLeaving(false);
+    setError(null);
     onSessionStats((update) => {
       if (!cancelled && update.deviceId === deviceId) setStats(update.stats);
     }).then((fn) => {
@@ -31,6 +38,17 @@ export function StreamStats({ deviceId }: { deviceId: string }) {
   }, [deviceId]);
 
   if (stats === null) return null;
+
+  async function leave() {
+    setLeaving(true);
+    setError(null);
+    try {
+      await leaveStream(deviceId);
+    } catch (err) {
+      setError(String(err));
+      setLeaving(false);
+    }
+  }
 
   const rows: [string, string | null][] = [
     ["Frame rate", fixed(stats.fps, 0, " fps")],
@@ -53,6 +71,15 @@ export function StreamStats({ deviceId }: { deviceId: string }) {
           ),
         )}
       </dl>
+      {/* Not the same as ending the session below: this drops the stream
+          and leaves the game running on the host, to pick up again later. */}
+      <div className="axi-row">
+        <button type="button" className="axi-btn" disabled={leaving} onClick={leave}>
+          {leaving ? "Leaving the stream" : "Leave the stream"}
+        </button>
+        <span className="axi-ink-faint">The host keeps running what you were playing.</span>
+      </div>
+      {error && <p className="axi-ink-dim">{error}</p>}
     </>
   );
 }

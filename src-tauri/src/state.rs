@@ -1,6 +1,6 @@
 //! Shared application state and the one way the frontend learns about it.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -45,7 +45,10 @@ pub struct AppState {
     /// The host cannot tell us this: Sunshine reports that *a* session
     /// exists, not whose, and it keeps one open after its client goes
     /// away. Only the side that launched the client knows.
-    sessions: RwLock<HashSet<DeviceId>>,
+    ///
+    /// Each carries the way to talk to that stream's client, for the
+    /// controls in Dusk's own window.
+    sessions: RwLock<HashMap<DeviceId, crate::session::Control>>,
     discovering: AtomicBool,
     refresh: Notify,
 }
@@ -200,7 +203,7 @@ impl AppState {
             credentials: CredentialStore::default(),
             peer: Default::default(),
             account: Default::default(),
-            sessions: RwLock::new(HashSet::new()),
+            sessions: RwLock::new(HashMap::new()),
             discovering: AtomicBool::new(false),
             refresh: Notify::new(),
         }
@@ -245,17 +248,23 @@ impl AppState {
     }
 
     /// Note that a stream to this device has started or ended here.
-    pub async fn set_session_active(&self, id: &str, active: bool) {
-        let mut sessions = self.sessions.write().await;
-        if active {
-            sessions.insert(id.to_string());
-        } else {
-            sessions.remove(id);
-        }
+    pub async fn session_started(&self, id: &str, control: crate::session::Control) {
+        self.sessions.write().await.insert(id.to_string(), control);
+    }
+
+    pub async fn session_ended(&self, id: &str) {
+        self.sessions.write().await.remove(id);
+    }
+
+    /// The way to talk to the stream running from this device, if there is
+    /// one. Whether its client is listening is another matter.
+    pub async fn session_control(&self, id: &str) -> Option<crate::session::Control> {
+        self.sessions.read().await.get(id).cloned()
     }
 
     pub async fn snapshot(&self) -> Snapshot {
-        let sessions = self.sessions.read().await.clone();
+        let sessions: std::collections::HashSet<DeviceId> =
+            self.sessions.read().await.keys().cloned().collect();
         let mut devices = self.registry.read().await.devices();
         for device in &mut devices {
             // Or-ed rather than assigned: mock fixtures set this directly

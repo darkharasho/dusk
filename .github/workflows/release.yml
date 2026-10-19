@@ -418,34 +418,3 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           gh release edit "$tag" --draft=false
-
-      - name: Post to Discord
-        if: ${{ vars.DISCORD_WEBHOOK_URL != '' }}
-        env:
-          DISCORD_WEBHOOK_URL: ${{ vars.DISCORD_WEBHOOK_URL }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-
-          export TAG="$tag"
-          export RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
-          NOTES=$(gh release view "$tag" --json body --jq '.body' 2>/dev/null || echo "")
-          export NOTES
-
-          payload=$(python3 -c "
-          import json, os
-
-          notes = os.environ.get('NOTES', '')
-          if len(notes) > 3800:
-              notes = notes[:3800] + '\n\n*... see full notes on GitHub*'
-
-          print(json.dumps({'embeds': [{
-              'title': f\"Dusk {os.environ['TAG']}\",
-              'url': os.environ['RELEASE_URL'],
-              'description': notes or 'A new version of Dusk is available!',
-              'color': 0x6366F1,
-              'footer': {'text': 'Dusk Release'},
-          }]}))
-          ")
-
-          curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL"

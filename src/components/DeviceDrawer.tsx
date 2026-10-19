@@ -141,9 +141,8 @@ export function DeviceDrawer({
                 !
               </span>
               <p>
-                Moonlight is not installed, so Dusk cannot pair or stream yet.
-                Install it, or point Dusk at it with{" "}
-                <code className="axi-code">DUSK_MOONLIGHT_BIN</code>.
+                Dusk&rsquo;s streaming client is missing, so it cannot pair or
+                stream yet. Reinstalling Dusk should fix this.
               </p>
             </div>
           )}
@@ -196,8 +195,8 @@ export function DeviceDrawer({
                   is broken unless Dusk names which client it got. */}
               {overlayAvailable === false && (
                 <p className="axi-ink-dim">
-                  This is a stock Moonlight, so the in-stream overlay is
-                  unavailable — ending a session means coming back here.
+                  The in-stream controls are unavailable with this streaming
+                  client, so ending a session means coming back here.
                 </p>
               )}
 
@@ -271,8 +270,8 @@ function PairPanel({
         <p>Type this PIN on {name} to finish pairing.</p>
         <p className="dusk-pin">{pin}</p>
         <p className="axi-ink-dim">
-          {name} is not running Dusk, so it cannot be asked directly. In Dusk
-          that is Accept a PIN; otherwise it is Sunshine&rsquo;s own web page.
+          {name} did not answer as Dusk, so it cannot be asked directly. In
+          Dusk, that is Settings › Hosting › Accept a PIN.
         </p>
       </div>
     );

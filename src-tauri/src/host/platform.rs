@@ -90,7 +90,7 @@ impl HostBackend for WindowsHost {
             Ok(())
         } else {
             Err(HostError::Failed(
-                "Windows did not let Dusk set up Sunshine's sign-in.".into(),
+                "Windows did not let Dusk set up hosting.".into(),
             ))
         }
     }
@@ -142,13 +142,13 @@ async fn elevated_sc(verb: &str) -> Result<(), HostError> {
     // to whatever PowerShell said.
     Err(HostError::Failed(match run.status {
         // 1060: the service is not installed.
-        Some(1060) => "Sunshine is not installed as a service on this machine.".into(),
+        Some(1060) => "Hosting is not installed as a service on this machine.".into(),
         // 5: access denied, which here means the prompt was refused.
         Some(5) => "Windows did not grant permission to change the service.".into(),
         _ => {
             let said = run.message();
             if said == "no output" {
-                format!("Windows could not {verb} the Sunshine service.")
+                format!("Windows could not {verb} the hosting service.")
             } else {
                 said
             }
@@ -287,7 +287,7 @@ async fn installed_unit() -> Option<&'static str> {
 }
 
 fn not_installed() -> HostError {
-    HostError::Failed("Sunshine is not installed as a user service on this machine.".into())
+    HostError::Failed("Hosting is not installed as a user service on this machine.".into())
 }
 
 // -------------------------------------------------------------------- macos
@@ -358,7 +358,7 @@ impl HostBackend for MacosHost {
             // Settings. No installer can script them.
             automated_setup: false,
             caveats: vec![
-                "Sunshine treats macOS hosting as experimental.".into(),
+                "Hosting from a Mac is experimental.".into(),
                 "Screen Recording and Accessibility must be granted by hand.".into(),
                 "Controllers are not supported when hosting from a Mac.".into(),
                 "System audio needs a loopback device such as BlackHole.".into(),
@@ -395,7 +395,7 @@ impl HostBackend for MacosHost {
         if !loaded {
             let Some(plist) = Self::agent_plist() else {
                 return Err(HostError::Failed(
-                    "Sunshine's launch agent is missing, so Dusk cannot start it.".into(),
+                    "The hosting launch agent is missing, so Dusk cannot start it.".into(),
                 ));
             };
             let out = service::run(
@@ -430,7 +430,7 @@ impl HostBackend for MacosHost {
 
     async fn set_credentials(&self, credentials: &Credentials) -> Result<(), HostError> {
         let bundle = Self::installed_bundle()
-            .ok_or_else(|| HostError::Failed("Sunshine is not installed on this Mac.".into()))?;
+            .ok_or_else(|| HostError::Failed("Hosting is not installed on this Mac.".into()))?;
         let program = bundle.join("Contents/MacOS/sunshine");
         expect(
             service::run(

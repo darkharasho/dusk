@@ -93,7 +93,7 @@ pub async fn verify(bundled: &Bundled) -> Result<(), String> {
     if digest == bundled.sha256 {
         Ok(())
     } else {
-        Err("The Sunshine installer inside Dusk does not match its checksum, so Dusk will not run it. Reinstalling Dusk should fix this.".into())
+        Err("The hosting installer inside Dusk does not match its checksum, so Dusk will not run it. Reinstalling Dusk should fix this.".into())
     }
 }
 

@@ -74,7 +74,7 @@ export function originLabel(device: Device): string | null {
   const parts = [
     manual ? "added" : null,
     mdns ? "discovered" : null,
-    moonlight ? "from Moonlight" : null,
+    moonlight ? "remembered" : null,
   ].filter((part): part is string => part !== null);
 
   const [first, ...rest] = parts;

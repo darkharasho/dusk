@@ -327,7 +327,7 @@ impl Registry {
         }
         if !device.source.manual {
             return Err(if device.source.moonlight && !device.source.mdns {
-                "That machine came from Moonlight's own list, not added by hand.".into()
+                "That machine was remembered from an earlier stream, not added by hand.".into()
             } else {
                 "That machine was found on the network, not added by hand.".to_string()
             });
@@ -680,7 +680,7 @@ mod tests {
         let mut r = registry();
         let id = r.upsert_moonlight(&known("bazzite", "192.168.1.40", Some("abc-123")));
         let err = r.remove_manual(&id).expect_err("not a manual entry");
-        assert!(err.contains("Moonlight"));
+        assert!(err.contains("earlier stream"));
     }
 
     #[test]

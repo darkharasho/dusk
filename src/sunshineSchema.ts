@@ -69,7 +69,7 @@ export const SETTINGS: Setting[] = [
 
   {
     key: "system_tray",
-    label: "Sunshine's own menu bar icon",
+    label: "The hosting service's own tray icon",
     help: "Dusk turns this off when you sign in, because Dusk puts its own icon there. Turn it back on if you would rather have both.",
     group: "This host",
     control: { kind: "toggle" },
@@ -98,7 +98,7 @@ export const SETTINGS: Setting[] = [
   {
     key: "encoder",
     label: "Encoder",
-    help: "Leave empty to let Sunshine pick the best one it can find.",
+    help: "Leave empty to pick the best one automatically.",
     group: "Picture",
     control: { kind: "text", placeholder: "Chosen automatically" },
   },
@@ -114,7 +114,7 @@ export const SETTINGS: Setting[] = [
     label: "HEVC",
     group: "Picture",
     control: select(
-      ["0", "Let Sunshine decide"],
+      ["0", "Decide automatically"],
       ["1", "Off"],
       ["2", "On"],
       ["3", "On, including 10-bit"],
@@ -125,7 +125,7 @@ export const SETTINGS: Setting[] = [
     label: "AV1",
     group: "Picture",
     control: select(
-      ["0", "Let Sunshine decide"],
+      ["0", "Decide automatically"],
       ["1", "Off"],
       ["2", "On"],
       ["3", "On, including 10-bit"],
@@ -163,7 +163,7 @@ export const SETTINGS: Setting[] = [
   {
     key: "port",
     label: "Base port",
-    help: "Sunshine uses a small range starting here. Change it only if something else has the port.",
+    help: "Hosting uses a small range starting here. Change it only if something else has the port.",
     group: "Network",
     control: { kind: "number", min: 1024, max: 65535 },
   },

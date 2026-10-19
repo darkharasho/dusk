@@ -82,8 +82,8 @@ pub fn build(
     let mut steps = vec![
         step(
             StepId::InstallSunshine,
-            "Install Sunshine",
-            "Dusk installs the Sunshine it ships with, checking it first. A build without one downloads the official release instead.",
+            "Install hosting",
+            "Dusk installs the hosting service it ships with, checking it first. A build without one downloads it instead.",
             if installed {
                 StepState::Done
             } else {
@@ -93,8 +93,8 @@ pub fn build(
         ),
         step(
             StepId::StartService,
-            "Run Sunshine in the background",
-            "So this machine can be reached without Sunshine being open.",
+            "Host in the background",
+            "So this machine can be reached without Dusk being open.",
             match (installed, running) {
                 (false, _) => StepState::Todo,
                 (true, true) => StepState::Done,
@@ -104,8 +104,8 @@ pub fn build(
         ),
         step(
             StepId::Provision,
-            "Let Dusk manage Sunshine",
-            "Dusk gives Sunshine a sign-in of its own and keeps it in this machine's keystore, so it can configure the host and accept pairing PINs. Any password you set in Sunshine's web page stops working.",
+            "Finish setting up hosting",
+            "Dusk gives the hosting service a sign-in of its own and keeps it in this machine's keystore, so it can change settings and accept pairing.",
             if managed {
                 StepState::Done
             } else {
@@ -125,14 +125,14 @@ pub fn build(
             steps.push(step(
                 StepId::ScreenRecording,
                 "Allow screen recording",
-                "Open System Settings › Privacy & Security › Screen Recording and turn on Sunshine.",
+                "Open System Settings › Privacy & Security › Screen Recording and turn on Sunshine, the hosting service Dusk installed.",
                 StepState::Unknown,
                 false,
             ));
             steps.push(step(
                 StepId::Accessibility,
                 "Allow accessibility control",
-                "Open System Settings › Privacy & Security › Accessibility and turn on Sunshine. Without it the other machine cannot control this one.",
+                "Open System Settings › Privacy & Security › Accessibility and turn on Sunshine, the hosting service Dusk installed. Without it the other machine cannot control this one.",
                 StepState::Unknown,
                 false,
             ));
@@ -164,7 +164,7 @@ pub fn build(
             steps.push(step(
                 StepId::Input,
                 "Let other machines control this one",
-                "Adds the system rule that lets Sunshine create a keyboard, mouse and controllers for whoever is streaming. Asks for your password.",
+                "Adds the system rule that lets hosting create a keyboard, mouse and controllers for whoever is streaming. Asks for your password.",
                 if input_ready {
                     StepState::Done
                 } else {
@@ -202,28 +202,28 @@ fn firewall_step(platform: HostPlatform) -> Step {
         // off by default, so there is nothing sensible to automate.
         HostPlatform::Macos => step(
             StepId::Firewall,
-            "Allow Sunshine through the firewall",
-            "macOS asks the first time Sunshine accepts a connection. Answer Allow.",
+            "Allow hosting through the firewall",
+            "macOS asks the first time this machine accepts a stream. Answer Allow.",
             StepState::Unknown,
             false,
         ),
         HostPlatform::Windows => step(
             StepId::Firewall,
-            "Open the firewall for Sunshine",
-            "Adds inbound rules for the ports Sunshine listens on.",
+            "Open the firewall for hosting",
+            "Adds inbound rules for the ports hosting listens on.",
             StepState::Todo,
             true,
         ),
         HostPlatform::Linux => step(
             StepId::Firewall,
-            "Open the firewall for Sunshine",
+            "Open the firewall for hosting",
             "Only needed if you run one. Dusk cannot tell which.",
             StepState::Unknown,
             false,
         ),
         HostPlatform::Mock => step(
             StepId::Firewall,
-            "Open the firewall for Sunshine",
+            "Open the firewall for hosting",
             "Mock host.",
             StepState::Done,
             true,

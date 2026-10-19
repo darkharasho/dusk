@@ -185,7 +185,7 @@ async fn copy_bundle_from(mount: &Path) -> Result<PathBuf, ApplyError> {
         service::run("osascript", &["-e", &script])
             .await
             .map_err(|e| ApplyError::Failed(e.to_string()))?,
-        "could not copy Sunshine into Applications",
+        "could not copy the hosting service into Applications",
     )?;
     Ok(target)
 }
@@ -268,7 +268,7 @@ pub async fn open_firewall(program: &Path) -> Result<(), ApplyError> {
         Ok(())
     } else {
         Err(ApplyError::Failed(
-            "Could not add the firewall rules for Sunshine.".into(),
+            "Could not add the firewall rules for hosting.".into(),
         ))
     }
 }
@@ -277,8 +277,8 @@ pub async fn open_firewall(program: &Path) -> Result<(), ApplyError> {
 fn firewall_script(program: &str) -> String {
     let mut script = String::new();
     for (name, protocol) in [
-        ("Sunshine (inbound TCP)", "TCP"),
-        ("Sunshine (inbound UDP)", "UDP"),
+        ("Dusk hosting (inbound TCP)", "TCP"),
+        ("Dusk hosting (inbound UDP)", "UDP"),
     ] {
         script.push_str(&format!(
             "& netsh.exe advfirewall firewall add rule {} dir=in action=allow {} protocol={protocol} enable=yes\n\
@@ -344,7 +344,7 @@ async fn register_user_unit(home: &Path, program: &Path) -> Result<(), ApplyErro
             service::run("systemctl", args)
                 .await
                 .map_err(|e| ApplyError::Failed(e.to_string()))?,
-            "could not register Sunshine with systemd",
+            "could not register hosting with systemd",
         )?;
     }
     Ok(())
@@ -401,7 +401,7 @@ pub async fn linux_allow_input() -> Result<(), ApplyError> {
         service::run_for("pkexec", &["sh", "-c", &script], service::ELEVATED_TIMEOUT)
             .await
             .map_err(|e| ApplyError::Failed(e.to_string()))?,
-        "could not let Sunshine create input devices",
+        "could not let hosting create input devices",
     )?;
     Ok(())
 }
@@ -485,7 +485,10 @@ mod tests {
             script.contains(r"'program=C:\Program Files\Sunshine\sunshine.exe'"),
             "{script}"
         );
-        assert!(script.contains("'name=Sunshine (inbound UDP)'"), "{script}");
+        assert!(
+            script.contains("'name=Dusk hosting (inbound UDP)'"),
+            "{script}"
+        );
         assert_eq!(script.matches("$LASTEXITCODE").count(), 4, "{script}");
     }
 

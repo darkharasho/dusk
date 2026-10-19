@@ -37,9 +37,9 @@ const STDERR_TAIL: usize = 40;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MoonlightError {
-    #[error("could not run Moonlight: {0}")]
+    #[error("could not start the stream: {0}")]
     Spawn(String),
-    #[error("Moonlight did not answer, so Dusk stopped waiting")]
+    #[error("The streaming client did not answer, so Dusk stopped waiting")]
     TimedOut,
     #[error("{0}")]
     Failed(String),
@@ -320,7 +320,7 @@ fn clean_stderr(stderr: &str) -> String {
         .unwrap_or("");
 
     if message.is_empty() {
-        "Moonlight failed but gave no reason.".into()
+        "The stream failed but gave no reason.".into()
     } else {
         message.to_string()
     }
@@ -511,9 +511,9 @@ mod tests {
     fn silence_still_produces_a_sentence() {
         assert_eq!(
             clean_stderr("Redirecting log output to /tmp/x.log\n"),
-            "Moonlight failed but gave no reason."
+            "The stream failed but gave no reason."
         );
-        assert_eq!(clean_stderr(""), "Moonlight failed but gave no reason.");
+        assert_eq!(clean_stderr(""), "The stream failed but gave no reason.");
     }
 
     /// Regression test for a real hang: `moonlight quit` against a host that

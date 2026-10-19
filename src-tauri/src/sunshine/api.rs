@@ -38,13 +38,11 @@ const METADATA_KEYS: &[&str] = &["platform", "version", "status", "restart_suppo
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
-    #[error("Dusk is not managing Sunshine on this machine yet. Set up hosting to fix that.")]
+    #[error("Hosting is not set up on this machine yet. Set it up in Settings.")]
     NoCredentials,
-    #[error(
-        "Sunshine no longer accepts the sign-in Dusk gave it. Set up hosting to give it a new one."
-    )]
+    #[error("Hosting no longer accepts the sign-in Dusk gave it. Set it up again in Settings.")]
     Unauthorized,
-    #[error("could not reach Sunshine on this machine: {0}")]
+    #[error("could not reach the hosting service on this machine: {0}")]
     Unreachable(String),
     #[error("{0}")]
     Failed(String),
@@ -124,7 +122,7 @@ impl SunshineApi {
         // no client is waiting, so the HTTP status alone is not the verdict.
         if !status.is_success() || !truthy(reply.status.as_ref()) {
             return Err(ApiError::Failed(reply.error.unwrap_or_else(|| {
-                "Sunshine did not accept that PIN. It may have expired.".into()
+                "That PIN was not accepted. It may have expired.".into()
             })));
         }
         Ok(())
@@ -153,7 +151,7 @@ impl SunshineApi {
         }
         if !response.status().is_success() {
             return Err(ApiError::Failed(format!(
-                "Sunshine answered {}",
+                "The hosting service answered {}",
                 response.status()
             )));
         }
@@ -161,7 +159,7 @@ impl SunshineApi {
         match response.json().await {
             Ok(serde_json::Value::Object(map)) => Ok(map),
             Ok(_) => Err(ApiError::Failed(
-                "Sunshine's configuration was not in the expected shape.".into(),
+                "The host's configuration was not in the expected shape.".into(),
             )),
             Err(e) => Err(ApiError::Failed(e.to_string())),
         }
@@ -213,7 +211,7 @@ impl SunshineApi {
 
         if !status.is_success() || !truthy(reply.status.as_ref()) {
             return Err(ApiError::Failed(reply.error.unwrap_or_else(|| {
-                "Sunshine did not accept those settings.".into()
+                "The host did not accept those settings.".into()
             })));
         }
         Ok(())
@@ -262,7 +260,7 @@ impl SunshineApi {
         }
         if !response.status().is_success() {
             return Err(ApiError::Failed(format!(
-                "Sunshine answered {}",
+                "The hosting service answered {}",
                 response.status()
             )));
         }

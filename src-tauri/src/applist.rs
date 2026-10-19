@@ -67,10 +67,8 @@ fn parse(xml: &str) -> Result<Vec<HostApp>, String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) => {
-                if depth == 0 {
-                    status = root_status(&e).unwrap_or(status);
-                }
+            Ok(Event::Empty(e)) if depth == 0 => {
+                status = root_status(&e).unwrap_or(status);
             }
             Ok(Event::Start(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_ascii_lowercase();
@@ -213,7 +211,11 @@ mod live_probe {
             eprintln!("skipping: set DUSK_TEST_HOST to a paired host's address");
             return;
         };
-        let id = crate::moonlight::identity::load().expect("a moonlight identity");
+        // No resource directory: a test is not running out of a bundle, so
+        // the client it finds is a developer's checkout or a system install.
+        let client_bin = crate::moonlight::Moonlight::discover(None);
+        let id =
+            crate::moonlight::identity::load(client_bin.as_ref()).expect("a moonlight identity");
         let client = crate::state::tls_client(&id).expect("a TLS client");
 
         for attempt in 1..=8 {

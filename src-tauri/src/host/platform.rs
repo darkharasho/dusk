@@ -113,7 +113,15 @@ fn parse_sc_running(stdout: &str) -> bool {
 
 // -------------------------------------------------------------------- linux
 
-const LINUX_UNIT: &str = "sunshine";
+/// The user units a Sunshine install may have put on a Linux machine, best
+/// first.
+///
+/// `sunshine` is what a distro package or a hand-written unit uses. The
+/// second is the Flatpak's, which ships its unit under its application id —
+/// so looking only for `sunshine` reports a Flatpak Sunshine as *not
+/// installed*, which on an immutable distribution is the only Sunshine there
+/// can be. Both are user units: the system manager knows neither.
+const LINUX_UNITS: [&str; 2] = ["sunshine", "app-dev.lizardbyte.app.Sunshine"];
 
 pub struct LinuxHost;
 
@@ -140,16 +148,13 @@ impl HostBackend for LinuxHost {
     }
 
     async fn probe(&self) -> Result<HostStatus, HostError> {
-        // Sunshine ships a *user* unit, so every call needs --user; the
-        // system manager does not know this unit exists.
-        let known = service::run("systemctl", &["--user", "cat", LINUX_UNIT]).await?;
-        if !known.ok() {
+        let Some(unit) = installed_unit().await else {
             return Ok(HostStatus::NotInstalled);
-        }
+        };
 
         // `is-active` exits non-zero when inactive, which is information
         // rather than an error — so the stdout word is what we read.
-        let active = service::run("systemctl", &["--user", "is-active", LINUX_UNIT]).await?;
+        let active = service::run("systemctl", &["--user", "is-active", unit]).await?;
 
         Ok(HostStatus::Installed {
             version: None,
@@ -158,12 +163,34 @@ impl HostBackend for LinuxHost {
     }
 
     async fn start(&self) -> Result<(), HostError> {
-        expect(service::run("systemctl", &["--user", "start", LINUX_UNIT]).await?)
+        let unit = installed_unit().await.ok_or_else(not_installed)?;
+        expect(service::run("systemctl", &["--user", "start", unit]).await?)
     }
 
     async fn stop(&self) -> Result<(), HostError> {
-        expect(service::run("systemctl", &["--user", "stop", LINUX_UNIT]).await?)
+        let unit = installed_unit().await.ok_or_else(not_installed)?;
+        expect(service::run("systemctl", &["--user", "stop", unit]).await?)
     }
+}
+
+/// Which of [`LINUX_UNITS`] this machine actually has, if any.
+///
+/// Resolved per call rather than cached, so Sunshine installed while Dusk is
+/// running is picked up on the next tick instead of at the next launch.
+async fn installed_unit() -> Option<&'static str> {
+    for unit in LINUX_UNITS {
+        // Sunshine ships a *user* unit, so every call needs --user; the
+        // system manager does not know these units exist.
+        let known = service::run("systemctl", &["--user", "cat", unit]).await;
+        if known.is_ok_and(|run| run.ok()) {
+            return Some(unit);
+        }
+    }
+    None
+}
+
+fn not_installed() -> HostError {
+    HostError::Failed("Sunshine is not installed as a user service on this machine.".into())
 }
 
 // -------------------------------------------------------------------- macos
@@ -349,5 +376,48 @@ mod tests {
         assert!(!parse_sc_running(
             "        STATE              : 2  START_PENDING \n"
         ));
+    }
+}
+
+/// Exercises the real Linux backend against this machine's Sunshine unit.
+///
+/// Ignored: it needs Sunshine installed as a user unit, and it stops and
+/// starts the service, so it is not something to run under a stream. It
+/// restores whatever state it found.
+#[cfg(all(test, target_os = "linux"))]
+mod live {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn probe_start_and_stop_agree_with_systemd() {
+        let host = LinuxHost;
+
+        let before = host.probe().await.expect("probe");
+        println!("probe: {before:?}");
+        let was_running = match before {
+            HostStatus::Installed { running, .. } => running,
+            other => panic!("Sunshine is not installed as a user unit here: {other:?}"),
+        };
+
+        host.stop().await.expect("stop");
+        let stopped = host.probe().await.expect("probe after stop");
+        println!("after stop: {stopped:?}");
+        assert!(
+            matches!(stopped, HostStatus::Installed { running: false, .. }),
+            "a stopped unit must read as not running, got {stopped:?}"
+        );
+
+        host.start().await.expect("start");
+        let started = host.probe().await.expect("probe after start");
+        println!("after start: {started:?}");
+        assert!(
+            matches!(started, HostStatus::Installed { running: true, .. }),
+            "a started unit must read as running, got {started:?}"
+        );
+
+        if !was_running {
+            host.stop().await.expect("restore");
+        }
     }
 }

@@ -211,7 +211,8 @@ impl AppState {
     pub fn reload_identity(self: &Arc<Self>) {
         let state = self.clone();
         tauri::async_runtime::spawn(async move {
-            let rebuilt = crate::moonlight::identity::load().and_then(|id| tls_client(&id));
+            let rebuilt = crate::moonlight::identity::load(state.moonlight.as_ref())
+                .and_then(|id| tls_client(&id));
             if rebuilt.is_some() {
                 *state.tls.write().await = rebuilt;
             }

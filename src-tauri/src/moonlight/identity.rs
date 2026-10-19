@@ -70,12 +70,17 @@ fn looks_like_private_key(bytes: &[u8]) -> bool {
         || starts_with_pem(bytes, b"-----BEGIN EC PRIVATE KEY-----")
 }
 
-/// Read the identity moonlight-qt is using, if it has one yet.
+/// Read the identity `client` is using, if it has one yet.
 ///
-/// Returns `None` rather than an error when moonlight-qt has never paired:
+/// Returns `None` rather than an error when that client has never paired:
 /// that is an ordinary first-run state, not a fault.
-pub fn load() -> Option<ClientIdentity> {
-    platform::load()
+///
+/// It must be *that* client's identity. Dusk probes hosts with this
+/// certificate to decide whether they are paired, and a host answers for
+/// the certificate it was paired with — so borrowing a second Moonlight's
+/// identity makes the grid describe a client Dusk is not going to run.
+pub fn load(client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
+    platform::load(client)
 }
 
 // ------------------------------------------------------------------- macOS
@@ -90,7 +95,9 @@ mod platform {
         Some(PathBuf::from(home).join("Library/Preferences/com.moonlight-stream.Moonlight.plist"))
     }
 
-    pub fn load() -> Option<ClientIdentity> {
+    /// One store per user here, so which client was chosen does not change
+    /// the answer.
+    pub fn load(_client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
         let value = plist::Value::from_file(store_path()?).ok()?;
         let dict = value.as_dictionary()?;
         let read = |k: &str| dict.get(k)?.as_data().map(<[u8]>::to_vec);
@@ -103,22 +110,25 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
-    use std::path::PathBuf;
 
-    fn store_path() -> Option<PathBuf> {
-        let base = match std::env::var_os("XDG_CONFIG_HOME") {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
-        };
-        Some(base.join("Moonlight Game Streaming Project/Moonlight.conf"))
-    }
-
-    pub fn load() -> Option<ClientIdentity> {
-        let text = std::fs::read_to_string(store_path()?).ok()?;
-        ClientIdentity::from_parts(
-            super::ini_value(&text, "certificate")?,
-            super::ini_value(&text, "key")?,
-        )
+    /// Only the chosen client's own store: a Flatpak Moonlight and a native
+    /// one mint separate identities, and the host binds a pairing to the
+    /// certificate. Reading the other one's would have Dusk probe as a
+    /// client it never runs.
+    ///
+    /// Among that client's stores the first holding a usable identity wins —
+    /// not the first that exists, so a config without one does not hide a
+    /// config that has it.
+    pub fn load(client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
+        crate::moonlight::linux_stores_for(client)
+            .into_iter()
+            .find_map(|path| {
+                let text = std::fs::read_to_string(path).ok()?;
+                ClientIdentity::from_parts(
+                    super::ini_value(&text, "certificate")?,
+                    super::ini_value(&text, "key")?,
+                )
+            })
     }
 }
 
@@ -132,7 +142,9 @@ mod platform {
 
     const SUBKEY: &str = r"Software\Moonlight Game Streaming Project\Moonlight";
 
-    pub fn load() -> Option<ClientIdentity> {
+    /// One store per user here, so which client was chosen does not change
+    /// the answer.
+    pub fn load(_client: Option<&crate::moonlight::Moonlight>) -> Option<ClientIdentity> {
         let key = RegKey::predef(HKEY_CURRENT_USER).open_subkey(SUBKEY).ok()?;
         // QSettings writes a QByteArray to the registry as REG_BINARY.
         let read = |name: &str| -> Option<Vec<u8>> {
@@ -154,7 +166,7 @@ fn ini_value(text: &str, key: &str) -> Option<Vec<u8>> {
         line.split_once('=')
             .is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case(key))
     })?;
-    let raw = line.split_once('=')?.1.trim();
+    let raw = crate::moonlight::unquote(line.split_once('=')?.1.trim());
 
     let payload = raw
         .strip_prefix("@ByteArray(")
@@ -208,6 +220,25 @@ mod tests {
         // Better no TLS client than one that fails every handshake.
         assert!(ClientIdentity::from_parts(CERT.to_vec(), b"garbage".to_vec()).is_none());
         assert!(ClientIdentity::from_parts(b"".to_vec(), KEY.to_vec()).is_none());
+    }
+
+    #[test]
+    fn a_quoted_bytearray_still_reads_as_pem() {
+        // What moonlight-qt writes on Linux: the certificate's base64
+        // padding forces QSettings to quote it, the key's does not.
+        let ini = concat!(
+            "[General]\n",
+            r#"certificate="@ByteArray(-----BEGIN CERTIFICATE-----\nMII==\n-----END CERTIFICATE-----\n)""#,
+            "\n",
+            r"key=@ByteArray(-----BEGIN PRIVATE KEY-----\nMII\n-----END PRIVATE KEY-----\n)",
+            "\n",
+        );
+
+        let identity = ClientIdentity::from_parts(
+            ini_value(ini, "certificate").expect("certificate"),
+            ini_value(ini, "key").expect("key"),
+        );
+        assert!(identity.is_some(), "a quoted value must still parse as PEM");
     }
 
     #[test]

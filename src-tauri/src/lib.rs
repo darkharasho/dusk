@@ -65,7 +65,38 @@ fn local_addresses() -> HashSet<String> {
     addresses
 }
 
+/// Keep WebKit off its DMA-BUF renderer on Wayland.
+///
+/// Without this the window never appears on a Wayland compositor that
+/// implements explicit sync — KWin does, so every KDE Wayland session, which
+/// includes Bazzite and the Steam Deck, two machines a game-streaming app
+/// cannot afford to miss. The failure is total and nearly mute: GTK prints
+/// one `Error 71 (Protocol error)` line and exits. `WAYLAND_DEBUG=1` names
+/// the real cause — `wp_linux_drm_syncobj_surface_v1: explicit sync is used,
+/// but no acquire point is set`, webkit2gtk's buffer going up without the
+/// acquire point the protocol requires. It is a webkit2gtk bug, so the only
+/// lever on this side is to not take that path.
+///
+/// Scoped to Wayland because the DMA-BUF renderer is the faster one and is
+/// perfectly sound under X11, and skipped when already set so anyone
+/// debugging the renderer keeps the final say.
+#[cfg(target_os = "linux")]
+fn avoid_wayland_dmabuf_crash() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return;
+    }
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return;
+    }
+    // Safety: called from `run` before any window, thread or GTK init, so
+    // nothing else can be reading the environment yet.
+    unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+}
+
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    avoid_wayland_dmabuf_crash();
+
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
@@ -82,12 +113,26 @@ pub fn run() {
                 registry.upsert_manual(&entry.address, entry.port, entry.name.clone());
             }
 
+            // Which client Dusk will run has to be settled first: it
+            // decides which settings store the host list and the identity
+            // below are read from. Two Moonlights on one machine keep
+            // separate stores, and reading the wrong one makes the grid
+            // describe a client Dusk is not going to launch.
+            // Only Tauri knows where bundled resources land on each platform,
+            // so the client search is handed that directory rather than
+            // guessing at it from the executable's path.
+            let resources = app.path().resource_dir().ok();
+            let moonlight = moonlight::Moonlight::discover(resources.as_deref());
+            if moonlight.is_none() {
+                eprintln!("dusk: moonlight-qt not found; pairing and streaming are unavailable");
+            }
+
             // Then the machines moonlight-qt remembers. mDNS only finds what
             // is advertising this second, and a host that is asleep — or
             // simply not publishing — is still one of your machines. This is
             // what keeps Dusk's grid from being a shorter list than the one
             // Moonlight shows for the same set of computers.
-            for host in moonlight::hosts::load() {
+            for host in moonlight::hosts::load(moonlight.as_ref()) {
                 registry.upsert_moonlight(&host);
             }
 
@@ -100,20 +145,12 @@ pub fn run() {
             // Adopt moonlight-qt's client identity if it has one. Without it
             // every probe is unauthenticated and pairing state stays unknown,
             // which is a degraded grid rather than a broken one.
-            let tls = moonlight::identity::load().and_then(|id| state::tls_client(&id));
+            let tls =
+                moonlight::identity::load(moonlight.as_ref()).and_then(|id| state::tls_client(&id));
             if tls.is_none() {
                 eprintln!(
                     "dusk: no Moonlight client identity found; pairing state will read as unknown"
                 );
-            }
-
-            // Only Tauri knows where bundled resources land on each platform,
-            // so the client search is handed that directory rather than
-            // guessing at it from the executable's path.
-            let resources = app.path().resource_dir().ok();
-            let moonlight = moonlight::Moonlight::discover(resources.as_deref());
-            if moonlight.is_none() {
-                eprintln!("dusk: moonlight-qt not found; pairing and streaming are unavailable");
             }
 
             let state = Arc::new(AppState::new(

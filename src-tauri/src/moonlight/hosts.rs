@@ -37,8 +37,8 @@ pub struct KnownHost {
 /// An absent or unparseable store is an ordinary state — moonlight-qt may
 /// not be installed — so this never errors. The grid simply falls back to
 /// mDNS and the address book.
-pub fn load() -> Vec<KnownHost> {
-    assemble(&platform::fields())
+pub fn load(client: Option<&crate::moonlight::Moonlight>) -> Vec<KnownHost> {
+    assemble(&platform::fields(client))
 }
 
 /// The per-host fields, flattened to `"<index>.<field>"`.
@@ -122,7 +122,10 @@ mod platform {
 
     /// CFPreferences has no nesting, so QSettings writes an array flat:
     /// `hosts.1.hostname`, `hosts.size`, and so on.
-    pub fn fields() -> Fields {
+    ///
+    /// One store per user here, so which client was chosen does not change
+    /// the answer.
+    pub fn fields(_client: Option<&crate::moonlight::Moonlight>) -> Fields {
         let Some(path) = store_path() else {
             return Fields::new();
         };
@@ -156,24 +159,22 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::Fields;
-    use std::path::PathBuf;
 
-    fn store_path() -> Option<PathBuf> {
-        let base = match std::env::var_os("XDG_CONFIG_HOME") {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
-        };
-        Some(base.join("Moonlight Game Streaming Project/Moonlight.conf"))
-    }
-
-    pub fn fields() -> Fields {
-        let Some(path) = store_path() else {
-            return Fields::new();
-        };
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Fields::new();
-        };
-        super::ini_host_fields(&text)
+    /// Only the store belonging to the client Dusk will run. A host
+    /// remembered by the *other* Moonlight on this machine is paired with
+    /// that one's certificate, so listing it here would promise a stream
+    /// the chosen client cannot open.
+    ///
+    /// Among that client's own stores the first to remember a host wins: an
+    /// empty `[hosts]` is indistinguishable from an absent one, and both are
+    /// worth skipping.
+    pub fn fields(client: Option<&crate::moonlight::Moonlight>) -> Fields {
+        crate::moonlight::linux_stores_for(client)
+            .into_iter()
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .map(|text| super::ini_host_fields(&text))
+            .find(|fields| !fields.is_empty())
+            .unwrap_or_default()
     }
 }
 
@@ -188,7 +189,10 @@ mod platform {
     const SUBKEY: &str = r"Software\Moonlight Game Streaming Project\Moonlight\hosts";
 
     /// The registry backend nests, so the array is a subkey per index.
-    pub fn fields() -> Fields {
+    ///
+    /// One store per user here, so which client was chosen does not change
+    /// the answer.
+    pub fn fields(_client: Option<&crate::moonlight::Moonlight>) -> Fields {
         let Ok(hosts) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(SUBKEY) else {
             return Fields::new();
         };
@@ -238,7 +242,10 @@ fn ini_host_fields(text: &str) -> Fields {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        out.insert(key.trim().replace('\\', "."), value.trim().to_string());
+        out.insert(
+            key.trim().replace('\\', "."),
+            crate::moonlight::unquote(value.trim()).to_string(),
+        );
     }
     out
 }
@@ -377,5 +384,46 @@ mod tests {
     #[test]
     fn the_ini_backend_survives_a_file_with_no_hosts() {
         assert!(assemble(&ini_host_fields("[General]\nfps=60\n")).is_empty());
+    }
+}
+
+/// Reads the real moonlight-qt store on this machine. Ignored because it can
+/// only say anything on a machine that has one — but on a machine that does,
+/// it is the only check that the path, the INI parse and the quoting all
+/// agree with what moonlight-qt actually wrote.
+///
+/// It reads the store of the client [`Moonlight::discover`] picks, which is
+/// the pairing Dusk will really have: with a Flatpak Moonlight installed
+/// beside a native one, the two disagree, and the native store is the
+/// honest answer only because the native client is the one that gets run.
+#[cfg(all(test, target_os = "linux"))]
+mod live {
+    #[test]
+    #[ignore]
+    fn the_local_store_is_found_and_read() {
+        let client = crate::moonlight::Moonlight::discover();
+        println!("client: {:?}", client.as_ref().map(|c| c.binary()));
+        for path in crate::moonlight::linux_stores_for(client.as_ref()) {
+            println!("candidate: {} exists={}", path.display(), path.exists());
+        }
+
+        let hosts = super::load(client.as_ref());
+        println!("remembered hosts: {}", hosts.len());
+        for host in &hosts {
+            println!("  {host:?}");
+        }
+        println!(
+            "identity: {:?}",
+            crate::moonlight::identity::load(client.as_ref())
+        );
+
+        assert!(
+            !hosts.is_empty(),
+            "no remembered hosts: moonlight-qt has never connected to one, or the store was not found"
+        );
+        assert!(
+            crate::moonlight::identity::load(client.as_ref()).is_some(),
+            "no client identity: moonlight-qt has never paired, or the store was not found"
+        );
     }
 }

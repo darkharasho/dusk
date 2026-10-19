@@ -15,7 +15,7 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 | 1 — rename and identity | done, verified in artifacts |
 | 2 — control socket, overlay actions, live stats | **done and live-tested; client tagged `dusk-v0.2.2`; no Dusk release carries it yet; quality not started** |
 | 3 — bundle Sunshine, provision credentials | built, not live-tested |
-| 4 — installer, service registration | built, not live-tested; no display driver |
+| 4 — installer, service registration | built, not live-tested; Windows display driver built, not run on Windows |
 | 5 — zero-click pairing | built, not live-tested |
 | 6 — window choreography | built, not live-tested |
 
@@ -30,7 +30,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main @ 2a2cba4   tags v0.1.0, v0.2.0
+├── dusk/            main             tags v0.1.0, v0.2.0
 └── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
 ```
 
@@ -199,7 +199,12 @@ rather than a summary. Where each side stands:
 Not done yet:
 
 - `quality` has no row, and `SetQuality` needs the stream renegotiated.
-- Nothing calls `ToClient::ShowOverlay` or `HostDisplay` from Dusk's UI.
+- Dusk's UI sends `Disconnect` (**Leave the stream**, beside the live numbers,
+  which leaves the game running on the host, unlike **End the session**).
+  Nothing sends `ShowOverlay` or `HostDisplay` yet. `ShowOverlay` is no use
+  from Dusk's window until the fork also restores a stream window that the
+  overlay's Open Dusk minimised. `HostDisplay` needs the host's display list,
+  which Dusk does not have.
 - The client is tagged (`dusk-v0.2.2`) and pinned, but no Dusk release
   carries it until the next `v*` tag.
 
@@ -227,9 +232,21 @@ build cross-checks clean, and none has run end to end yet.
   macOS app a launch agent; an existing one is left alone. Linux has a new
   step for the uinput udev rule via polkit, which recognises Bazzite's own
   rule as done. Windows firewall is one prompt, not two. **Set up this
-  machine** runs every automatable step in order. Not done: a consented
-  virtual display driver install — which driver to trust is a decision, not
-  an implementation detail.
+  machine** runs every automatable step in order, apart from optional ones.
+- **Virtual display (4, Windows).** `install/display_driver.rs`. The driver
+  is the Virtual Display Driver from github.com/VirtualDrivers: MIT,
+  user-mode IddCx, signed through SignPath, and the one Sunshine's community
+  uses. It is pinned to release `25.7.23`, and the driver-only zip's sha256
+  is written in the source. Moving the pin means downloading the new zip,
+  hashing it, and editing both constants. It is an *optional* step, which
+  **Set up this machine** skips, and it asks for its own confirmation. Dusk
+  restarts itself elevated with `--dusk-install-display-driver <inf>`
+  (`main.rs`). That helper makes a `Root\MttVDD` device through SetupAPI and
+  runs `UpdateDriverForPlugAndPlayDevicesW`, which is what `devcon install`
+  does, and removes the device again if that fails. It copies the package's
+  `vdd_settings.xml` to `C:\VirtualDisplayDriver` unless one is already
+  there. Done-detection reads `HKLM\...\Enum\ROOT\*\*\HardwareID`.
+  Cross-checked with `cargo xwin clippy`; **never run on Windows.**
 - **Zero-click pairing (5).** `peer.rs`. Each Dusk listens on TCP 47850.
   Pairing starts Moonlight with a fresh PIN and sends it to the host's Dusk,
   which shows **Allow** naming the machine and enters the PIN into Sunshine
@@ -241,7 +258,7 @@ build cross-checks clean, and none has run end to end yet.
   done about the macOS dock: hiding the client's dock icon changes focus and
   input grab, and wants a Mac to test on.
 
-## Its own app: rebrand, Settings tab, GitHub sign-in (uncommitted until live-tested)
+## Its own app: rebrand, Settings tab, GitHub sign-in
 
 - **No Sunshine or Moonlight in the UI.** User-visible copy says "hosting" and
   "streaming client". The code keeps its module names. Two deliberate leftovers:
@@ -260,9 +277,12 @@ build cross-checks clean, and none has run end to end yet.
   against the gist; anything else falls back to the Allow prompt.
   - **Needs an OAuth App:** GitHub › Settings › Developer settings › OAuth
     Apps › New, with **Enable Device Flow** ticked. Set its client ID as the
-    repo variable `DUSK_GITHUB_CLIENT_ID`; `release.yml` bakes it in. For dev,
-    export `DUSK_GITHUB_CLIENT_ID` before `npm run dev`. Without it, the
-    Account section says the build has no sign-in.
+    repo variable `DUSK_GITHUB_CLIENT_ID`; `release.yml` bakes it in. That
+    is done: the app exists and the variable is set. For dev, put
+    `DUSK_GITHUB_CLIENT_ID=...` in the repo's untracked `.env`, which
+    `build.rs` reads, or export it. Without it, the Account section says the
+    build has no sign-in. Signing in has been checked live on Bazzite. A
+    pair between two signed-in machines has not.
   - This deliberately revises CLAUDE.md's "no account system". GitHub is the
     only party; there is still nothing Dusk hosts.
 

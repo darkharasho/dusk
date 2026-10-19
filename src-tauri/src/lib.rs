@@ -106,7 +106,11 @@ pub fn run() {
                 );
             }
 
-            let moonlight = moonlight::Moonlight::discover();
+            // Only Tauri knows where bundled resources land on each platform,
+            // so the client search is handed that directory rather than
+            // guessing at it from the executable's path.
+            let resources = app.path().resource_dir().ok();
+            let moonlight = moonlight::Moonlight::discover(resources.as_deref());
             if moonlight.is_none() {
                 eprintln!("dusk: moonlight-qt not found; pairing and streaming are unavailable");
             }

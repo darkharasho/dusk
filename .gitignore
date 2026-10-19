@@ -11,3 +11,10 @@ build
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+
+# The staged Moonlight fork. Built by its own repository and copied in by
+# scripts/stage-client.sh; the README is committed so the directory exists
+# even when nothing is staged, because Tauri fails on a resource path that
+# does not resolve.
+src-tauri/client/*
+!src-tauri/client/README.md

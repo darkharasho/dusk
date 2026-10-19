@@ -222,6 +222,15 @@ pub struct Snapshot {
     /// works without it, so the UI says so rather than offering buttons that
     /// can only fail.
     pub moonlight_available: bool,
+    /// Whether the client Dusk found carries the in-stream overlay — the
+    /// floating handle that ends a session or changes quality without
+    /// leaving the stream.
+    ///
+    /// Only Dusk's fork has it, and a stock Moonlight streams perfectly well
+    /// without one, so its absence looks exactly like a bug unless the UI
+    /// says which client it got. `None` when the binary was pointed at by
+    /// hand and Dusk cannot tell.
+    pub overlay_available: Option<bool>,
     /// Whether Dusk holds this machine's Sunshine sign-in. Everything on the
     /// host side beyond start/stop needs it.
     ///

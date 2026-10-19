@@ -165,6 +165,7 @@ export function App() {
         <DeviceDrawer
           device={open}
           moonlightAvailable={snapshot.moonlightAvailable}
+          overlayAvailable={snapshot.overlayAvailable}
           onClose={() => setOpenId(null)}
         />
       )}

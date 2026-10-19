@@ -39,6 +39,18 @@ it in a browser gets you a page with no backend, so it is rarely what you want.
 backend. It exists because a Mac cannot usefully run Sunshine (see below), and
 the rest of the UI should not be blocked on that.
 
+Dusk streams through its own [fork of moonlight-qt](https://github.com/darkharasho/moonlight-qt),
+which carries the in-stream overlay. A dev build finds it in a sibling
+checkout; a packaged build carries it as a bundled resource, staged first:
+
+```sh
+./scripts/stage-client.sh         # copies the built fork into src-tauri/client
+```
+
+Without it a build still works — Dusk falls back to whatever Moonlight is
+installed, which streams normally and has no overlay. The device drawer says
+so, rather than leaving a missing floating handle to look like a bug.
+
 ```sh
 npm run typecheck                 # frontend
 cd src-tauri && cargo test        # backend
@@ -113,6 +125,13 @@ path gets exercised without cutting a tag.
 Linux builds on `ubuntu-22.04` rather than `latest` deliberately: a `.deb`
 and an AppImage are built against the runner's glibc and webkit2gtk, so a
 newer runner would silently restrict the result to distributions that new.
+
+## Where this is going
+
+[`docs/architecture.md`](docs/architecture.md) is the design for Dusk as the
+only visible program — Sunshine and Moonlight as implementation details nobody
+is introduced to — along with the phases that get there and the GPL-3.0
+boundary that shapes all of it.
 
 ## How it fits together
 

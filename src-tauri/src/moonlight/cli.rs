@@ -13,7 +13,7 @@
 //!   data, which is why errors here are built from stderr with that banner
 //!   stripped.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -38,9 +38,37 @@ pub enum MoonlightError {
     Failed(String),
 }
 
+/// Which Moonlight Dusk ended up driving.
+///
+/// This decides whether the in-stream overlay — the floating handle that ends
+/// a session or changes quality without leaving the stream — exists at all.
+/// It lives only in Dusk's fork, so a stock install streams perfectly well and
+/// simply has no overlay, which is indistinguishable from a broken one unless
+/// Dusk says which it got.
+///
+/// Three states rather than two, for the same reason the Sunshine sign-in has
+/// three: `Unknown` is what an explicit `DUSK_MOONLIGHT_BIN` leaves us with,
+/// and claiming either answer there would be a guess presented as a fact.
+///
+/// Decided by provenance — which search found the binary. The fork does log a
+/// line identifying itself at startup, but into moonlight-qt's redirected log
+/// file rather than to stdout, so it cannot be read without launching a
+/// stream. A marker on `--version` would make this a fact instead, and
+/// belongs in the fork.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKind {
+    /// Dusk's own fork, which carries the overlay.
+    Dusk,
+    /// A stock moonlight-qt found on this machine. No overlay.
+    System,
+    /// Pointed at by hand, so Dusk cannot tell which it is.
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct Moonlight {
     binary: PathBuf,
+    kind: ClientKind,
 }
 
 /// Stream settings Dusk passes through. Everything omitted is left to
@@ -56,20 +84,49 @@ pub struct StreamOptions {
 }
 
 impl Moonlight {
+    /// A client at a known path. Only tests construct one this way —
+    /// everything else arrives through [`Moonlight::discover`], which is also
+    /// what establishes the [`ClientKind`].
+    #[cfg(test)]
     pub fn at(binary: PathBuf) -> Self {
-        Self { binary }
+        Self {
+            binary,
+            kind: ClientKind::Unknown,
+        }
     }
 
-    /// Find moonlight-qt, or `None` if it is not installed.
+    /// Whether the in-stream overlay is available, or `None` when Dusk cannot
+    /// tell because the binary was pointed at by hand.
+    pub fn overlay(&self) -> Option<bool> {
+        match self.kind {
+            ClientKind::Dusk => Some(true),
+            ClientKind::System => Some(false),
+            ClientKind::Unknown => None,
+        }
+    }
+
+    /// Find a Moonlight to drive, or `None` if there is none.
+    ///
+    /// `resources` is the bundle's resource directory, where a packaged Dusk
+    /// carries its own client. It is passed in rather than derived here
+    /// because only Tauri knows where that lands on each platform — it is
+    /// `Contents/Resources` inside a .app, beside the executable on Windows,
+    /// and under `usr/lib` in a Linux package.
     ///
     /// `DUSK_MOONLIGHT_BIN` overrides the search, which is what makes a
     /// portable or Flatpak install usable without Dusk having to enumerate
     /// every packaging scheme.
-    pub fn discover() -> Option<Self> {
+    pub fn discover(resources: Option<&Path>) -> Option<Self> {
         if let Some(path) = std::env::var_os("DUSK_MOONLIGHT_BIN") {
             let path = PathBuf::from(path);
             if path.is_file() {
-                return Some(Self::at(path));
+                // Deliberately not claimed as either one. Someone pointing
+                // Dusk at a binary may be pointing it at the fork or at a
+                // packaged stock build, and the UI should not assert which.
+                return Some(Self {
+                    binary: path,
+                    kind: ClientKind::Unknown,
+                });
             }
             eprintln!("dusk: DUSK_MOONLIGHT_BIN is set but {path:?} is not a file");
         }
@@ -78,16 +135,22 @@ impl Moonlight {
         // carrying the in-stream overlay, so picking up a stock install
         // instead does not fail loudly — it streams perfectly well and the
         // overlay is simply absent, which reads as a bug in Dusk.
-        if let Some(path) = dusk_client().into_iter().find(|p| p.is_file()) {
+        if let Some(path) = dusk_client(resources).into_iter().find(|p| p.is_file()) {
             eprintln!("dusk: using Dusk's Moonlight client at {path:?}");
-            return Some(Self::at(path));
+            return Some(Self {
+                binary: path,
+                kind: ClientKind::Dusk,
+            });
         }
 
         let found = candidates().into_iter().find(|p| p.is_file());
         if let Some(path) = &found {
             eprintln!("dusk: using system Moonlight at {path:?}; the in-stream overlay will be unavailable");
         }
-        found.map(Self::at)
+        found.map(|binary| Self {
+            binary,
+            kind: ClientKind::System,
+        })
     }
 
     /// Pair with a host, sending the PIN the user was shown.
@@ -189,30 +252,50 @@ fn clean_stderr(stderr: &str) -> String {
     }
 }
 
-/// The forked client Dusk ships, relative to a build or install root.
+/// The forked client as it sits in the fork's own build tree, which is what
+/// a sibling checkout offers.
+///
+/// Development only, like the search that uses it — a release build carries
+/// its own client and must never reach outside itself for one.
+#[cfg(all(debug_assertions, target_os = "macos"))]
+const BUILT_CLIENT: &str = "app/Moonlight.app/Contents/MacOS/Moonlight";
+#[cfg(all(debug_assertions, target_os = "linux"))]
+const BUILT_CLIENT: &str = "app/moonlight";
+#[cfg(all(debug_assertions, target_os = "windows"))]
+const BUILT_CLIENT: &str = "app\\release\\Moonlight.exe";
+
+/// The forked client as Dusk bundles it, relative to the resource directory.
+///
+/// A flat `client/` rather than the fork's build layout: what Dusk ships is
+/// an artifact, and reproducing qmake's directory names inside a shipped
+/// bundle would tie the install layout to how the fork happens to build.
 #[cfg(target_os = "macos")]
-const CLIENT_RELATIVE: &str = "app/Moonlight.app/Contents/MacOS/Moonlight";
+const BUNDLED_CLIENT: &str = "client/Moonlight.app/Contents/MacOS/Moonlight";
 #[cfg(target_os = "linux")]
-const CLIENT_RELATIVE: &str = "app/moonlight";
+const BUNDLED_CLIENT: &str = "client/moonlight";
 #[cfg(target_os = "windows")]
-const CLIENT_RELATIVE: &str = "app\\release\\Moonlight.exe";
+const BUNDLED_CLIENT: &str = "client\\Moonlight.exe";
 
 /// Where Dusk's own Moonlight client might be.
 ///
-/// Two places, and both are real. Installed, it sits beside the Dusk
-/// executable because that is where the installer puts it. In development
-/// it is a sibling checkout of the Dusk repository, which is the layout the
-/// fork is cloned into — without that, a dev build silently falls through
-/// to whatever Moonlight is installed system-wide and the overlay appears
-/// to be broken when it is merely absent.
-fn dusk_client() -> Vec<PathBuf> {
+/// Two places, and both are real.
+///
+/// Packaged, it is in the bundle's resource directory, because that is the
+/// one mechanism that puts a file inside the app on all three platforms
+/// without hand-rolling a layout per bundler.
+///
+/// In development it is a sibling checkout of the Dusk repository, which is
+/// how the fork is cloned. Without that path a dev build silently falls
+/// through to whatever Moonlight is installed system-wide and the overlay
+/// appears broken when it is merely absent.
+///
+/// Until the resource path existed, only the development one did — which is
+/// exactly why every release build so far has streamed without an overlay.
+fn dusk_client(resources: Option<&Path>) -> Vec<PathBuf> {
     let mut out = Vec::new();
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            out.push(dir.join(CLIENT_RELATIVE));
-            out.push(dir.join("moonlight-qt").join(CLIENT_RELATIVE));
-        }
+    if let Some(dir) = resources {
+        out.push(dir.join(BUNDLED_CLIENT));
     }
 
     // Development only: a release build must never reach outside itself.
@@ -220,7 +303,7 @@ fn dusk_client() -> Vec<PathBuf> {
     {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         if let Some(workspace) = manifest.parent().and_then(|p| p.parent()) {
-            out.push(workspace.join("moonlight-qt").join(CLIENT_RELATIVE));
+            out.push(workspace.join("moonlight-qt").join(BUILT_CLIENT));
         }
     }
 
@@ -361,8 +444,60 @@ mod tests {
         // is unreachable. Pointed at a file that certainly exists.
         let real = a_real_file();
         std::env::set_var("DUSK_MOONLIGHT_BIN", &real);
-        let found = Moonlight::discover().expect("override is a file");
+        let found = Moonlight::discover(None).expect("override is a file");
         assert_eq!(found.binary, real);
+
+        // And it stays honest about what it found: a path given by hand is
+        // not evidence either way about the overlay.
+        assert_eq!(found.kind, ClientKind::Unknown);
+        assert_eq!(found.overlay(), None);
+
         std::env::remove_var("DUSK_MOONLIGHT_BIN");
+    }
+
+    /// The regression this whole change exists for: a packaged build looked
+    /// only in a `cfg(debug_assertions)` sibling checkout, so every release
+    /// fell through to a stock Moonlight and streamed without an overlay.
+    #[test]
+    fn a_bundled_client_is_found_in_the_resource_directory() {
+        let dir = std::env::temp_dir().join("dusk-bundled-client-test");
+        let client = dir.join(BUNDLED_CLIENT);
+        std::fs::create_dir_all(client.parent().unwrap()).unwrap();
+        std::fs::write(&client, b"not really Moonlight").unwrap();
+
+        assert!(
+            dusk_client(Some(&dir)).contains(&client),
+            "the resource directory has to be searched, or a shipped client is invisible"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn without_a_resource_directory_nothing_is_invented() {
+        // A release build has no sibling checkout to fall back on, so this
+        // must be empty rather than quietly probing paths outside the app.
+        #[cfg(not(debug_assertions))]
+        assert!(dusk_client(None).is_empty());
+
+        // In development the sibling checkout is the whole point.
+        #[cfg(debug_assertions)]
+        assert!(dusk_client(None).iter().all(|p| p.ends_with(BUILT_CLIENT)));
+    }
+
+    #[test]
+    fn the_overlay_is_claimed_only_for_dusks_own_client() {
+        let kinds = [
+            (ClientKind::Dusk, Some(true)),
+            (ClientKind::System, Some(false)),
+            (ClientKind::Unknown, None),
+        ];
+        for (kind, expected) in kinds {
+            let client = Moonlight {
+                binary: PathBuf::from("/nowhere"),
+                kind,
+            };
+            assert_eq!(client.overlay(), expected);
+        }
     }
 }

@@ -260,6 +260,7 @@ impl AppState {
             host: self.host.state().await,
             discovering: self.is_discovering(),
             moonlight_available: self.moonlight.is_some(),
+            overlay_available: self.moonlight.as_ref().and_then(Moonlight::overlay),
             // `peek`, never `load`: a snapshot is on the path to drawing the
             // window, and a keystore read can block behind a password prompt.
             host_signed_in: match self.credentials.peek().await {

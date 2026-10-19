@@ -6,6 +6,7 @@ import { generatePin, launchApp, pairDevice, quitSession } from "../api";
 interface Props {
   device: Device;
   moonlightAvailable: boolean;
+  overlayAvailable: boolean | null;
   onClose(): void;
 }
 
@@ -18,7 +19,12 @@ type Busy = null | "pairing" | "launching" | "quitting";
  * grid's job is to let you find the machine you came for, and a card with
  * four buttons on it stops being scannable.
  */
-export function DeviceDrawer({ device, moonlightAvailable, onClose }: Props) {
+export function DeviceDrawer({
+  device,
+  moonlightAvailable,
+  overlayAvailable,
+  onClose,
+}: Props) {
   const [busy, setBusy] = useState<Busy>(null);
   const [pin, setPin] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +133,17 @@ export function DeviceDrawer({ device, moonlightAvailable, onClose }: Props) {
                         : "End it on the host"}
                   </button>
                 </>
+              )}
+
+              {/* Said here rather than only in the log. A stock Moonlight
+                  streams perfectly well and simply has no floating
+                  controls, which is indistinguishable from an overlay that
+                  is broken unless Dusk names which client it got. */}
+              {overlayAvailable === false && (
+                <p className="axi-ink-dim">
+                  This is a stock Moonlight, so the in-stream overlay is
+                  unavailable — ending a session means coming back here.
+                </p>
               )}
 
               <h3 className="axi-eyebrow">Apps</h3>

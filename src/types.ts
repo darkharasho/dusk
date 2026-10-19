@@ -141,6 +141,13 @@ export interface Snapshot {
   discovering: boolean;
   /** False when moonlight-qt is missing; nothing client-side works without it. */
   moonlightAvailable: boolean;
+  /**
+   * Whether the client Dusk found carries the in-stream overlay. Only Dusk's
+   * fork has it; a stock Moonlight streams fine and simply has no floating
+   * controls, which looks like a bug unless we say so. Null when Dusk was
+   * pointed at a binary by hand and cannot tell.
+   */
+  overlayAvailable: boolean | null;
   /** Whether Dusk holds this machine's Sunshine sign-in. */
   /**
    * Null until the backend has read the keystore, which it does in the

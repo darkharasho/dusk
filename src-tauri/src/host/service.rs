@@ -143,6 +143,29 @@ pub fn powershell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// A script as PowerShell's `-EncodedCommand` wants it: base64 of its
+/// UTF-16LE bytes. The one way to hand PowerShell a script through
+/// `Start-Process` without its argument joining mangling the quoting.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn encode_powershell(script: &str) -> String {
+    const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(B64[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 /// The exact PowerShell the elevation path runs.
 ///
 /// Split out from [`run_elevated`] so it can be asserted on from a machine
@@ -228,6 +251,15 @@ mod tests {
         assert!(script.contains(r"'C:\it''s\a.msi'"), "{script}");
         // And nothing was left able to run as a separate statement.
         assert_eq!(script.matches(';').count(), 1, "{script}");
+    }
+
+    #[test]
+    fn an_encoded_command_is_base64_of_utf16le() {
+        // What `[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('exit 0'))`
+        // prints, padding included.
+        assert_eq!(encode_powershell("exit 0"), "ZQB4AGkAdAAgADAA");
+        assert_eq!(encode_powershell("a"), "YQA=");
+        assert_eq!(encode_powershell("ab"), "YQBiAA==");
     }
 
     #[test]

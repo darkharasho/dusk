@@ -10,6 +10,7 @@ use async_trait::async_trait;
 
 use super::{HostBackend, HostError};
 use crate::model::{HostCapabilities, HostPlatform, HostStatus, SupportTier};
+use crate::sunshine::Credentials;
 
 pub struct MockHost {
     running: AtomicBool,
@@ -59,6 +60,10 @@ impl HostBackend for MockHost {
 
     async fn stop(&self) -> Result<(), HostError> {
         self.running.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn set_credentials(&self, _credentials: &Credentials) -> Result<(), HostError> {
         Ok(())
     }
 }

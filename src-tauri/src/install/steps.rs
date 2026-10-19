@@ -9,7 +9,7 @@ use crate::model::{HostPlatform, HostStatus, SupportTier};
 pub enum StepId {
     InstallSunshine,
     StartService,
-    SignIn,
+    Provision,
     Firewall,
     ScreenRecording,
     Accessibility,
@@ -72,7 +72,7 @@ pub fn build(
     platform: HostPlatform,
     status: &HostStatus,
     tier: SupportTier,
-    signed_in: bool,
+    managed: bool,
 ) -> Setup {
     let installed = !matches!(status, HostStatus::NotInstalled);
     let running = matches!(status, HostStatus::Installed { running: true, .. });
@@ -101,15 +101,15 @@ pub fn build(
             true,
         ),
         step(
-            StepId::SignIn,
-            "Sign in to Sunshine",
-            "Lets Dusk configure the host and accept pairing PINs for you.",
-            if signed_in {
+            StepId::Provision,
+            "Let Dusk manage Sunshine",
+            "Dusk gives Sunshine a sign-in of its own and keeps it in this machine's keystore, so it can configure the host and accept pairing PINs. Any password you set in Sunshine's web page stops working.",
+            if managed {
                 StepState::Done
             } else {
                 StepState::Todo
             },
-            false,
+            true,
         ),
     ];
 
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn an_already_set_up_machine_shows_only_what_is_left() {
         // The common case: Sunshine installed and running, Dusk just not
-        // signed in yet. A wizard would insist on walking the whole path.
+        // managing it yet. A wizard would insist on walking the whole path.
         let setup = build(
             HostPlatform::Windows,
             &installed(true),
@@ -266,7 +266,7 @@ mod tests {
         };
         assert_eq!(by(StepId::InstallSunshine), StepState::Done);
         assert_eq!(by(StepId::StartService), StepState::Done);
-        assert_eq!(by(StepId::SignIn), StepState::Todo);
+        assert_eq!(by(StepId::Provision), StepState::Todo);
     }
 
     #[test]

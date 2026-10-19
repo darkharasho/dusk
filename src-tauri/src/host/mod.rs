@@ -8,6 +8,7 @@
 use async_trait::async_trait;
 
 use crate::model::{HostCapabilities, HostPlatform, HostState, HostStatus};
+use crate::sunshine::Credentials;
 
 pub mod mock;
 pub mod platform;
@@ -36,6 +37,10 @@ pub trait HostBackend: Send + Sync {
     async fn start(&self) -> Result<(), HostError>;
 
     async fn stop(&self) -> Result<(), HostError>;
+
+    /// Replace Sunshine's web-UI sign-in with `credentials`, then restart
+    /// Sunshine so it reads them: `sunshine --creds` only writes the file.
+    async fn set_credentials(&self, credentials: &Credentials) -> Result<(), HostError>;
 
     async fn state(&self) -> HostState {
         HostState {

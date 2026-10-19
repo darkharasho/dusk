@@ -45,7 +45,7 @@
 //! by the next rebuild.
 //!
 //! So the keystore is consulted once and the answer is kept in memory. Writes
-//! go through `save`/`forget`, which update both, so the cache cannot drift
+//! go through `save`, which updates both, so the cache cannot drift
 //! from the keystore by any path Dusk controls. A read that *fails* is not an
 //! answer and is not cached — otherwise one dismissed prompt would strand the
 //! run believing there is no password.
@@ -81,16 +81,15 @@ pub enum Known {
 /// `Arc` rather than `Box` so it can be cloned onto the blocking pool.
 type Reader = Arc<dyn Fn() -> Result<Option<Credentials>, String> + Send + Sync>;
 
-/// How the keystore is written and erased.
+/// How the keystore is written.
 ///
 /// Injectable for the same reason the reader is, and that is not only about
-/// observability. Stubbing reads alone left `forget` talking to the real
-/// keystore, so running the test suite deleted the developer's own saved
-/// Sunshine password — which then looks exactly like a password that never
-/// saved. Every path to the keystore goes through one of these fields, so a
-/// test cannot reach the real one by accident.
+/// observability. When only reads were stubbed, a test reached the real
+/// keystore and deleted the developer's own saved Sunshine password — which
+/// then looks exactly like a password that never saved. Every path to the
+/// keystore goes through one of these fields, so a test cannot reach the
+/// real one by accident.
 type Writer = Arc<dyn Fn(&Credentials) -> Result<(), String> + Send + Sync>;
-type Eraser = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Default)]
 struct Cached {
@@ -106,7 +105,6 @@ pub struct CredentialStore {
     cached: RwLock<Cached>,
     reader: Reader,
     writer: Writer,
-    eraser: Eraser,
 }
 
 impl Default for CredentialStore {
@@ -120,7 +118,6 @@ impl Default for CredentialStore {
             }),
             reader: Arc::new(read_keystore),
             writer: Arc::new(to_keystore),
-            eraser: Arc::new(erase_keystore),
         }
     }
 }
@@ -203,21 +200,6 @@ impl CredentialStore {
         Ok(())
     }
 
-    pub async fn forget(&self) {
-        let mut cached = self.cached.write().await;
-        cached.credentials = None;
-        cached.read = true;
-        cached.persistent = true;
-        drop(cached);
-
-        let eraser = self.eraser.clone();
-        let _ = spawn_blocking(move || {
-            eraser();
-            Ok(())
-        })
-        .await;
-    }
-
     /// False when the password is only held in memory, so the UI can say
     /// that it will be asked for again next launch.
     pub async fn is_persistent(&self) -> bool {
@@ -269,14 +251,6 @@ fn read_keystore() -> Result<Option<Credentials>, String> {
     }))
 }
 
-/// A missing entry is the desired end state here, not a failure, so nothing
-/// this does is worth reporting.
-fn erase_keystore() {
-    if let Ok(entry) = keyring::Entry::new(SERVICE, ACCOUNT) {
-        let _ = entry.delete_credential();
-    }
-}
-
 fn to_keystore(credentials: &Credentials) -> Result<(), String> {
     let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| e.to_string())?;
     entry
@@ -304,11 +278,11 @@ mod tests {
     /// and whose writes go nowhere. Both counters are per-store rather than
     /// global so these can run in parallel.
     ///
-    /// The stubbed writer and eraser are not ceremony. When only the reader
-    /// was stubbed, the sign-out test called straight through to the real
-    /// Keychain and deleted the developer's own Sunshine password every time
-    /// the suite ran — indistinguishable, from the app, from a password that
-    /// had never saved in the first place.
+    /// The stubbed writer is not ceremony. When only the reader was stubbed,
+    /// a test called straight through to the real Keychain and deleted the
+    /// developer's own Sunshine password every time the suite ran —
+    /// indistinguishable, from the app, from a password that had never
+    /// saved in the first place.
     fn store_answering(
         answer: Result<Option<Credentials>, String>,
     ) -> (CredentialStore, Arc<AtomicUsize>) {
@@ -320,7 +294,6 @@ mod tests {
                 answer.clone()
             }),
             writer: Arc::new(|_| Ok(())),
-            eraser: Arc::new(|| {}),
             ..Default::default()
         };
         (store, reads)
@@ -388,18 +361,6 @@ mod tests {
             2,
             "the next thing that needs the password should ask again"
         );
-    }
-
-    #[tokio::test]
-    async fn signing_out_is_remembered_without_going_back_to_the_keystore() {
-        // Otherwise the next snapshot reads the deleted entry and, on a
-        // keystore that prompts, asks again for something already discarded.
-        let (store, reads) = store();
-        store.load().await;
-        store.forget().await;
-        assert!(store.load().await.is_none());
-        assert_eq!(store.peek().await, Known::SignedOut);
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

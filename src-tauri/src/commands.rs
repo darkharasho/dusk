@@ -327,38 +327,67 @@ pub async fn stop_hosting(app: AppHandle, state: State<'_, Arc<AppState>>) -> Re
     Ok(())
 }
 
-/// Store this machine's Sunshine sign-in, after checking it actually works.
+/// Give Sunshine a sign-in Dusk made up, and keep it.
 ///
-/// Verified before saving so a typo surfaces here rather than as a confusing
-/// failure the first time someone tries to accept a PIN.
+/// This replaces asking the person for the password they set in Sunshine's
+/// web page, which was the last place Dusk introduced them to Sunshine. See
+/// `sunshine::provision` for what it costs: whatever password Sunshine had
+/// stops working.
 #[tauri::command]
-pub async fn sign_in_host(
-    app: AppHandle,
-    state: State<'_, Arc<AppState>>,
-    username: String,
-    password: String,
-) -> Result<(), String> {
+pub async fn provision_host(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let inner = state.inner().clone();
-    let credentials = Credentials { username, password };
+    provision(&inner).await?;
+    emit_snapshot(&app, &inner).await;
+    Ok(())
+}
 
-    let api = SunshineApi::new(sunshine::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
-    api.verify(&credentials).await.map_err(|e| e.to_string())?;
+async fn provision(inner: &Arc<AppState>) -> Result<(), String> {
+    let credentials = sunshine::provision::generate()?;
+    inner
+        .host
+        .set_credentials(&credentials)
+        .await
+        .map_err(|e| e.to_string())?;
 
+    // Kept before it is checked, not after. From here this is Sunshine's
+    // password whether or not the check below passes, and losing it would
+    // leave a host nobody can configure until this runs again.
     inner.credentials.save(credentials.clone()).await?;
 
-    // Signing in is the moment Dusk takes over presenting this host, so it is
-    // also the moment Sunshine's own tray icon should go. Doing it here and
-    // not at every launch matters: applying it needs a restart, and
-    // restarting Sunshine on a schedule Dusk chooses would cut off whatever
-    // is streaming. Failing is not worth failing the sign-in over — the
-    // password is saved either way and a second icon is a blemish, not a
-    // breakage.
+    let api = SunshineApi::new(sunshine::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
+    wait_until_accepted(&api, &credentials).await?;
+
+    // This is the moment Dusk takes over presenting this host, so it is also
+    // the moment Sunshine's own tray icon should go. Doing it here and not at
+    // every launch matters: applying it needs a restart, and restarting
+    // Sunshine on a schedule Dusk chooses would cut off whatever is
+    // streaming. Failing is not worth failing over — the sign-in works
+    // either way and a second icon is a blemish, not a breakage.
     if let Err(err) = hide_sunshine_tray(&api, &credentials).await {
         eprintln!("dusk: could not hide Sunshine's tray icon: {err}");
     }
-
-    emit_snapshot(&app, &inner).await;
     Ok(())
+}
+
+/// Sunshine was just restarted to read the new credential, and takes a few
+/// seconds to listen again. Until it does, "unreachable" means "not yet".
+async fn wait_until_accepted(api: &SunshineApi, credentials: &Credentials) -> Result<(), String> {
+    const ATTEMPTS: u32 = 20;
+    let mut last = String::new();
+    for _ in 0..ATTEMPTS {
+        match api.verify(credentials).await {
+            Ok(_) => return Ok(()),
+            // Answering and refusing is a real failure, not a slow start.
+            Err(sunshine::ApiError::Unauthorized) => {
+                return Err("Sunshine restarted but did not accept the sign-in Dusk set.".into())
+            }
+            Err(err) => last = err.to_string(),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    Err(format!(
+        "Sunshine did not come back after restarting: {last}"
+    ))
 }
 
 /// Turn Sunshine's tray icon off and restart it if that changed anything.
@@ -377,14 +406,6 @@ async fn hide_sunshine_tray(api: &SunshineApi, credentials: &Credentials) -> Res
 // ordinary Sunshine setting, and the settings screen already renders, saves
 // and restarts for every key the host reports. A second path to the same
 // write would only be one more thing to keep in step.
-
-#[tauri::command]
-pub async fn sign_out_host(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let inner = state.inner().clone();
-    inner.credentials.forget().await;
-    emit_snapshot(&app, &inner).await;
-    Ok(())
-}
 
 /// Accept a pairing PIN on this machine.
 ///
@@ -536,8 +557,19 @@ pub async fn install_sunshine(
     let _ = tokio::fs::remove_file(&path).await;
     outcome?;
 
+    // A Sunshine Dusk just installed has no sign-in yet, and nobody should
+    // have to make one up. Skipped when Dusk already holds one, so
+    // reinstalling over a working host does not replace its password.
+    let provisioned = if inner.credentials.load().await.is_none() {
+        provision(&inner)
+            .await
+            .map_err(|e| format!("Sunshine is installed, but Dusk could not set it up: {e}"))
+    } else {
+        Ok(())
+    };
+
     emit_snapshot(&app, &inner).await;
-    Ok(())
+    provisioned
 }
 
 /// Add firewall rules for Sunshine. Windows only; elevates when it runs.

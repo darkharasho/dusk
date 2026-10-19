@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use super::service::{self, Run};
 use super::{HostBackend, HostError};
 use crate::model::{HostCapabilities, HostPlatform, HostStatus, SupportTier};
+use crate::sunshine::{provision, Credentials};
 
 // ------------------------------------------------------------------ windows
 
@@ -65,6 +66,61 @@ impl HostBackend for WindowsHost {
     async fn stop(&self) -> Result<(), HostError> {
         elevated_sc("stop").await
     }
+
+    // Sunshine's credentials file lives beside it under Program Files, so
+    // writing it needs administrator rights, and so does the restart. One
+    // elevated script does both, so it costs one prompt rather than three.
+    async fn set_credentials(&self, credentials: &Credentials) -> Result<(), HostError> {
+        let program = windows_sunshine_exe().ok_or_else(|| {
+            HostError::Failed("Dusk could not find sunshine.exe on this machine.".into())
+        })?;
+        let script = windows_creds_script(&program.to_string_lossy(), credentials);
+        let run = service::run_elevated(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                &service::encode_powershell(&script),
+            ],
+            service::ELEVATED_TIMEOUT,
+        )
+        .await?;
+        if run.ok() {
+            Ok(())
+        } else {
+            Err(HostError::Failed(
+                "Windows did not let Dusk set up Sunshine's sign-in.".into(),
+            ))
+        }
+    }
+}
+
+/// Where the official installer puts Sunshine.
+fn windows_sunshine_exe() -> Option<std::path::PathBuf> {
+    std::env::var_os("ProgramFiles")
+        .map(|base| std::path::PathBuf::from(base).join("Sunshine\\sunshine.exe"))
+        .filter(|p| p.is_file())
+}
+
+/// Set the credential, then restart the service so it is read.
+///
+/// Passed to PowerShell encoded rather than as arguments: `Start-Process`
+/// joins an argument list with spaces and quotes nothing, so a script given
+/// as an argument through the elevation hop arrives split at every space.
+fn windows_creds_script(program: &str, credentials: &Credentials) -> String {
+    let [flag, user, pass] = provision::creds_args(credentials);
+    format!(
+        "& {} {} {} {}\n\
+         if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n\
+         Restart-Service -Name {} -ErrorAction Stop\n\
+         exit 0",
+        service::powershell_quote(program),
+        flag,
+        service::powershell_quote(user),
+        service::powershell_quote(pass),
+        WINDOWS_SERVICE,
+    )
 }
 
 async fn elevated_sc(verb: &str) -> Result<(), HostError> {
@@ -171,6 +227,47 @@ impl HostBackend for LinuxHost {
         let unit = installed_unit().await.ok_or_else(not_installed)?;
         expect(service::run("systemctl", &["--user", "stop", unit]).await?)
     }
+
+    async fn set_credentials(&self, credentials: &Credentials) -> Result<(), HostError> {
+        let unit = installed_unit().await.ok_or_else(not_installed)?;
+        let creds = provision::creds_args(credentials);
+
+        let run = if unit == LINUX_UNITS[1] {
+            // A Flatpak's binary is only reachable inside its sandbox, and
+            // only there does it see the configuration the service uses.
+            let mut args = vec!["run", "--command=sunshine", FLATPAK_ID];
+            args.extend(creds);
+            service::run("flatpak", &args).await?
+        } else {
+            // The unit's own binary, not whatever `sunshine` is on PATH: a
+            // second copy would write a credentials file the service never
+            // reads.
+            let show = service::run(
+                "systemctl",
+                &["--user", "show", "-p", "ExecStart", "--value", unit],
+            )
+            .await?;
+            let program = exec_start_path(&show.stdout).ok_or_else(|| {
+                HostError::Failed(format!("Dusk could not tell which program {unit} runs."))
+            })?;
+            service::run(&program, &creds).await?
+        };
+        expect(run)?;
+
+        expect(service::run("systemctl", &["--user", "restart", unit]).await?)
+    }
+}
+
+const FLATPAK_ID: &str = "dev.lizardbyte.app.Sunshine";
+
+/// The program in `systemctl show -p ExecStart --value`, which reads
+/// `{ path=/usr/bin/sunshine ; argv[]=... ; ... }`.
+fn exec_start_path(show: &str) -> Option<String> {
+    show.split(';')
+        .map(|part| part.trim().trim_start_matches('{').trim())
+        .find_map(|part| part.strip_prefix("path="))
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
 }
 
 /// Which of [`LINUX_UNITS`] this machine actually has, if any.
@@ -330,6 +427,30 @@ impl HostBackend for MacosHost {
             .await?,
         )
     }
+
+    async fn set_credentials(&self, credentials: &Credentials) -> Result<(), HostError> {
+        let bundle = Self::installed_bundle()
+            .ok_or_else(|| HostError::Failed("Sunshine is not installed on this Mac.".into()))?;
+        let program = bundle.join("Contents/MacOS/sunshine");
+        expect(
+            service::run(
+                &program.to_string_lossy(),
+                &provision::creds_args(credentials),
+            )
+            .await?,
+        )?;
+
+        // `-k` kills a running job before starting it, which is a restart;
+        // a stopped one simply starts, which is also fine.
+        let domain = service::gui_domain_or_default();
+        expect(
+            service::run(
+                "launchctl",
+                &["kickstart", "-k", &format!("{domain}/{MACOS_LABEL}")],
+            )
+            .await?,
+        )
+    }
 }
 
 fn expect(run: Run) -> Result<(), HostError> {
@@ -367,6 +488,37 @@ mod tests {
             "        STATE              : 4  EN COURS \n"
         ));
         assert!(!parse_sc_running("no state line here"));
+    }
+
+    #[test]
+    fn the_units_own_binary_is_read_from_exec_start() {
+        let show = "{ path=/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine ; \
+                    argv[]=/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine ; \
+                    ignore_errors=no ; pid=5767 ; code=(null) ; status=0/0 }";
+        assert_eq!(
+            exec_start_path(show).as_deref(),
+            Some("/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine")
+        );
+        assert_eq!(exec_start_path(""), None);
+    }
+
+    #[test]
+    fn the_windows_script_sets_then_restarts_and_stops_on_failure() {
+        let c = Credentials {
+            username: "dusk".into(),
+            password: "Abc123".into(),
+        };
+        let script = windows_creds_script(r"C:\Program Files\Sunshine\sunshine.exe", &c);
+        let set = script.find("--creds 'dusk' 'Abc123'").expect(&script);
+        let check = script.find("$LASTEXITCODE").expect(&script);
+        let restart = script
+            .find("Restart-Service -Name SunshineService")
+            .expect(&script);
+        assert!(set < check && check < restart, "{script}");
+        assert!(
+            script.starts_with(r"& 'C:\Program Files\Sunshine\sunshine.exe'"),
+            "{script}"
+        );
     }
 
     #[test]

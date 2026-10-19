@@ -99,7 +99,7 @@ export interface HostState {
 export type StepId =
   | "installSunshine"
   | "startService"
-  | "signIn"
+  | "provision"
   | "firewall"
   | "screenRecording"
   | "accessibility"

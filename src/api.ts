@@ -71,13 +71,12 @@ export function stopHosting(): Promise<void> {
   return invoke("stop_hosting");
 }
 
-/** Verified against Sunshine before it is stored, so a typo surfaces here. */
-export function signInHost(username: string, password: string): Promise<void> {
-  return invoke("sign_in_host", { username, password });
-}
-
-export function signOutHost(): Promise<void> {
-  return invoke("sign_out_host");
+/**
+ * Give this machine's Sunshine a sign-in Dusk made up and keeps. Replaces
+ * whatever password Sunshine had, and restarts it.
+ */
+export function provisionHost(): Promise<void> {
+  return invoke("provision_host");
 }
 
 export function getSetup(): Promise<Setup> {

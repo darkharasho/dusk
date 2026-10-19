@@ -1,23 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { HostState, Snapshot } from "../types";
-import {
-  acceptPin,
-  signInHost,
-  signOutHost,
-  startHosting,
-  stopHosting,
-} from "../api";
+import { acceptPin, provisionHost, startHosting, stopHosting } from "../api";
 
 interface Props {
   name: string;
   snapshot: Snapshot;
   onOpenSettings(): void;
   onOpenSetup(): void;
-  /** Bumped when something elsewhere asks for the sign-in form. */
-  signInNonce: number;
 }
 
-type Panel = null | "signIn" | "pin";
+type Panel = null | "pin";
 
 function statusLine(host: HostState): string {
   switch (host.status.kind) {
@@ -41,28 +33,22 @@ export function SelfCard({
   snapshot,
   onOpenSettings,
   onOpenSetup,
-  signInNonce,
 }: Props) {
   const host = snapshot.host;
   const { status, capabilities } = host;
   const installed = status.kind === "installed";
   const running = status.kind === "installed" && status.running;
 
-  // Three states, not two. Offering "Sign in to Sunshine" while the keystore
-  // is still being read shows a sign-in form to someone who is already signed
-  // in, which is exactly what it looks like when a password was never saved.
-  const signedIn = snapshot.hostSignedIn === true;
-  const signInKnown = snapshot.hostSignedIn !== null;
+  // Three states, not two. Offering to take Sunshine over while the keystore
+  // is still being read would replace a password Dusk already holds, so
+  // until that read lands nothing is offered at all.
+  const managed = snapshot.hostSignedIn === true;
+  const managedKnown = snapshot.hostSignedIn !== null;
 
   const [panel, setPanel] = useState<Panel>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-
-  // The setup checklist sends people here for the sign-in step.
-  useEffect(() => {
-    if (signInNonce > 0) setPanel("signIn");
-  }, [signInNonce]);
 
   async function run(action: () => Promise<void>, done?: string) {
     setBusy(true);
@@ -101,12 +87,12 @@ export function SelfCard({
           <button type="button" className="axi-btn" onClick={onOpenSetup}>
             Set up hosting
           </button>
-          {installed && signedIn && (
+          {installed && managed && (
             <button type="button" className="axi-btn" onClick={onOpenSettings}>
               Settings
             </button>
           )}
-          {installed && signedIn && (
+          {installed && managed && (
             <button
               type="button"
               className="axi-btn"
@@ -116,17 +102,15 @@ export function SelfCard({
               Accept a PIN
             </button>
           )}
-          {installed && !signInKnown && (
-            <span className="axi-ink-dim">Checking sign-in</span>
-          )}
-          {installed && signInKnown && !signedIn && (
+          {installed && managedKnown && !managed && (
             <button
               type="button"
               className="axi-btn"
               disabled={busy}
-              onClick={() => setPanel(panel === "signIn" ? null : "signIn")}
+              title="Dusk gives Sunshine a sign-in of its own. Any password set in Sunshine's web page stops working."
+              onClick={() => run(provisionHost, "Dusk is managing this host now.")}
             >
-              Sign in to Sunshine
+              {busy ? "Setting up" : "Let Dusk manage this host"}
             </button>
           )}
           <button
@@ -142,21 +126,12 @@ export function SelfCard({
         </div>
       </div>
 
-      {signedIn && !snapshot.hostCredentialsPersistent && (
+      {managed && !snapshot.hostCredentialsPersistent && (
         <p className="axi-ink-dim">
           {/* Never let someone believe a password was saved when it was not. */}
-          No system keystore was available, so this sign-in is only kept until
-          Dusk closes.
+          No system keystore was available, so Dusk will have to set this host
+          up again the next time it starts.
         </p>
-      )}
-
-      {panel === "signIn" && (
-        <SignInPanel
-          busy={busy}
-          onSubmit={(username, password) =>
-            run(() => signInHost(username, password), "Signed in to Sunshine.")
-          }
-        />
       )}
 
       {panel === "pin" && (
@@ -165,7 +140,6 @@ export function SelfCard({
           onSubmit={(pin, deviceName) =>
             run(() => acceptPin(pin, deviceName), "Machine paired.")
           }
-          onSignOut={() => run(signOutHost, "Signed out.")}
         />
       )}
 
@@ -182,73 +156,12 @@ export function SelfCard({
   );
 }
 
-function SignInPanel({
-  busy,
-  onSubmit,
-}: {
-  busy: boolean;
-  onSubmit(username: string, password: string): void;
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-
-  return (
-    <form
-      className="axi-well axi-stack"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit(username, password);
-      }}
-    >
-      <p className="axi-ink-dim">
-        The username and password you set when you first opened Sunshine. Dusk
-        keeps it in this machine&rsquo;s keystore and uses it to configure the
-        host for you.
-      </p>
-      <div className="dusk-field">
-        <label htmlFor="sun-user">Username</label>
-        <input
-          id="sun-user"
-          className="axi-input"
-          value={username}
-          autoComplete="username"
-          onChange={(e) => setUsername(e.target.value)}
-        />
-      </div>
-      <div className="dusk-field">
-        <label htmlFor="sun-pass">Password</label>
-        <input
-          id="sun-pass"
-          className="axi-input"
-          type="password"
-          value={password}
-          autoComplete="current-password"
-          onChange={(e) => setPassword(e.target.value)}
-        />
-      </div>
-      {/* Wrapped in a row so the button keeps its own width — a stack
-          stretches its children to fill. */}
-      <div className="axi-row">
-        <button
-          type="submit"
-          className="axi-btn axi-btn--primary"
-          disabled={busy || !username || !password}
-        >
-          {busy ? "Checking" : "Sign in"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 function AcceptPinPanel({
   busy,
   onSubmit,
-  onSignOut,
 }: {
   busy: boolean;
   onSubmit(pin: string, deviceName?: string): void;
-  onSignOut(): void;
 }) {
   const [pin, setPin] = useState("");
   const [deviceName, setDeviceName] = useState("");
@@ -294,14 +207,6 @@ function AcceptPinPanel({
           disabled={busy || pin.length !== 4}
         >
           {busy ? "Sending" : "Accept PIN"}
-        </button>
-        <button
-          type="button"
-          className="axi-btn axi-btn--ghost dusk-row__end"
-          disabled={busy}
-          onClick={onSignOut}
-        >
-          Forget sign-in
         </button>
       </div>
     </form>

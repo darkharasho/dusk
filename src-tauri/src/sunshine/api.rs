@@ -38,9 +38,11 @@ const METADATA_KEYS: &[&str] = &["platform", "version", "status", "restart_suppo
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
-    #[error("Dusk does not have this machine's Sunshine sign-in yet")]
+    #[error("Dusk is not managing Sunshine on this machine yet. Set up hosting to fix that.")]
     NoCredentials,
-    #[error("Sunshine rejected that username or password")]
+    #[error(
+        "Sunshine no longer accepts the sign-in Dusk gave it. Set up hosting to give it a new one."
+    )]
     Unauthorized,
     #[error("could not reach Sunshine on this machine: {0}")]
     Unreachable(String),

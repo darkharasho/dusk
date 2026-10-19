@@ -6,6 +6,7 @@ import {
   openFirewall,
   openPrivacySettings,
   previewSunshineDownload,
+  provisionHost,
   startHosting,
   type DownloadProgress,
 } from "../api";
@@ -13,7 +14,6 @@ import type { DownloadPreview, Setup, Step } from "../types";
 
 interface Props {
   onClose(): void;
-  onSignIn(): void;
 }
 
 /** Bytes as something a person reads, not a number with nine digits. */
@@ -44,7 +44,7 @@ function stateChip(step: Step): { className: string; label: string } {
  * item might be a firewall rule. Every step shows its own state and can be
  * run on its own.
  */
-export function SetupChecklist({ onClose, onSignIn }: Props) {
+export function SetupChecklist({ onClose }: Props) {
   const [setup, setSetup] = useState<Setup | null>(null);
   const [preview, setPreview] = useState<DownloadPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,9 +104,9 @@ export function SetupChecklist({ onClose, onSignIn }: Props) {
           await startHosting();
           await refresh();
           break;
-        case "signIn":
-          onSignIn();
-          onClose();
+        case "provision":
+          await provisionHost();
+          await refresh();
           break;
         case "screenRecording":
         case "accessibility":

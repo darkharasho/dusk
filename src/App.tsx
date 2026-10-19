@@ -56,7 +56,6 @@ export function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
-  const [signInNonce, setSignInNonce] = useState(0);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -114,7 +113,6 @@ export function App() {
             snapshot={snapshot}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenSetup={() => setSetupOpen(true)}
-            signInNonce={signInNonce}
           />
         </section>
 
@@ -155,10 +153,7 @@ export function App() {
       {settingsOpen && <HostSettings onClose={() => setSettingsOpen(false)} />}
 
       {setupOpen && (
-        <SetupChecklist
-          onClose={() => setSetupOpen(false)}
-          onSignIn={() => setSignInNonce((n) => n + 1)}
-        />
+        <SetupChecklist onClose={() => setSetupOpen(false)} />
       )}
 
       {open && (

@@ -17,6 +17,15 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+  # The Moonlight client this Dusk ships. It is a fork carrying the in-stream
+  # overlay, built and published by its own repository because a second Qt
+  # toolchain here would be a thing to maintain for no benefit.
+  #
+  # Pinned rather than "latest" on purpose: the two are a matched pair, and a
+  # tagged Dusk should build the same way next year as it does today.
+  CLIENT_REPO: darkharasho/moonlight-qt
+  CLIENT_TAG: dusk-v0.1.0
+
 jobs:
   # Gates all three builds, same as axibridge: a tag must not produce a
   # shippable artifact from code that does not pass its own checks. One
@@ -121,6 +130,34 @@ jobs:
             $(security list-keychains -d user | tr -d '"')
           security list-keychains -d user
 
+          # The signing identity goes in the same keychain, because the
+          # nested client has to be signed *before* Tauri bundles it — a
+          # signature lives inside the bundle it covers, so it survives the
+          # copy, and signing the outer app afterwards does not reach inside
+          # a nested one. Tauri still makes its own keychain for its own
+          # signing pass; this one only serves the staging step.
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/identity.p12
+          security import /tmp/identity.p12 -k ci.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f /tmp/identity.p12
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$pw" ci.keychain >/dev/null
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Stage the Moonlight client
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CLIENT_KEYCHAIN: ci.keychain
+        run: |
+          set -euo pipefail
+          gh release download "$CLIENT_TAG" --repo "$CLIENT_REPO" \
+            --pattern 'dusk-client-macos.tar.gz' --dir /tmp/client
+          tar xzf /tmp/client/dusk-client-macos.tar.gz -C /tmp/client
+          ./scripts/stage-client.sh /tmp/client/Moonlight.app
+
       - name: Build, sign and notarize
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -191,6 +228,17 @@ jobs:
 
       - run: npm ci
 
+      - name: Stage the Moonlight client
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$CLIENT_TAG" --repo "$CLIENT_REPO" \
+            --pattern 'dusk-client-windows-x64.zip' --dir /tmp/client
+          unzip -q /tmp/client/dusk-client-windows-x64.zip -d /tmp/client/deploy
+          ./scripts/stage-client.sh /tmp/client/deploy
+
       # Both installers, because they are not interchangeable: the MSI is what
       # a managed or scripted install wants, and NSIS produces the per-user
       # setup.exe that installs without administrator rights. Dusk itself does
@@ -255,6 +303,16 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Stage the Moonlight client
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$CLIENT_TAG" --repo "$CLIENT_REPO" \
+            --pattern 'dusk-client-linux-x86_64.tar.gz' --dir /tmp/client
+          tar xzf /tmp/client/dusk-client-linux-x86_64.tar.gz -C /tmp/client
+          ./scripts/stage-client.sh /tmp/client/moonlight
 
       # deb and AppImage, not rpm. The .deb is the right answer on the
       # Debian-derived distributions most of this audience runs, and the

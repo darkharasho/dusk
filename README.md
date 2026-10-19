@@ -98,6 +98,13 @@ platforms in parallel. What ships:
 | Windows | `.msi` and a per-user `-setup.exe` | no |
 | Linux | `.deb` and an `.AppImage` (x86_64) | no |
 
+Each build stages the forked Moonlight client first, downloaded from the
+`CLIENT_TAG` release of
+[darkharasho/moonlight-qt](https://github.com/darkharasho/moonlight-qt). That
+tag is pinned in `release.yml` rather than tracking latest: the two are a
+matched pair, and a tagged Dusk should build the same way next year as it does
+today. Bumping the client is an edit to that one line.
+
 Two caveats worth stating plainly, because both land on whoever downloads
 the build:
 

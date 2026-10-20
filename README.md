@@ -240,12 +240,14 @@ than as a faded version of it.
 Setup is a checklist, not a wizard, because Sunshine is usually already
 installed and the outstanding item is often just one step.
 
-Installing means three different things: mount the DMG and `ditto` the
-bundle into Applications, hand the MSI to `msiexec` under `RunAs`, or drop
-the AppImage into `~/.local/bin` and make it executable. On macOS, if
-Applications is not writable the copy is retried through `osascript` so the
-system's own authorisation prompt appears rather than Dusk asking for a
-password itself.
+Installing means three different things. A macOS release carries hosting
+inside itself, as `Contents/Helpers/Dusk Host.app`, so installing is only
+writing the launch agent that runs it. On Windows the MSI goes to `msiexec`
+under `RunAs`; on Linux the AppImage goes into `~/.local/bin`. A build with
+nothing inside it downloads the release instead: on macOS that means
+mounting the DMG and `ditto`-ing the bundle into Applications, retried
+through `osascript` if Applications is not writable, so the system's own
+authorisation prompt appears rather than Dusk asking for a password itself.
 
 **Dusk will not install a virtual display driver.** That is a kernel-mode
 driver from a different project, outside the Sunshine release Dusk can

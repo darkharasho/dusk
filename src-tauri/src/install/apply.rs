@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::embedded;
 use super::release::InstallKind;
 use crate::host::service::{self, Run};
 
@@ -50,7 +51,45 @@ async fn macos_dmg(dmg: &Path) -> Result<(), ApplyError> {
     let result = copy_bundle_from(&mount).await;
     let _ = service::run("hdiutil", &["detach", &mount.to_string_lossy(), "-quiet"]).await;
     let bundle = result?;
-    register_launch_agent(&bundle)
+    register_launch_agent(&embedded::program(&bundle))
+}
+
+/// Turn on the hosting helper inside this Dusk (see `embedded`): write a
+/// launch agent that runs it. Nothing is copied anywhere.
+pub async fn install_embedded(helper: &Path) -> Result<(), ApplyError> {
+    if !cfg!(target_os = "macos") {
+        return Err(ApplyError::Unsupported);
+    }
+    let exe = std::env::current_exe().map_err(|e| ApplyError::Failed(e.to_string()))?;
+    if let Some(why) = embedded::unsettled(&exe) {
+        return Err(ApplyError::Failed(why.into()));
+    }
+
+    let plist = agent_path()?;
+    // An agent from an earlier copy of Dusk that has since moved is Dusk's
+    // own and points at nothing; anyone else's is left alone, as below.
+    let stale = plist.exists()
+        && embedded::agent_program(&plist).is_some_and(|p| embedded::is_dusk_helper(&p));
+    if stale {
+        // Unloaded first, so the next start bootstraps from the new plist
+        // rather than kickstarting the job launchd still has for the old one.
+        let domain = service::gui_domain_or_default();
+        let _ = service::run(
+            "launchctl",
+            &["bootout", &format!("{domain}/{MACOS_LABEL}")],
+        )
+        .await;
+        std::fs::remove_file(&plist).map_err(|e| ApplyError::Failed(e.to_string()))?;
+    }
+    register_launch_agent(&embedded::program(helper))
+}
+
+fn agent_path() -> Result<PathBuf, ApplyError> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| ApplyError::Failed("Dusk could not find your home directory".into()))?;
+    Ok(PathBuf::from(home)
+        .join("Library/LaunchAgents")
+        .join(format!("{MACOS_LABEL}.plist")))
 }
 
 /// Give Sunshine a launch agent, so it runs in the background from sign-in
@@ -59,20 +98,15 @@ async fn macos_dmg(dmg: &Path) -> Result<(), ApplyError> {
 /// The disk image carries only the app; Sunshine's own docs leave the agent
 /// to the person. An agent that already exists is left alone — it may be
 /// one they wrote, and overwriting it would discard whatever they put in it.
-fn register_launch_agent(bundle: &Path) -> Result<(), ApplyError> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| ApplyError::Failed("Dusk could not find your home directory".into()))?;
-    let dir = PathBuf::from(home).join("Library/LaunchAgents");
-    let plist = dir.join(format!("{MACOS_LABEL}.plist"));
+fn register_launch_agent(program: &Path) -> Result<(), ApplyError> {
+    let plist = agent_path()?;
     if plist.exists() {
         return Ok(());
     }
-    std::fs::create_dir_all(&dir).map_err(|e| ApplyError::Failed(e.to_string()))?;
-    std::fs::write(
-        &plist,
-        launch_agent(&bundle.join("Contents/MacOS/sunshine")),
-    )
-    .map_err(|e| ApplyError::Failed(e.to_string()))
+    if let Some(dir) = plist.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| ApplyError::Failed(e.to_string()))?;
+    }
+    std::fs::write(&plist, launch_agent(program)).map_err(|e| ApplyError::Failed(e.to_string()))
 }
 
 /// The label the host backend looks for.

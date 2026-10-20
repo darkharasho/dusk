@@ -6,8 +6,11 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.2.0 is released**, all three platforms, from `main`.
-<https://github.com/darkharasho/dusk/releases/tag/v0.2.0>
+**v0.3.0 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.2` and phases 3–6.
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.0>
+
+Since then, unreleased: **macOS embeds hosting** (see *Phases 3–6*).
 
 | Phase | State |
 | --- | --- |
@@ -30,7 +33,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0
 └── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
 ```
 
@@ -225,9 +228,21 @@ build cross-checks clean, and none has run end to end yet.
 - **Bundled Sunshine (3).** `SUNSHINE_TAG` in `release.yml` pins it;
   `scripts/stage-sunshine.sh` fetches and checks the installer, and
   `install/bundled.rs` installs from it after re-checking the checksum.
-  Linux and Windows only: a disk image nested in a notarized macOS app is
-  untested with Apple's notary, so macOS still downloads. `src-tauri/licenses/`
-  carries the GPL text and source offer; CI writes `versions.txt`.
+  `src-tauri/licenses/` carries the GPL text and source offer; CI writes
+  `versions.txt`.
+- **Embedded hosting on macOS (3, after v0.3.0).** No installer: the app
+  itself ships inside Dusk. `scripts/stage-host-macos.sh` downloads both
+  per-CPU Sunshine images, checks their digests, merges them with `lipo`,
+  and renames the result **Dusk Host** (`dev.dusk.app.host`, `LSUIElement`),
+  so Screen Recording and Microphone list it by that name. `package-macos.sh
+  --host` signs it into `Contents/Helpers` with upstream's entitlements
+  (`audio-input`). "Installing" is `install/embedded.rs` +
+  `apply::install_embedded`: a launch agent pointing at the helper, refused
+  while Dusk runs from the disk image or translocated. An agent left by a
+  copy of Dusk that has moved is rewritten; anyone else's is left alone.
+  `MacosHost` finds the bundle from the agent's program. **Not yet built in
+  CI or run on a Mac**: the first tag (or a `workflow_dispatch` dry run)
+  is what proves the merge, signing and notarization.
 - **Service registration (4).** The AppImage gets a systemd user unit, the
   macOS app a launch agent; an existing one is left alone. Linux has a new
   step for the uinput udev rule via polkit, which recognises Bazzite's own
@@ -261,10 +276,10 @@ build cross-checks clean, and none has run end to end yet.
 ## Its own app: rebrand, Settings tab, GitHub sign-in
 
 - **No Sunshine or Moonlight in the UI.** User-visible copy says "hosting" and
-  "streaming client". The code keeps its module names. Two deliberate leftovers:
+  "streaming client". The code keeps its module names. One deliberate leftover:
   the GPL notice under Settings › About › Open-source licences (the licence
-  asks for it to be reachable), and the macOS privacy steps, because System
-  Settings lists the app as "Sunshine" and nothing else would be findable.
+  asks for it to be reachable). The macOS privacy steps now say "Dusk Host",
+  the embedded helper's name.
 - **Settings tab.** `SettingsPage.tsx` has the sections Account, Hosting
   (`HostingPanel.tsx`, the old SelfCard), Setup, Host settings and About.
   `SelfCard.tsx` is now a summary on the Machines tab that links into it.

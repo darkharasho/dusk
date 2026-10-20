@@ -213,9 +213,16 @@ export function SetupChecklist() {
           </span>
           <div className="axi-stack">
             <p>
-              Hosting {preview.version} · {megabytes(preview.size)}
+              Hosting {preview.version}
+              {!preview.embedded && <> · {megabytes(preview.size)}</>}
             </p>
-            {preview.bundled ? (
+            {preview.embedded ? (
+              <p>
+                Hosting is built into Dusk, so nothing is downloaded or
+                copied. Turning it on makes it start in the background
+                when you sign in.
+              </p>
+            ) : preview.bundled ? (
               <p>
                 This comes with Dusk, so nothing is downloaded.
                 Dusk checks it against the checksum recorded when this
@@ -267,10 +274,14 @@ export function SetupChecklist() {
                     onClick={runInstall}
                   >
                     {busy
-                      ? "Installing"
-                      : preview.bundled
-                        ? "Install"
-                        : "Download and install"}
+                      ? preview.embedded
+                        ? "Turning on"
+                        : "Installing"
+                      : preview.embedded
+                        ? "Turn on hosting"
+                        : preview.bundled
+                          ? "Install"
+                          : "Download and install"}
                   </button>
                   <button
                     type="button"

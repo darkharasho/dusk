@@ -30,8 +30,12 @@
 # The image is notarized and stapled separately by finalize-macos-release.sh,
 # which is shared with the local build.
 #
+# With --host, the hosting helper staged by stage-host-macos.sh goes in
+# beside the client and is signed the same way, with the entitlements staged
+# next to it.
+#
 # Usage:
-#   ./scripts/package-macos.sh <client-app> [--no-notarize]
+#   ./scripts/package-macos.sh <client-app> [--host <host-app>] [--no-notarize]
 #
 # Expects APPLE_SIGNING_IDENTITY, and APPLE_ID / APPLE_PASSWORD /
 # APPLE_TEAM_ID unless --no-notarize. CLIENT_KEYCHAIN optionally names the
@@ -42,17 +46,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 client_src=""
+host_src=""
 notarize=1
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-notarize) notarize=0 ;;
-    -*) echo "error: unknown argument: $arg" >&2; exit 1 ;;
-    *) client_src="$arg" ;;
+    --host) host_src="${2:?--host needs an app}"; shift ;;
+    -*) echo "error: unknown argument: $1" >&2; exit 1 ;;
+    *) client_src="$1" ;;
   esac
+  shift
 done
 
 [[ -n "$client_src" ]] || { echo "error: pass the client .app to insert" >&2; exit 1; }
 [[ -d "$client_src" ]] || { echo "error: no client app at $client_src" >&2; exit 1; }
+[[ -z "$host_src" || -d "$host_src" ]] || { echo "error: no host app at $host_src" >&2; exit 1; }
 [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]] || { echo "error: APPLE_SIGNING_IDENTITY is unset" >&2; exit 1; }
 
 # A universal build nests its output under the target triple, so the bundle
@@ -101,46 +109,74 @@ mkdir -p "$helpers"
 ditto "$client_src" "$helpers/$(basename "$client_src")"
 
 client="$helpers/$(basename "$client_src")"
+host=""
+if [[ -n "$host_src" ]]; then
+  echo "==> Inserting the hosting helper"
+  host="$helpers/$(basename "$host_src")"
+  ditto "$host_src" "$host"
+fi
+
 # Prove the structure survived, because the failure mode this script exists
 # for is silent until Apple's notary service reports it minutes later.
-probe="$client/Contents/Frameworks"
-if [[ -d "$probe" ]] && ! find "$probe" -maxdepth 2 -type l | grep -q .; then
-  echo "error: no symlinks under $probe — the copy flattened the frameworks" >&2
-  exit 1
-fi
+for nested in "$client" ${host:+"$host"}; do
+  probe="$nested/Contents/Frameworks"
+  if [[ -d "$probe" ]] && ! find "$probe" -maxdepth 2 -type l | grep -q .; then
+    echo "error: no symlinks under $probe — the copy flattened the frameworks" >&2
+    exit 1
+  fi
+done
 
 # ------------------------------------------------------------------ sign
 
+# sign_nested <bundle> [codesign args for the bundle itself]
+sign_nested() {
+  local bundle="$1"; shift
+  # Nested Mach-O first. --deep would be the short way and is explicitly not
+  # how Apple wants nested code signed for distribution.
+  #
+  # Every regular file is asked what it is, rather than filtering on the
+  # executable bit first: a .dylib is routinely mode 644, and libSDL3.dylib
+  # was skipped exactly that way, which `codesign --verify` then reported as
+  # the whole client being "not signed at all".
+  #
+  # An explicit `if` rather than `file ... && sign`, because under `set -e` a
+  # non-Mach-O file makes that list the loop body's failing last command.
+  #
+  # Contents/MacOS is excluded: that is the bundle's main executable, and
+  # signing it on its own makes codesign validate the whole bundle around it,
+  # which fails on the libraries that have not been reached yet. It gets signed
+  # last, by signing the bundle.
+  while IFS= read -r f; do
+    if file -b "$f" | grep -q 'Mach-O'; then
+      sign "$f"
+    fi
+  done < <(find "$bundle" -type f -not -path "$bundle/Contents/MacOS/*")
+
+  # Then each framework bundle, deepest first, so an inner one is sealed before
+  # whatever contains it.
+  while IFS= read -r fw; do
+    sign "$fw"
+  done < <(find "$bundle" -depth -type d -name '*.framework')
+
+  # ${1+"$@"}: bash 3.2 calls an empty "$@" unbound under set -u.
+  sign ${1+"$@"} "$bundle"
+  codesign --verify --strict --verbose=2 "$bundle"
+}
+
 echo "==> Signing the client, inside out"
-# Nested Mach-O first. --deep would be the short way and is explicitly not
-# how Apple wants nested code signed for distribution.
-#
-# Every regular file is asked what it is, rather than filtering on the
-# executable bit first: a .dylib is routinely mode 644, and libSDL3.dylib
-# was skipped exactly that way, which `codesign --verify` then reported as
-# the whole client being "not signed at all".
-#
-# An explicit `if` rather than `file ... && sign`, because under `set -e` a
-# non-Mach-O file makes that list the loop body's failing last command.
-#
-# Contents/MacOS is excluded: that is the bundle's main executable, and
-# signing it on its own makes codesign validate the whole bundle around it,
-# which fails on the libraries that have not been reached yet. It gets signed
-# last, by signing the bundle.
-while IFS= read -r f; do
-  if file -b "$f" | grep -q 'Mach-O'; then
-    sign "$f"
+sign_nested "$client"
+
+if [[ -n "$host" ]]; then
+  echo "==> Signing the hosting helper, inside out"
+  # Upstream's entitlements, carried by stage-host-macos.sh. The hardened
+  # runtime refuses the microphone without one.
+  host_ents="$(dirname "$host_src")/host-entitlements.plist"
+  if [[ -s "$host_ents" ]]; then
+    sign_nested "$host" --entitlements "$host_ents"
+  else
+    sign_nested "$host"
   fi
-done < <(find "$client" -type f -not -path "$client/Contents/MacOS/*")
-
-# Then each framework bundle, deepest first, so an inner one is sealed before
-# whatever contains it.
-while IFS= read -r fw; do
-  sign "$fw"
-done < <(find "$client" -depth -type d -name '*.framework')
-
-sign "$client"
-codesign --verify --strict --verbose=2 "$client"
+fi
 
 echo "==> Re-signing the app around it"
 # Tauri already signed this; adding Helpers broke that seal. Carry the

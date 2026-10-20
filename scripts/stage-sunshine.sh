@@ -11,9 +11,8 @@
 # deliberate (docs/architecture.md, "Target shape"): src-tauri/licenses/
 # carries the licence text and the source offer that conveying requires.
 #
-# Linux and Windows. macOS does not bundle yet: a disk image nested in a
-# notarized app is inspected by the notary service, and whether Sunshine's
-# image passes that is untested. A macOS build downloads at first run.
+# Linux and Windows. macOS carries Sunshine itself rather than an installer,
+# signed inside Dusk: see stage-host-macos.sh.
 #
 # Usage:
 #   ./scripts/stage-sunshine.sh <sunshine tag>     e.g. v2026.914.233613
@@ -31,7 +30,7 @@ case "$(uname -s)" in
   Linux)                pattern="Sunshine_*_x86_64.AppImage" ;;
   MINGW*|MSYS*|CYGWIN*) pattern="Sunshine-Windows-AMD64-installer.msi" ;;
   Darwin)
-    echo "error: macOS does not bundle Sunshine yet; see the note at the top" >&2
+    echo "error: macOS embeds Sunshine instead; use stage-host-macos.sh" >&2
     exit 1 ;;
   *) echo "error: unrecognised platform $(uname -s)" >&2; exit 1 ;;
 esac

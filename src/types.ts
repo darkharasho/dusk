@@ -137,6 +137,8 @@ export interface DownloadPreview {
   verifiable: boolean;
   /** True when the installer ships inside Dusk and nothing is downloaded. */
   bundled: boolean;
+  /** True on macOS, where hosting is inside Dusk and nothing is copied. */
+  embedded: boolean;
 }
 
 /** The single payload the whole UI renders from. */

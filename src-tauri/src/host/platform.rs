@@ -10,6 +10,7 @@ use async_trait::async_trait;
 
 use super::service::{self, Run};
 use super::{HostBackend, HostError};
+use crate::install::embedded;
 use crate::model::{HostCapabilities, HostPlatform, HostStatus, SupportTier};
 use crate::sunshine::{provision, Credentials};
 
@@ -308,8 +309,15 @@ impl MacosHost {
         out
     }
 
+    /// The Sunshine the launch agent runs, if there is an agent and what it
+    /// names still exists — which is how the helper inside Dusk is found,
+    /// wherever Dusk is. Otherwise a Sunshine.app installed the usual way.
     fn installed_bundle() -> Option<std::path::PathBuf> {
-        Self::app_bundles().into_iter().find(|p| p.is_dir())
+        let from_agent = Self::agent_plist()
+            .and_then(|p| embedded::agent_program(&p))
+            .filter(|p| p.is_file())
+            .and_then(|p| embedded::bundle_of(&p));
+        from_agent.or_else(|| Self::app_bundles().into_iter().find(|p| p.is_dir()))
     }
 
     fn agent_plist() -> Option<std::path::PathBuf> {
@@ -323,20 +331,8 @@ impl MacosHost {
     /// The bundle's own version. Read from disk because the config API needs
     /// credentials Dusk may not have yet, and a version is worth showing
     /// before anyone signs in.
-    #[cfg(target_os = "macos")]
     fn bundle_version() -> Option<String> {
-        let bundle = Self::installed_bundle()?;
-        let value = plist::Value::from_file(bundle.join("Contents/Info.plist")).ok()?;
-        value
-            .as_dictionary()?
-            .get("CFBundleShortVersionString")?
-            .as_string()
-            .map(str::to_string)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn bundle_version() -> Option<String> {
-        None
+        embedded::version(&Self::installed_bundle()?)
     }
 }
 
@@ -431,7 +427,7 @@ impl HostBackend for MacosHost {
     async fn set_credentials(&self, credentials: &Credentials) -> Result<(), HostError> {
         let bundle = Self::installed_bundle()
             .ok_or_else(|| HostError::Failed("Hosting is not installed on this Mac.".into()))?;
-        let program = bundle.join("Contents/MacOS/sunshine");
+        let program = embedded::program(&bundle);
         expect(
             service::run(
                 &program.to_string_lossy(),

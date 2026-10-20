@@ -131,14 +131,14 @@ pub fn build(
             steps.push(step(
                 StepId::ScreenRecording,
                 "Allow screen recording",
-                "Open System Settings › Privacy & Security › Screen Recording and turn on Sunshine, the hosting service Dusk installed.",
+                "Open System Settings › Privacy & Security › Screen Recording and turn on Dusk Host.",
                 StepState::Unknown,
                 false,
             ));
             steps.push(step(
                 StepId::Accessibility,
                 "Allow accessibility control",
-                "Open System Settings › Privacy & Security › Accessibility and turn on Sunshine, the hosting service Dusk installed. Without it the other machine cannot control this one.",
+                "Open System Settings › Privacy & Security › Accessibility and turn on Dusk Host. Without it the other machine cannot control this one.",
                 StepState::Unknown,
                 false,
             ));

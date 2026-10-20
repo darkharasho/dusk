@@ -14,6 +14,7 @@ pub mod apply;
 pub mod bundled;
 pub mod display_driver;
 pub mod download;
+pub mod embedded;
 pub mod release;
 pub mod steps;
 

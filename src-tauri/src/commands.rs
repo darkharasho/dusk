@@ -613,6 +613,17 @@ pub async fn preview_sunshine_download(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<DownloadPreview, String> {
+    if let Some(helper) = install::embedded::find() {
+        return Ok(DownloadPreview {
+            version: install::embedded::version(&helper).unwrap_or_default(),
+            asset: install::embedded::HELPER.into(),
+            size: 0,
+            verifiable: true,
+            bundled: true,
+            embedded: true,
+        });
+    }
+
     let resources = app.path().resource_dir().ok();
     if let Some(bundled) = install::bundled::find(resources.as_deref()) {
         return Ok(DownloadPreview {
@@ -625,6 +636,7 @@ pub async fn preview_sunshine_download(
             size: bundled.size,
             verifiable: true,
             bundled: true,
+            embedded: false,
         });
     }
 
@@ -636,6 +648,7 @@ pub async fn preview_sunshine_download(
         size: choice.1.asset.size,
         verifiable: choice.1.asset.sha256.is_some(),
         bundled: false,
+        embedded: false,
     })
 }
 
@@ -670,13 +683,17 @@ pub struct DownloadPreview {
     pub verifiable: bool,
     /// True when the installer ships inside Dusk and nothing is downloaded.
     pub bundled: bool,
+    /// True on macOS, where hosting itself is inside Dusk and installing it
+    /// copies nothing — so there is no size to show and no file to hash.
+    pub embedded: bool,
 }
 
 /// Progress events while a release downloads.
 pub const DOWNLOAD_EVENT: &str = "dusk://download";
 
-/// Install Sunshine: the build inside Dusk if there is one, otherwise the
-/// newest release, downloaded and checked.
+/// Install Sunshine: on macOS the helper inside Dusk, elsewhere the
+/// installer inside Dusk, otherwise the newest release, downloaded and
+/// checked.
 ///
 /// Both halves are real state changes on the machine, so this only ever runs
 /// from an explicit press — never on a timer, and never as part of a probe.
@@ -688,7 +705,13 @@ pub async fn install_sunshine(
     let inner = state.inner().clone();
 
     let resources = app.path().resource_dir().ok();
-    if let Some(bundled) = install::bundled::find(resources.as_deref()) {
+    if let Some(helper) = install::embedded::find() {
+        // Signed and sealed inside Dusk's own bundle, so macOS has already
+        // checked it; there is no separate file to hash.
+        install::apply::install_embedded(&helper)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else if let Some(bundled) = install::bundled::find(resources.as_deref()) {
         install::bundled::verify(&bundled).await?;
         install::apply::install(&bundled.path, bundled.kind)
             .await

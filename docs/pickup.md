@@ -20,23 +20,23 @@ unless a `--background` launch says otherwise. Compile- and unit-tested on
 Linux, built in CI for all three; not run as an app yet.
 
 **"Looking for machines"** is a timed sweep (`discovery::sweep`, six
-seconds) at startup and after Refresh. mDNS browsing never ends, so the old
+seconds) at startup, after Refresh, and when the window comes back from
+hidden. mDNS browsing never ends, so the old
 flag tied to it stayed on forever.
 
 | Phase | State |
 | --- | --- |
 | 0 — bundle the fork, fix the client search path | done, verified in artifacts |
 | 1 — rename and identity | done, verified in artifacts |
-| 2 — control socket, overlay actions, live stats | **done and live-tested; client tagged `dusk-v0.2.2`; no Dusk release carries it yet; quality not started** |
+| 2 — control socket, overlay actions, live stats | **done and live-tested; client `dusk-v0.2.2`, shipped since v0.3.0; quality not started** |
 | 3 — bundle Sunshine, provision credentials | built, not live-tested |
 | 4 — installer, service registration | built, not live-tested; Windows display driver built, not run on Windows |
 | 5 — zero-click pairing | built, not live-tested |
 | 6 — window choreography | built, not live-tested |
 
 The fork's half of phase 2 is merged to its `master` and published as
-`dusk-v0.2.2`, which `CLIENT_TAG` now pins. The next Dusk release is the
-first to ship it, and phases 3–6 with it. See *Phase 2* and *Phases 3–6*
-below.
+`dusk-v0.2.2`, which `CLIENT_TAG` pins. v0.3.0 was the first Dusk release
+to ship it, with phases 3–6. See *Phase 2* and *Phases 3–6* below.
 
 ## The map
 
@@ -219,8 +219,6 @@ Not done yet:
   from Dusk's window until the fork also restores a stream window that the
   overlay's Open Dusk minimised. `HostDisplay` needs the host's display list,
   which Dusk does not have.
-- The client is tagged (`dusk-v0.2.2`) and pinned, but no Dusk release
-  carries it until the next `v*` tag.
 
 ## Phases 3–6: built, waiting on real machines
 
@@ -312,6 +310,30 @@ build cross-checks clean, and none has run end to end yet.
     pair between two signed-in machines has not.
   - This deliberately revises CLAUDE.md's "no account system". GitHub is the
     only party; there is still nothing Dusk hosts.
+- **Own titlebar.** `components/Titlebar.tsx`. Windows and Linux have no
+  native frame (`decorations: false`), so the strip draws the buttons and is
+  the drag region (`data-tauri-drag-region`, which does not reach children).
+  macOS keeps its traffic lights over the strip (`tauri.macos.conf.json`,
+  `titleBarStyle: Overlay`). The page under it is `.dusk-body`, the one
+  scrolling region; drawers start below the strip. Top-layer `<dialog>`s
+  still cover it. Not yet seen on a real Windows or macOS window.
+- **Self-update.** `src/updates.ts`, `tauri-plugin-updater`. Checks 10s after
+  launch and every 6 hours, downloads in the background, then shows **Restart
+  to update** in the titlebar and in Settings › About. Never restarts on its
+  own: Dusk may be hosting or mid-stream. Off on a `.deb` (the package
+  manager's job) and in debug builds (`updates.rs`). The manifest is
+  `latest.json` on the latest release, written by
+  `scripts/write-latest-json.sh`. MSI and NSIS installs each update through
+  their own installer. The macOS archive is re-made in CI from the finished,
+  notarized app, because Tauri's own is from before the client and host went
+  in.
+  - **Signing key:** `~/.tauri/dusk.key` (no password), public half in
+    `tauri.conf.json`. CI reads the repo secret `TAURI_SIGNING_PRIVATE_KEY`.
+    Lose the key and installed copies can never update again; they would
+    need a manual reinstall. `npm run tauri build` uses the local key, or
+    skips the update archives if it is missing.
+  - The first release with the updater can only be installed by hand; the
+    first automatic update is the release after it.
 
 ## Landmines
 

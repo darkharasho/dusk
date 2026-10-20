@@ -43,6 +43,10 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 tauri-plugin-autostart = "2"
 # A Dusk waiting in the tray is shown, not doubled, when launched again.
 tauri-plugin-single-instance = "2"
+# Self-update from the GitHub release's latest.json, signed with Dusk's own
+# key, and the relaunch that finishes one.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Reading moonlight-qt's identity out of its QSettings store, which is a
 # different backend on each platform: a plist on macOS, an INI file on Linux

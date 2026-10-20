@@ -180,3 +180,53 @@ body,
   border-radius: 50%;
   display: block;
 }
+
+/* The window's own chrome (components/Titlebar.tsx). The page under it is
+   the scrolling region, so the titlebar stays put and the masthead sticks
+   to the top of that region rather than of the window. */
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+.dusk-titlebar {
+  --dusk-titlebar-height: 38px;
+  position: relative;
+  /* Above a drawer and its scrim (z-index 50-51), which start below it, so
+     the window can still be moved and closed with a drawer open. */
+  z-index: 60;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Clears macOS's traffic lights, which sit over the strip's left end. */
+.dusk-titlebar[data-mac] {
+  padding-left: 78px;
+}
+
+.dusk-titlebar__glyph {
+  width: 10px;
+  height: 10px;
+}
+
+.dusk-titlebar__update {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* On macOS there are no buttons to push the pill right. */
+.dusk-titlebar[data-mac] .dusk-titlebar__update {
+  margin-left: auto;
+  margin-right: 10px;
+}
+
+.dusk-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.axi-scrim,
+.axi-drawer {
+  top: 38px;
+}

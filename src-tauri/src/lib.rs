@@ -22,6 +22,7 @@ mod state;
 mod store;
 mod sunshine;
 mod tray;
+mod updates;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -117,6 +118,8 @@ pub fn run() {
                 .arg(startup::BACKGROUND_ARG)
                 .build(),
         )
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 startup::on_close_requested(window, api);
@@ -124,6 +127,7 @@ pub fn run() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            updates::ensure_self_executable();
 
             let config_dir = app.path().app_config_dir()?;
             let store_path = store::store_path(&config_dir);
@@ -262,6 +266,8 @@ pub fn run() {
             commands::get_startup,
             commands::set_open_at_login,
             commands::set_startup_prefs,
+            updates::updates_supported,
+            updates::ensure_self_executable,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Dusk");

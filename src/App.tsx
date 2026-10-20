@@ -8,6 +8,8 @@ import { AddDeviceDialog } from "./components/AddDeviceDialog";
 import { DeviceDrawer } from "./components/DeviceDrawer";
 import { PairRequestPrompt } from "./components/PairRequestPrompt";
 import { SettingsPage, type SettingsSection } from "./components/SettingsPage";
+import { Titlebar } from "./components/Titlebar";
+import { startUpdates } from "./updates";
 
 type Tab = "machines" | "settings";
 
@@ -52,7 +54,23 @@ function Masthead({ children }: { children?: React.ReactNode }) {
   );
 }
 
+/**
+ * The frame: Dusk's own titlebar, and under it the one region that scrolls,
+ * so the titlebar never moves and the masthead sticks below it.
+ */
 export function App() {
+  useEffect(() => startUpdates(), []);
+  return (
+    <>
+      <Titlebar />
+      <div className="dusk-body">
+        <Body />
+      </div>
+    </>
+  );
+}
+
+function Body() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);

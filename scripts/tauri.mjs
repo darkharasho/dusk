@@ -13,7 +13,10 @@
 // deliberately, and nothing here runs off Linux.
 
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // Enough of Tauri's dependency graph to catch a shadowed pkg-config: gdk-3.0
 // is what drags in the X11 .pc files Homebrew lacks, javascriptcoregtk-4.1 is
@@ -35,8 +38,26 @@ function repairPkgConfig() {
 
 repairPkgConfig();
 
+// A build makes signed update archives (createUpdaterArtifacts), and Tauri
+// fails one without the signing key rather than ship an update nobody can
+// verify. The release workflow passes the key; a local build uses the
+// maintainer's copy if it is where `tauri signer generate` put it, and
+// otherwise skips the update archives, which only a release needs.
+function updaterSigning(args) {
+  if (args[0] !== "build" || process.env.TAURI_SIGNING_PRIVATE_KEY) return args;
+  const key = join(homedir(), ".tauri", "dusk.key");
+  if (existsSync(key)) {
+    process.env.TAURI_SIGNING_PRIVATE_KEY = readFileSync(key, "utf8");
+    return args;
+  }
+  console.log("dusk: no updater signing key; building without update archives");
+  return [...args, "--config", JSON.stringify({ bundle: { createUpdaterArtifacts: false } })];
+}
+
+const args = updaterSigning(process.argv.slice(2));
+
 const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
-const tauri = spawn(process.execPath, [cli, ...process.argv.slice(2)], {
+const tauri = spawn(process.execPath, [cli, ...args], {
   stdio: "inherit",
 });
 

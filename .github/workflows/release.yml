@@ -37,6 +37,13 @@ env:
   # as a repository variable; unset, the build ships with sign-in disabled.
   DUSK_GITHUB_CLIENT_ID: ${{ vars.DUSK_GITHUB_CLIENT_ID }}
 
+  # The self-update's signing key. tauri.conf.json carries its public half,
+  # and with createUpdaterArtifacts on, `tauri build` fails without this: an
+  # update the app cannot verify is one it will refuse to install. The
+  # private half lives in ~/.tauri/dusk.key on the maintainer's machine.
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
 jobs:
   # Gates all three builds, same as axibridge: a tag must not produce a
   # shippable artifact from code that does not pass its own checks. One
@@ -218,13 +225,33 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ./scripts/finalize-macos-release.sh
 
+      # The update archive Tauri made at build time is of the app before the
+      # client and host went in, and before it was notarized: installing it
+      # would update Dusk into one that cannot stream or host. So it is made
+      # again from the finished app and signed again. tar, for the framework
+      # symlinks, as with the client above. Signed with the key in the job's
+      # environment.
+      - name: Archive the finished app for the updater
+        run: |
+          set -euo pipefail
+          macos_dir="$(find src-tauri/target -maxdepth 5 -type d -path '*/bundle/macos' | head -1)"
+          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          archive="$PWD/artifacts/Dusk_${version}_universal.app.tar.gz"
+          mkdir -p artifacts
+          rm -f "$macos_dir"/*.app.tar.gz "$macos_dir"/*.app.tar.gz.sig
+          # Without macOS metadata: bsdtar otherwise adds ._ AppleDouble files,
+          # which unpack into the bundle and break its signature.
+          COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$archive" -C "$macos_dir" Dusk.app
+          npx tauri signer sign "$archive"
+          ls -la artifacts
+
       - name: Collect artifacts
         run: |
           set -euo pipefail
           mkdir -p artifacts
           find src-tauri/target -maxdepth 5 -name '*.dmg' -exec cp {} artifacts/ \;
           ls -la artifacts
-          test -n "$(ls -A artifacts)" || { echo "::error::no .dmg produced"; exit 1; }
+          test -n "$(ls artifacts/*.dmg)" || { echo "::error::no .dmg produced"; exit 1; }
 
       # The three build jobs each upload their own artifact and none of them
       # touches the release. Creating it is the publish job's business alone:
@@ -233,7 +260,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dusk-macos-universal
-          path: artifacts/*.dmg
+          path: artifacts/*
           if-no-files-found: error
 
   # Unsigned, and visibly so: there is no Authenticode certificate for this
@@ -297,8 +324,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          find src-tauri/target -maxdepth 5 \
-            \( -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} artifacts/ \;
+          # Only Tauri's bundle output, two levels down: the host installer
+          # Dusk carries is copied into target/ as a resource, and a wider
+          # search shipped it as a release asset of its own.
+          find src-tauri/target/release/bundle -maxdepth 2 \
+            \( -name '*.msi' -o -name '*-setup.exe' -o -name '*.msi.sig' -o -name '*-setup.exe.sig' \) \
+            -exec cp {} artifacts/ \;
           ls -la artifacts
           test -n "$(ls -A artifacts)" || { echo "::error::no installer produced"; exit 1; }
 
@@ -380,8 +411,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          find src-tauri/target -maxdepth 5 \
-            \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} artifacts/ \;
+          # Only Tauri's bundle output, two levels down: the host installer
+          # Dusk carries is copied into target/ as a resource, and a wider
+          # search shipped it as a release asset of its own.
+          find src-tauri/target/release/bundle -maxdepth 2 \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.AppImage.sig' \) \
+            -exec cp {} artifacts/ \;
           ls -la artifacts
           test -n "$(ls -A artifacts)" || { echo "::error::no package produced"; exit 1; }
 
@@ -391,9 +426,32 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+  # The manifest the installed Dusks read to find an update, assembled from
+  # the three builds' signatures. Its own job rather than a publish step, so a
+  # dry run builds and checks it too.
+  updater-manifest:
+    name: Updater manifest
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Write latest.json
+        run: ./scripts/write-latest-json.sh artifacts latest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dusk-updater-manifest
+          path: latest.json
+          if-no-files-found: error
+
   publish:
     name: Publish
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows, build-linux, updater-manifest]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -442,7 +500,8 @@ jobs:
           # Three platforms, so a missing one has to be caught here: each
           # build job fails on its own empty output, but a release with the
           # macOS .dmg and nothing else would otherwise publish quietly.
-          for want in '\.dmg$' '\.msi$' '\.exe$' '\.deb$' '\.AppImage$'; do
+          for want in '\.dmg$' '\.msi$' '\.exe$' '\.deb$' '\.AppImage$' \
+                      '\.app\.tar\.gz$' '\.sig$' '/latest\.json$'; do
             printf '%s\n' "${files[@]}" | grep -qE "$want" \
               || { echo "::error::no artifact matching $want"; exit 1; }
           done

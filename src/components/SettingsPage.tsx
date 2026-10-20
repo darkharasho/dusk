@@ -6,6 +6,7 @@ import { HostingPanel } from "./HostingPanel";
 import { HostSettings } from "./HostSettings";
 import { SetupChecklist } from "./SetupChecklist";
 import { StartupSection } from "./StartupSection";
+import { checkForUpdate, restartToUpdate, useUpdateState, type UpdateState } from "../updates";
 
 export type SettingsSection = "account" | "startup" | "hosting" | "setup" | "host" | "about";
 
@@ -93,6 +94,7 @@ function About() {
         Every machine you own in one app. Stream from any of them, and let any
         of them stream from this one.
       </p>
+      <Updates />
       {/* The notices the bundled open-source components require. Tucked away,
           not absent: their licences ask for them to be reachable. */}
       <details>
@@ -106,6 +108,55 @@ function About() {
           installation.
         </p>
       </details>
+    </div>
+  );
+}
+
+function updateLine(update: UpdateState): string {
+  switch (update.kind) {
+    case "unsupported":
+      return "This copy of Dusk updates through your package manager.";
+    case "idle":
+      return "Dusk looks for a new version on launch and every few hours.";
+    case "checking":
+      return "Looking for a new version…";
+    case "upToDate":
+      return "This is the latest version.";
+    case "downloading":
+      return `Downloading version ${update.version}` + (update.percent !== null ? ` · ${update.percent}%` : "");
+    case "ready":
+      return `Version ${update.version} is ready. Restart Dusk to finish.`;
+    case "installing":
+      return `Installing version ${update.version}…`;
+    case "error":
+      return `Could not update: ${update.message}`;
+  }
+}
+
+/** Where the self-update is, and the buttons that move it along. */
+function Updates() {
+  const update = useUpdateState();
+  if (update.kind === "unsupported") {
+    return <p className="axi-ink-faint">{updateLine(update)}</p>;
+  }
+  const busy = ["checking", "downloading", "installing"].includes(update.kind);
+  return (
+    <div className="axi-row">
+      <span className={update.kind === "error" ? "axi-ink-danger" : "axi-ink-dim"}>{updateLine(update)}</span>
+      {update.kind === "ready" ? (
+        <button type="button" className="axi-btn axi-btn--primary" onClick={() => void restartToUpdate()}>
+          Restart to update
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="axi-btn axi-btn--ghost"
+          disabled={busy}
+          onClick={() => void checkForUpdate(true)}
+        >
+          Check for updates
+        </button>
+      )}
     </div>
   );
 }

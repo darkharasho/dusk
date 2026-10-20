@@ -301,13 +301,14 @@ impl AppState {
         // Copied out under one short lock. Two `lock().await`s in the
         // literal below would deadlock: the first guard lives until the
         // whole expression ends, so the second waits on it forever.
-        let (allow_other_devices, resolution, bitrate_kbps, codec) = {
+        let (allow_other_devices, resolution, bitrate_kbps, codec, virtual_screen) = {
             let store = self.store.lock().await;
             (
                 store.allow_other_devices,
                 store.resolution,
                 store.bitrate_kbps,
                 store.codec,
+                store.virtual_screen,
             )
         };
         for device in &mut devices {
@@ -335,6 +336,8 @@ impl AppState {
             resolution,
             bitrate_kbps,
             codec,
+            virtual_screen,
+            virtual_screen_available: crate::install::display_driver::installed(),
         }
     }
 }

@@ -252,6 +252,7 @@ pub fn run() {
             commands::provision_host,
             commands::accept_pin,
             commands::set_allow_other_devices,
+            commands::set_virtual_screen,
             commands::set_resolution,
             commands::set_bitrate,
             commands::set_codec,

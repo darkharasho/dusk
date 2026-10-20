@@ -69,37 +69,46 @@ pub fn asset() -> super::release::Asset {
 }
 
 /// Whether a device for this driver already exists.
+pub fn installed() -> bool {
+    instance_id().is_some()
+}
+
+/// The driver's device, as Device Manager names it (`ROOT\DISPLAY\0000`),
+/// which is what restarting it takes.
 ///
 /// Read from the registry's device tree, which any account can read, so the
 /// checklist can say "done" without asking for anything. Every root
 /// enumerated device is looked at rather than only `ROOT\DISPLAY`, because
 /// the driver's own control app and Dusk need not pick the same name.
 #[cfg(windows)]
-pub fn installed() -> bool {
+pub fn instance_id() -> Option<String> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
 
-    let Ok(root) =
-        RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"SYSTEM\CurrentControlSet\Enum\ROOT")
-    else {
-        return false;
-    };
-    root.enum_keys().flatten().any(|class| {
-        let Ok(class) = root.open_subkey(&class) else {
-            return false;
-        };
-        class.enum_keys().flatten().any(|instance| {
+    let root = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SYSTEM\CurrentControlSet\Enum\ROOT")
+        .ok()?;
+    root.enum_keys().flatten().find_map(|class_name| {
+        let class = root.open_subkey(&class_name).ok()?;
+        class.enum_keys().flatten().find_map(|instance| {
             class
                 .open_subkey(&instance)
                 .and_then(|key| key.get_value::<Vec<String>, _>("HardwareID"))
                 .is_ok_and(|ids| ids.iter().any(|id| id.eq_ignore_ascii_case(HARDWARE_ID)))
+                .then(|| format!(r"ROOT\{class_name}\{instance}"))
         })
     })
 }
 
 #[cfg(not(windows))]
-pub fn installed() -> bool {
-    false
+pub fn instance_id() -> Option<String> {
+    None
+}
+
+/// The driver's monitor list.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn settings_file() -> std::path::PathBuf {
+    std::path::Path::new(SETTINGS_DIR).join("vdd_settings.xml")
 }
 
 /// Download, check, unpack and install. Asks for administrator rights once.

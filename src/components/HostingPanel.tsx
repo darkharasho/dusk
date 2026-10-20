@@ -1,6 +1,13 @@
 import { useState } from "react";
 import type { HostState, Snapshot } from "../types";
-import { acceptPin, provisionHost, setAllowOtherDevices, startHosting, stopHosting } from "../api";
+import {
+  acceptPin,
+  provisionHost,
+  setAllowOtherDevices,
+  setVirtualScreen,
+  startHosting,
+  stopHosting,
+} from "../api";
 import { Toggle } from "./StartupSection";
 
 interface Props {
@@ -21,6 +28,16 @@ function statusLine(host: HostState): string {
     case "unknown":
       return host.status.reason;
   }
+}
+
+function virtualScreenDetail(snapshot: Snapshot): string {
+  if (!snapshot.virtualScreen && !snapshot.virtualScreenAvailable) {
+    return "Needs the virtual display. Install it from Setup first.";
+  }
+  if (snapshot.virtualScreen) {
+    return "Each stream gets a screen the size of the device watching it, with no bars. This machine's own monitors switch off while it streams.";
+  }
+  return "Give each stream a screen the size of the device watching it, so an ultrawide or a laptop fills edge to edge. This machine's own monitors switch off while it streams. Windows asks for permission once.";
 }
 
 /**
@@ -135,6 +152,24 @@ export function HostingPanel({ name, snapshot }: Props) {
         disabled={busy}
         onChange={(on) => run(() => setAllowOtherDevices(on))}
       />
+
+      {capabilities.virtualDisplay && installed && managed && (
+        <Toggle
+          id="virtual-screen"
+          label="Stream a screen sized to the other device"
+          detail={virtualScreenDetail(snapshot)}
+          on={snapshot.virtualScreen}
+          disabled={busy || !running || (!snapshot.virtualScreen && !snapshot.virtualScreenAvailable)}
+          onChange={(on) =>
+            run(
+              () => setVirtualScreen(on),
+              on
+                ? "Streams now show a screen the other device's size."
+                : "Streams show this machine's screen again.",
+            )
+          }
+        />
+      )}
 
       {panel === "pin" && snapshot.allowOtherDevices && (
         <AcceptPinPanel

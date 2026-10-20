@@ -47,12 +47,16 @@
 //! can match the host's screen:
 //!
 //! ```text
-//! connecting → host   {"type":"display"}
+//! connecting → host   {"type":"display","screen":{"width":3440,"height":1440}}
 //! host → connecting   {"type":"display_size","width":2560,"height":1440}
 //! ```
 //!
-//! A Dusk too old to know it declines, and the stream falls back to a
-//! fixed size.
+//! `screen` is the asking machine's own, and is new in 0.3.10. A host
+//! streaming its virtual display answers with the size closest to it that
+//! the display has, so the stream is the asker's shape; one streaming its
+//! own monitor answers with that monitor's size. A Dusk that predates
+//! `screen` ignores it. A Dusk too old to know the question at all
+//! declines, and the stream falls back to a fixed size.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -99,11 +103,21 @@ pub enum Message {
     },
     /// What size is the screen being streamed? Nothing secret: it is the
     /// size every stream from this machine already shows.
-    Display,
+    Display {
+        /// The asking machine's screen, in real pixels.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        screen: Option<Size>,
+    },
     DisplaySize {
         width: u32,
         height: u32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Size {
+    pub width: u32,
+    pub height: u32,
 }
 
 /// What the host's window is asked.
@@ -211,7 +225,7 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
                 None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
             }
         }
-        Ok(Message::Display) => match host_display(&app) {
+        Ok(Message::Display { screen }) => match display_answer(&app, &state, screen).await {
             Some((width, height)) => Message::DisplaySize { width, height },
             None => Message::Declined {
                 reason: "This machine could not tell its screen size.".into(),
@@ -222,6 +236,27 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
         },
     };
     let _ = send(&mut write, &reply).await;
+}
+
+/// The size a stream from here should be, for a machine whose screen is
+/// `screen`.
+///
+/// Streaming the virtual display, it is the closest size the display has to
+/// the asker's screen: a size it does not have would make the host give up
+/// on the virtual display and stream the monitor. An asker too old to say
+/// its size is treated as this machine's size.
+async fn display_answer(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    screen: Option<Size>,
+) -> Option<(u32, u32)> {
+    let own = host_display(app);
+    if !state.store.lock().await.virtual_screen {
+        return own;
+    }
+    let want = screen.map(|s| (s.width, s.height)).or(own)?;
+    let modes = crate::host::virtual_screen::current_modes();
+    crate::host::virtual_screen::best_mode(want, &modes).or(own)
 }
 
 /// The size of the screen a stream from here shows, in real pixels.
@@ -427,18 +462,24 @@ async fn ask_at(
     }
 }
 
-/// Ask the Dusk at `address` how big its screen is. `None` when there is
-/// no Dusk there, or one too old to say. Kept short: a stream is waiting.
-pub async fn display_size(address: &str) -> Option<(u32, u32)> {
-    display_size_at(address, PORT).await
+/// Ask the Dusk at `address` what size to stream at, telling it the size of
+/// the screen here. `None` when there is no Dusk there, or one too old to
+/// say. Kept short: a stream is waiting.
+pub async fn display_size(address: &str, screen: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    display_size_at(address, PORT, screen).await
 }
 
-async fn display_size_at(address: &str, port: u16) -> Option<(u32, u32)> {
+async fn display_size_at(
+    address: &str,
+    port: u16,
+    screen: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
     let budget = Duration::from_secs(2);
     let connect = TcpStream::connect((address, port));
     let stream = tokio::time::timeout(budget, connect).await.ok()?.ok()?;
     let (read, mut write) = stream.into_split();
-    send(&mut write, &Message::Display).await.ok()?;
+    let screen = screen.map(|(width, height)| Size { width, height });
+    send(&mut write, &Message::Display { screen }).await.ok()?;
     let mut lines = BufReader::new(read.take(MAX_LINE as u64)).lines();
     let line = tokio::time::timeout(budget, lines.next_line())
         .await
@@ -589,7 +630,17 @@ mod tests {
     #[test]
     fn the_display_question_is_the_one_documented() {
         assert_eq!(
-            serde_json::to_string(&Message::Display).unwrap(),
+            serde_json::to_string(&Message::Display {
+                screen: Some(Size {
+                    width: 3440,
+                    height: 1440
+                })
+            })
+            .unwrap(),
+            r#"{"type":"display","screen":{"width":3440,"height":1440}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Message::Display { screen: None }).unwrap(),
             r#"{"type":"display"}"#
         );
         assert_eq!(
@@ -602,6 +653,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_question_from_an_older_dusk_still_reads() {
+        assert_eq!(
+            serde_json::from_str::<Message>(r#"{"type":"display"}"#).unwrap(),
+            Message::Display { screen: None }
+        );
+    }
+
+    #[test]
+    fn an_older_dusk_reads_the_new_question_as_the_old_one() {
+        // The message as 0.3.9 and earlier declared it.
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Old {
+            Display,
+        }
+        let new = Message::Display {
+            screen: Some(Size {
+                width: 3440,
+                height: 1440,
+            }),
+        };
+        let line = serde_json::to_string(&new).unwrap();
+        assert_eq!(serde_json::from_str::<Old>(&line).unwrap(), Old::Display);
+    }
+
     /// A stand-in host that answers one request with `reply`.
     async fn host_answering(reply: &'static str) -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -611,10 +688,10 @@ mod tests {
             let (read, mut write) = stream.into_split();
             let mut lines = BufReader::new(read).lines();
             let line = lines.next_line().await.unwrap().unwrap();
-            assert_eq!(
+            assert!(matches!(
                 serde_json::from_str::<Message>(&line).unwrap(),
-                Message::Display
-            );
+                Message::Display { .. }
+            ));
             write.write_all(reply.as_bytes()).await.unwrap();
             write.write_all(b"\n").await.unwrap();
         });
@@ -624,7 +701,10 @@ mod tests {
     #[tokio::test]
     async fn a_host_says_how_big_its_screen_is() {
         let port = host_answering(r#"{"type":"display_size","width":3440,"height":1440}"#).await;
-        assert_eq!(display_size_at("127.0.0.1", port).await, Some((3440, 1440)));
+        assert_eq!(
+            display_size_at("127.0.0.1", port, Some((3440, 1440))).await,
+            Some((3440, 1440))
+        );
     }
 
     #[tokio::test]
@@ -633,9 +713,15 @@ mod tests {
             r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
         )
         .await;
-        assert_eq!(display_size_at("127.0.0.1", port).await, None);
+        assert_eq!(
+            display_size_at("127.0.0.1", port, Some((3440, 1440))).await,
+            None
+        );
         let port = host_answering(r#"{"type":"display_size","width":0,"height":1440}"#).await;
-        assert_eq!(display_size_at("127.0.0.1", port).await, None);
+        assert_eq!(
+            display_size_at("127.0.0.1", port, Some((3440, 1440))).await,
+            None
+        );
     }
 
     #[tokio::test]

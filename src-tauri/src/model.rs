@@ -251,4 +251,8 @@ pub struct Snapshot {
     /// Kbps, or `None` for the client's own choice.
     pub bitrate_kbps: Option<u32>,
     pub codec: crate::store::Codec,
+    /// Whether streams from here show the virtual display at the client's
+    /// size, and whether that can be turned on: the driver is installed.
+    pub virtual_screen: bool,
+    pub virtual_screen_available: bool,
 }

@@ -306,7 +306,9 @@ const FALLBACK_SIZE: (u32, u32) = (1920, 1080);
 async fn stream_size(app: &AppHandle, state: &Arc<AppState>, address: &str) -> (u32, u32) {
     let resolution = state.store.lock().await.resolution;
     let size = match resolution {
-        Resolution::MatchHost => crate::peer::display_size(crate::peer::host_part(address)).await,
+        Resolution::MatchHost => {
+            crate::peer::display_size(crate::peer::host_part(address), this_display(app)).await
+        }
         Resolution::MatchThisDisplay => this_display(app),
         Resolution::Fixed { width, height } => Some((width, height)),
     };
@@ -681,6 +683,31 @@ pub async fn set_allow_other_devices(
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// Whether streams from this machine show the virtual display, sized to
+/// the connecting machine. Turning it on asks for administrator rights
+/// once, to restart the driver with the sizes it needs.
+#[tauri::command]
+pub async fn set_virtual_screen(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    let inner = state.inner().clone();
+    let (api, credentials) = host_api(&inner).await?;
+    if on {
+        crate::host::virtual_screen::enable(&api, &credentials).await?;
+    } else {
+        crate::host::virtual_screen::disable(&api, &credentials).await?;
+    }
+    {
+        let mut store = inner.store.lock().await;
+        store.virtual_screen = on;
+        store.save(&inner.store_path)?;
+    }
+    emit_snapshot(&app, &inner).await;
     Ok(())
 }
 

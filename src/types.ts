@@ -177,6 +177,13 @@ export interface Snapshot {
   bitrateKbps: number | null;
   /** Which video format a stream asks the host for. */
   codec: Codec;
+  /**
+   * Whether streams from this machine show the virtual display, sized to
+   * the connecting machine's screen.
+   */
+  virtualScreen: boolean;
+  /** The virtual display driver is installed, so that can be turned on. */
+  virtualScreenAvailable: boolean;
 }
 
 export type Codec = "auto" | "h264" | "hevc" | "av1";

@@ -35,6 +35,10 @@ pub struct Store {
     pub bitrate_kbps: Option<u32>,
     /// Which video format a stream asks the host for.
     pub codec: Codec,
+    /// Streams from this machine show the virtual display, sized to the
+    /// connecting machine's screen. Windows only, and only once the driver
+    /// is installed; see [`crate::host::virtual_screen`].
+    pub virtual_screen: bool,
 }
 
 /// The lowest and highest bitrates the client accepts, in Kbps.

@@ -13,6 +13,7 @@ use crate::sunshine::Credentials;
 pub mod mock;
 pub mod platform;
 pub mod service;
+pub mod virtual_screen;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {

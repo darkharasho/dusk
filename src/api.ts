@@ -185,6 +185,14 @@ export function setAllowOtherDevices(on: boolean): Promise<void> {
   return invoke("set_allow_other_devices", { on });
 }
 
+/**
+ * Stream the virtual display, sized to whoever connects, or this machine's
+ * own screen. Turning it on asks Windows for administrator rights once.
+ */
+export function setVirtualScreen(on: boolean): Promise<void> {
+  return invoke("set_virtual_screen", { on });
+}
+
 /** How big streams from this machine ask to be. */
 export function setResolution(resolution: Resolution): Promise<void> {
   return invoke("set_resolution", { resolution });

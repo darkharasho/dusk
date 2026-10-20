@@ -1,5 +1,31 @@
 # Release Notes
 
+Version v0.3.11 — October 20, 2026
+
+Setting up hosting works on Windows. It never did before this release.
+
+## Changes
+
+- **Install hosting on Windows.** Setup › Install hosting failed every
+  time with "this installation package could not be opened", on every
+  Windows machine, in every version that had the step. Dusk handed the
+  installer's path to Windows in a way that cut it at the first space,
+  and the path always has one. A Windows machine that already hosts was
+  never affected: Dusk adopts what is there instead of installing.
+- **No more flashing window.** Dusk checks whether hosting is on every
+  five seconds, and on Windows each check opened and shut a console
+  window. The checks now run out of sight.
+- **A way to set hosting up from Settings › Hosting.** It said hosting
+  was not installed and then offered nothing that could install it.
+  There is now a button to Setup, where the step lives.
+- **The window buttons sit straight on macOS.** They were a few points
+  above the middle of Dusk's title strip.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.10 — October 20, 2026
 
 Windows hosts can stream a screen the size of the device you're

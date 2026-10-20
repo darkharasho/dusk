@@ -6,8 +6,25 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.10 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It adds Settings › Hosting › "Stream a screen sized
+**v0.3.11 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It fixes three Windows faults in the elevation and
+spawn layer (`host/service.rs`). `Start-Process -ArgumentList` takes an
+array, joins it with spaces and quotes nothing, so the staged installer's
+path — always under `C:\Program Files\Dusk\resources` — reached `msiexec`
+as `C:\Program`: Setup › Install hosting had never worked on any Windows
+machine. `elevation_script` now builds a real Windows command line
+(`command_line`/`quote_argument`, `CommandLineToArgvW` rules) and passes it
+as one string; `platform.rs` had already hit this and dodged it with
+`-EncodedCommand` for the creds script. Everything elevated goes through
+that hop, so `sc`, `netsh` and the driver install were all one space away
+from the same bug. `run_for` now sets `CREATE_NO_WINDOW` (tokio's inherent
+method, not std's `CommandExt`): `sc query` on the five-second poll tick was
+opening a console window each time. Settings › Hosting offers "Go to setup"
+when nothing is installed instead of a disabled button. `trafficLightPosition.y`
+is not a top offset — it sets the titlebar container to `buttonHeight + y`
+and the 14pt button sits 9pt above its bottom, so the centre is at `y - 2`;
+21 centres it in the 38px strip. Untested on real Windows hardware as of
+tagging: check the install on R-3X first. v0.3.10 adds Settings › Hosting › "Stream a screen sized
 to the other device" (`host/virtual_screen.rs`), Windows only, needing the
 virtual display driver. Enabling it (one UAC prompt) merges `MODES` × `RATES`
 into `C:\VirtualDisplayDriver\vdd_settings.xml`, restarts the device with
@@ -39,7 +56,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.10>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.11>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -75,7 +92,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

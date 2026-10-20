@@ -1,5 +1,36 @@
 # Release Notes
 
+Version v0.3.1 — October 19, 2026
+
+Hosting is now built into Dusk on macOS too.
+
+## Hosting on macOS
+
+- **Nothing to download.** Hosting ships inside Dusk as **Dusk Host**, a
+  universal app for Apple Silicon and Intel, signed and notarized with Dusk.
+  **Turn on hosting** registers it to start in the background when you sign
+  in. Nothing is copied into Applications and there is no administrator
+  prompt.
+- **It shows as Dusk Host** in Screen Recording, Microphone and
+  Accessibility, so the privacy steps name Dusk rather than another program.
+- **Keep Dusk in Applications.** Hosting runs from inside Dusk, so Dusk asks
+  to be moved out of the disk image first. If you move Dusk later, press
+  **Turn on hosting** again to point hosting at the new place.
+
+## Known limits
+
+- Hosting on a Mac has not been run end to end yet; the build, signing and
+  notarization are proven, the running service is not. Please report what
+  you find.
+- The macOS dock icon still does not step aside during a stream.
+- Windows builds remain unsigned (SmartScreen: *More info* → *Run anyway*).
+- Networking is LAN or your own VPN only, by design.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.0 — October 19, 2026
 
 Dusk sets up a machine to host by itself, pairs your own machines without a

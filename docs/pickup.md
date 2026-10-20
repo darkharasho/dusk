@@ -6,9 +6,11 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.2 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.2`, phases 3–6, hosting embedded on macOS and the
-startup settings. <https://github.com/darkharasho/dusk/releases/tag/v0.3.2>
+**v0.3.3 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.2`, phases 3–6, hosting embedded on macOS, the
+startup settings, Dusk's own titlebar and self-update. It is the first
+release that updates itself; anything older is upgraded by hand.
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.3>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -44,7 +46,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3
 └── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
 ```
 

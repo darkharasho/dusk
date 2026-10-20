@@ -1,5 +1,50 @@
 # Release Notes
 
+Version v0.3.3 — October 19, 2026
+
+Dusk has its own titlebar and now keeps itself up to date.
+
+## Updates
+
+- **Dusk updates itself.** It looks for a new version shortly after it
+  opens and every few hours after, and downloads it in the background.
+- **It never restarts on its own.** When an update is ready, **Restart to
+  update** appears in the titlebar, so a stream or a hosted session is
+  never cut off. **Settings › About** has **Check for updates**.
+- **This version has to be installed by hand.** From here on, Dusk
+  updates itself.
+- Updates come to the macOS app, the Windows installers and the Linux
+  AppImage. A copy installed from the `.deb` updates through your package
+  manager.
+
+## Titlebar
+
+- **On Windows and Linux, Dusk draws its own titlebar** with minimise,
+  maximise and close. Close still follows the Startup setting: to the
+  tray, or quit.
+- **On a Mac, the window buttons sit over Dusk's own bar.**
+
+## Fixes
+
+- **Opening Dusk from the tray looks for machines again**, so a Dusk that
+  started in the tray no longer shows the list from when it started.
+- **Release builds pick up their installers reliably.**
+
+## Known limits
+
+- Self-update has not yet carried an install from one release to the next;
+  v0.3.4 will be the first.
+- The titlebar has been checked on Linux, not yet on Windows or a Mac.
+- On a Mac, hosting keeps running the previous version until it next
+  restarts.
+- Windows builds remain unsigned (SmartScreen: *More info* → *Run anyway*).
+- Networking is LAN or your own VPN only, by design.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.2 — October 19, 2026
 
 Dusk can start when you sign in and wait in the tray.

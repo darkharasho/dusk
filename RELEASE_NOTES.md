@@ -1,6 +1,6 @@
 # Release Notes
 
-Version v0.3.5 — October 19, 2026
+Version v0.3.6 — October 19, 2026
 
 Streams match the host's screen, and the Dusk button stays within reach.
 

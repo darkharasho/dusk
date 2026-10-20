@@ -629,7 +629,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_older_dusk_or_a_nonsense_size_is_no_answer() {
-        let port = host_answering(r#"{"type":"declined","reason":"Dusk did not understand that request."}"#).await;
+        let port = host_answering(
+            r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
+        )
+        .await;
         assert_eq!(display_size_at("127.0.0.1", port).await, None);
         let port = host_answering(r#"{"type":"display_size","width":0,"height":1440}"#).await;
         assert_eq!(display_size_at("127.0.0.1", port).await, None);

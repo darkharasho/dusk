@@ -6,7 +6,7 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.5 is released**, all three platforms, from `main`, carrying the
+**v0.3.6 is released**, all three platforms, from `main`, carrying the
 client's `dusk-v0.2.3`. On top of v0.3.4 it streams at the host's screen
 size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
@@ -14,7 +14,7 @@ gets 1080p), and the client keeps the in-stream handle inside a
 letterboxed picture on OpenGL, SDL, D3D11 and Metal, not just Vulkan.
 The rarer renderers (VA-API direct, VDPAU, DXVA2, DRM, MMAL,
 AVSampleLayer) still place it relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.5>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.6>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -50,7 +50,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6
 └── moonlight-qt/    master @ 09de578a  tags dusk-v0.1.0 … dusk-v0.2.3
 ```
 

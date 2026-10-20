@@ -43,7 +43,10 @@ pub enum Resolution {
     #[default]
     MatchHost,
     MatchThisDisplay,
-    Fixed { width: u32, height: u32 },
+    Fixed {
+        width: u32,
+        height: u32,
+    },
 }
 
 impl Resolution {
@@ -132,7 +135,13 @@ mod tests {
     fn a_resolution_round_trips_in_the_shape_the_window_sends() {
         let fixed: Resolution =
             serde_json::from_str(r#"{"kind":"fixed","width":1920,"height":1080}"#).unwrap();
-        assert_eq!(fixed, Resolution::Fixed { width: 1920, height: 1080 });
+        assert_eq!(
+            fixed,
+            Resolution::Fixed {
+                width: 1920,
+                height: 1080
+            }
+        );
         assert_eq!(
             serde_json::to_string(&Resolution::MatchThisDisplay).unwrap(),
             r#"{"kind":"matchThisDisplay"}"#
@@ -141,9 +150,21 @@ mod tests {
 
     #[test]
     fn only_a_real_screen_size_is_a_resolution() {
-        assert!(Resolution::Fixed { width: 2560, height: 1440 }.is_valid());
-        assert!(!Resolution::Fixed { width: 0, height: 1440 }.is_valid());
-        assert!(!Resolution::Fixed { width: 1921, height: 1080 }.is_valid());
+        assert!(Resolution::Fixed {
+            width: 2560,
+            height: 1440
+        }
+        .is_valid());
+        assert!(!Resolution::Fixed {
+            width: 0,
+            height: 1440
+        }
+        .is_valid());
+        assert!(!Resolution::Fixed {
+            width: 1921,
+            height: 1080
+        }
+        .is_valid());
         assert!(Resolution::MatchHost.is_valid());
     }
 

@@ -316,7 +316,10 @@ mod tests {
 
     #[test]
     fn only_arguments_that_need_quoting_get_it() {
-        assert_eq!(command_line(&["start", "SunshineService"]), "start SunshineService");
+        assert_eq!(
+            command_line(&["start", "SunshineService"]),
+            "start SunshineService"
+        );
         assert_eq!(command_line(&["a b", "c"]), r#""a b" c"#);
     }
 

@@ -7,18 +7,19 @@ import { HostSettings } from "./HostSettings";
 import { SetupChecklist } from "./SetupChecklist";
 import { StartupSection } from "./StartupSection";
 import { StreamingSection } from "./StreamingSection";
+import { Icon, type IconName } from "./Icon";
 import { checkForUpdate, restartToUpdate, useUpdateState, type UpdateState } from "../updates";
 
 export type SettingsSection = "account" | "startup" | "streaming" | "hosting" | "setup" | "host" | "about";
 
-const SECTIONS: { id: SettingsSection; label: string }[] = [
-  { id: "account", label: "Account" },
-  { id: "startup", label: "Startup" },
-  { id: "streaming", label: "Streaming" },
-  { id: "hosting", label: "Hosting" },
-  { id: "setup", label: "Setup" },
-  { id: "host", label: "Host settings" },
-  { id: "about", label: "About" },
+const SECTIONS: { id: SettingsSection; label: string; icon: IconName }[] = [
+  { id: "account", label: "Account", icon: "user" },
+  { id: "startup", label: "Startup", icon: "clock" },
+  { id: "streaming", label: "Streaming", icon: "play" },
+  { id: "hosting", label: "Hosting", icon: "upload" },
+  { id: "setup", label: "Setup", icon: "check" },
+  { id: "host", label: "Host settings", icon: "sliders" },
+  { id: "about", label: "About", icon: "info" },
 ];
 
 interface Props {
@@ -35,15 +36,18 @@ export function SettingsPage({ name, snapshot, section, onSection }: Props) {
 
   return (
     <div className="dusk-settings-page">
-      <nav className="dusk-settings-nav" aria-label="Settings">
+      {/* Quiet, because the masthead's Settings tab already spends the
+          accent fill on where you are; two fills would name two places. */}
+      <nav className="axi-rail__nav axi-rail__nav--quiet dusk-settings-nav" aria-label="Settings">
         {SECTIONS.map((s) => (
           <button
             key={s.id}
             type="button"
-            className="dusk-settings-nav__item"
+            className="axi-rail__item"
             aria-current={section === s.id ? "page" : undefined}
             onClick={() => onSection(s.id)}
           >
+            <Icon name={s.icon} />
             {s.label}
           </button>
         ))}

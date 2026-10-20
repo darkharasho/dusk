@@ -176,7 +176,7 @@ export function DeviceDrawer({
                   {device.streamingHere && <StreamStats deviceId={device.id} />}
                   <button
                     type="button"
-                    className="axi-btn"
+                    className="axi-btn axi-btn--sm dusk-drawer__end"
                     disabled={busy !== null}
                     onClick={() => run("quitting", () => quitSession(device.id))}
                   >

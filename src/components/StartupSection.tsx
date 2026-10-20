@@ -107,7 +107,7 @@ export function Toggle({
   onChange(on: boolean): void;
 }) {
   return (
-    <div className="axi-row">
+    <div className="dusk-toggle">
       <div>
         <label htmlFor={id}>{label}</label>
         <p className="axi-ink-dim">{detail}</p>
@@ -115,7 +115,7 @@ export function Toggle({
       <button
         type="button"
         id={id}
-        className="axi-switch dusk-row__end"
+        className="axi-switch"
         role="switch"
         aria-checked={on}
         disabled={disabled}

@@ -9,6 +9,7 @@ import { DeviceDrawer } from "./components/DeviceDrawer";
 import { PairRequestPrompt } from "./components/PairRequestPrompt";
 import { SettingsPage, type SettingsSection } from "./components/SettingsPage";
 import { Titlebar } from "./components/Titlebar";
+import { Icon } from "./components/Icon";
 import { startUpdates } from "./updates";
 
 type Tab = "machines" | "settings";
@@ -127,25 +128,6 @@ function Body() {
             Settings
           </button>
         </nav>
-        {tab === "machines" && (
-          <div className="axi-row">
-            {snapshot.discovering && (
-              <>
-                {/* Rule 11: an indicator of work animates a composited
-                    property, so a stalled main thread cannot freeze it into a
-                    lie about the app having crashed. */}
-                <span className="axi-spinner" style={{ "--axi-spinner-size": "14px" } as React.CSSProperties} />
-                <span className="axi-ink-dim">Looking for machines</span>
-              </>
-            )}
-            <button type="button" className="axi-btn axi-btn--ghost" onClick={() => refreshNow()}>
-              Refresh
-            </button>
-            <button type="button" className="axi-btn" onClick={() => setAdding(true)}>
-              Add machine
-            </button>
-          </div>
-        )}
       </Masthead>
 
       {tab === "settings" ? (
@@ -160,16 +142,54 @@ function Body() {
       ) : (
         <main className="axi-page dusk-page">
           <section className="dusk-section">
-            <h2 className="axi-eyebrow">This machine</h2>
+            <div className="dusk-section__head">
+              <h2 className="axi-eyebrow">This machine</h2>
+            </div>
             <SelfCard
               name={self?.name ?? "This machine"}
+              address={self?.primaryAddress ?? self?.addresses[0] ?? null}
               snapshot={snapshot}
               onOpenSettings={openSettings}
             />
           </section>
 
           <section className="dusk-section">
-            <h2 className="axi-eyebrow">Your machines</h2>
+            {/* The list's own actions sit with the list, not in the masthead:
+                there they came and went with the tab, and the tabs beside
+                them jumped every time. */}
+            <div className="dusk-section__head">
+              <h2 className="axi-eyebrow">
+                Your machines
+                {remote.length > 0 && <span className="dusk-count">{remote.length}</span>}
+              </h2>
+              {snapshot.discovering && (
+                <span className="axi-row dusk-looking">
+                  {/* Rule 11: an indicator of work animates a composited
+                      property, so a stalled main thread cannot freeze it
+                      into a lie about the app having crashed. */}
+                  <span className="axi-spinner" style={{ "--axi-spinner-size": "12px" } as React.CSSProperties} />
+                  Looking for machines
+                </span>
+              )}
+              <div className="axi-row dusk-row__end">
+                <button
+                  type="button"
+                  className="axi-btn axi-btn--ghost axi-btn--sm"
+                  onClick={() => refreshNow()}
+                >
+                  <Icon name="refresh" />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  className="axi-btn axi-btn--sm"
+                  onClick={() => setAdding(true)}
+                >
+                  <Icon name="plus" />
+                  Add machine
+                </button>
+              </div>
+            </div>
             {remote.length === 0 ? (
               <div className="axi-panel dusk-empty axi-stack">
                 <strong>No other machines yet</strong>

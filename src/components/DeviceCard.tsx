@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { Device } from "../types";
-import { cardState, initials, originLabel } from "../deviceState";
+import { cardState, detailLine, initials, originLabel } from "../deviceState";
 
 interface Props {
   device: Device;
@@ -18,6 +18,7 @@ export function DeviceCard({ device, onOpen }: Props) {
   const { label, strip, chipClass } = cardState(device);
   const origin = originLabel(device);
   const address = device.primaryAddress ?? device.addresses[0] ?? "No address";
+  const detail = detailLine(device);
 
   return (
     <button
@@ -40,8 +41,13 @@ export function DeviceCard({ device, onOpen }: Props) {
 
       <div className="axi-card__meta">
         <span className={chipClass}>{label}</span>
-        {device.apps.length > 0 && (
-          <span>{device.apps.length} apps</span>
+        {detail && (
+          <span
+            className="dusk-card__detail"
+            title={device.reachability.kind === "online" ? "Time for a round trip to this machine" : undefined}
+          >
+            {detail}
+          </span>
         )}
       </div>
     </button>

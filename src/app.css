@@ -24,6 +24,49 @@ body,
   margin-top: 34px;
 }
 
+/* A section's label and, at the far end, whatever acts on that section. One
+   height whether or not it carries buttons, so the two sections' labels line
+   up with the same gap above their content. */
+.dusk-section__head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 34px;
+  margin-bottom: 14px;
+}
+
+.dusk-section__head .axi-eyebrow {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* How many, beside the label: a number, so it reads in the body ink rather
+   than shouting in the eyebrow's capitals. */
+.dusk-count {
+  font: var(--axi-t-micro);
+  color: var(--axi-text-dim);
+  padding: 3px 6px;
+  border: var(--axi-border-hairline) solid var(--axi-rule);
+}
+
+.dusk-looking {
+  --axi-row-gap: 8px;
+  font: var(--axi-t-small);
+  color: var(--axi-text-dim);
+}
+
+/* Icon wrapper: the SVG inside carries .axi-icon and its sizing. */
+.dusk-icon {
+  display: inline-flex;
+}
+
+.dusk-icon .axi-icon {
+  --axi-icon-size: 14px;
+  vertical-align: 0;
+}
+
 /* axi zeroes paragraph margins inside the components that own copy — a card,
    a notice, prose. A <p> placed directly in a panel still arrives with the
    UA's 1em, which reads as a gap the layout never asked for. */
@@ -46,6 +89,39 @@ body,
    already sets the size and the dim ink; only the family is ours. */
 .dusk-card__address {
   font-family: var(--axi-mono);
+}
+
+/* The footer's one fact, at the far end from the status it qualifies. */
+.dusk-card__detail {
+  margin-left: auto;
+  font-family: var(--axi-mono);
+  font-weight: 400;
+}
+
+/* This machine's card spans the row, so it lays out as one: who it is on
+   the left, its status and the way into Settings at the far end. The footer
+   rule only earns its place under a card's body, and this one has none. */
+.dusk-self {
+  flex-direction: row;
+  align-items: center;
+  padding-block: 24px 16px;
+}
+
+.dusk-self .axi-card__head {
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.dusk-self .axi-card__title p {
+  margin-top: 4px;
+}
+
+.dusk-self .axi-card__meta {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  gap: 18px;
 }
 
 /* A "Changed" marker sits beside its label rather than under it. */
@@ -85,6 +161,46 @@ body,
   color: var(--axi-accent);
 }
 
+/* A setting and its switch. The switch keeps its place at the end of the
+   label's first line however long the explanation runs; in a wrapping row a
+   long one pushed it down onto a line of its own. */
+.dusk-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.dusk-toggle > div {
+  flex: 1;
+  min-width: 0;
+  max-width: 64ch;
+}
+
+.dusk-toggle > .axi-switch {
+  margin-left: auto;
+  flex: none;
+}
+
+/* Settings stacked in one panel are separate decisions; a rule between them
+   keeps each label with its own explanation. */
+.dusk-toggle + .dusk-toggle {
+  padding-top: 14px;
+  border-top: var(--axi-border-hairline) solid var(--axi-rule);
+}
+
+/* A secondary action in the drawer's column, sized to its label rather than
+   stretched across the column like the primary one. */
+.dusk-drawer__end {
+  align-self: flex-start;
+}
+
+/* A heading inside the drawer starts a new group, so it takes more room
+   above it than the stack gap gives the lines within one. */
+.axi-drawer__body .axi-eyebrow {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
 /* Push a row's trailing control to the far edge. .axi-row is a plain wrapping
    flex run and has no opinion about this. */
 .dusk-row__end {
@@ -122,32 +238,16 @@ body,
   align-items: start;
 }
 
+/* The list is the language's rail items; only where it sits is ours. */
 .dusk-settings-nav {
-  display: grid;
-  gap: 2px;
   position: sticky;
   top: 16px;
 }
 
-.dusk-settings-nav__item {
-  text-align: left;
-  padding: 8px 12px;
-  border: 1px solid transparent;
-  border-radius: var(--axi-radius);
-  background: none;
-  color: var(--axi-text-dim);
-  font: inherit;
-  cursor: pointer;
-}
-
-.dusk-settings-nav__item:hover {
-  color: var(--axi-text);
-  border-color: var(--axi-rule);
-}
-
-.dusk-settings-nav__item[aria-current="page"] {
-  color: var(--axi-text);
-  background: var(--axi-surface-raised);
+/* The rail's icons are drawn at its own label size, not the 14px the
+   section heads use. */
+.dusk-settings-nav .dusk-icon .axi-icon {
+  --axi-icon-size: 15px;
 }
 
 .dusk-settings-body {

@@ -88,3 +88,28 @@ export function initials(name: string): string {
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return (words[0][0] + words[1][0]).toUpperCase();
 }
+
+/**
+ * The one fact worth a card's footer beside its status: how quick an online
+ * machine is to reach, which is what a stream will feel like, or how long an
+ * offline one has been gone.
+ */
+export function detailLine(device: Device, now = Date.now()): string | null {
+  if (device.reachability.kind === "online") {
+    return `${Math.max(1, Math.round(device.reachability.rttMs))} ms`;
+  }
+  if (device.reachability.kind === "offline" && device.lastSeenMs !== null) {
+    return `Seen ${ago(now - device.lastSeenMs)}`;
+  }
+  return null;
+}
+
+function ago(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
+}

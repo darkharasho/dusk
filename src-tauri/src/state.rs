@@ -298,6 +298,13 @@ impl AppState {
         let sessions: std::collections::HashSet<DeviceId> =
             self.sessions.read().await.keys().cloned().collect();
         let mut devices = self.registry.read().await.devices();
+        // Copied out under one short lock. Two `lock().await`s in the
+        // literal below would deadlock: the first guard lives until the
+        // whole expression ends, so the second waits on it forever.
+        let (allow_other_devices, resolution) = {
+            let store = self.store.lock().await;
+            (store.allow_other_devices, store.resolution)
+        };
         for device in &mut devices {
             // Or-ed rather than assigned: mock fixtures set this directly
             // to stage a mid-session card, and there is no real client to
@@ -319,8 +326,8 @@ impl AppState {
                 Known::SignedOut => Some(false),
             },
             host_credentials_persistent: self.credentials.is_persistent().await,
-            allow_other_devices: self.store.lock().await.allow_other_devices,
-            resolution: self.store.lock().await.resolution,
+            allow_other_devices,
+            resolution,
         }
     }
 }
@@ -337,5 +344,30 @@ pub async fn emit_snapshot(app: &AppHandle, state: &Arc<AppState>) {
 
     if let Err(err) = app.emit(SNAPSHOT_EVENT, snapshot) {
         eprintln!("dusk: could not emit snapshot: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn snapshot_does_not_hang() {
+        let state = AppState::new(
+            Registry::new("here".into(), HashSet::new()),
+            Box::new(crate::host::mock::MockHost::default()),
+            Store::default(),
+            PathBuf::from("unused.json"),
+            plain_client().unwrap(),
+            None,
+            None,
+        );
+
+        // A snapshot that never returns leaves the window on its masthead.
+        tokio::time::timeout(Duration::from_secs(5), state.snapshot())
+            .await
+            .expect("snapshot hung");
     }
 }

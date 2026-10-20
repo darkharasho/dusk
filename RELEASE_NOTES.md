@@ -1,5 +1,26 @@
 # Release Notes
 
+Version v0.3.7 — October 19, 2026
+
+Fixes v0.3.6 opening to an empty window.
+
+## Fixes
+
+- **Dusk opens to your machines again.** v0.3.6 waited on itself while
+  gathering what the window shows, so it never finished: the window
+  stopped at the Dusk header with nothing beneath it, every time. An
+  install stuck on v0.3.6 still checks for updates and offers this one
+  in the titlebar.
+
+Everything from v0.3.6 is unchanged: streams at the host's screen size,
+Settings › Streaming › Resolution, and the Dusk button staying inside the
+picture.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.6 — October 19, 2026
 
 Streams match the host's screen, and the Dusk button stays within reach.

@@ -51,7 +51,7 @@ Two repositories, side by side. Several things assume they are siblings.
 ```
 <parent>/
 ├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6
-└── moonlight-qt/    master @ 09de578a  tags dusk-v0.1.0 … dusk-v0.2.3
+└── moonlight-qt/    master @ 89610aa2  tags dusk-v0.1.0 … dusk-v0.2.3
 ```
 
 The fork builds and publishes a client; Dusk downloads a pinned one at

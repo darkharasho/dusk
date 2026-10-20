@@ -13,7 +13,7 @@
 // deliberately, and nothing here runs off Linux.
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -57,12 +57,66 @@ function updaterSigning(args) {
 const args = updaterSigning(process.argv.slice(2));
 
 const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
+const started = Date.now();
 const tauri = spawn(process.execPath, [cli, ...args], {
   stdio: "inherit",
 });
 
+// The AppImage bundler patches every ELF file under usr/lib, which breaks
+// the client and host Dusk carries: both are AppImages, and the patch lands
+// on top of their payload. scripts/repair-appimage.sh puts the staged
+// originals back; this runs it on each AppImage this build wrote and signs
+// the result again, since the signature Tauri made is for the broken one.
+function repairAppImages() {
+  if (process.platform !== "linux" || args[0] !== "build") return 0;
+  const version = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+  for (const image of builtAppImages()) {
+    const repair = spawnSync("scripts/repair-appimage.sh", [image], {
+      stdio: ["ignore", "pipe", "inherit"],
+      encoding: "utf8",
+    });
+    if (repair.status !== 0) {
+      console.error(`dusk: could not repair ${image}`);
+      return 1;
+    }
+    if (!repair.stdout.includes("repaired") || !existsSync(`${image}.sig`)) continue;
+    const signing = ["signer", "sign", "--app-version", version, image];
+    // Without this the signer asks on the terminal, which a build never does.
+    if (process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD === undefined) {
+      signing.push("--password", "");
+    }
+    const sign = spawnSync(process.execPath, [cli, ...signing], { stdio: "inherit" });
+    if (sign.status !== 0) {
+      console.error(`dusk: could not sign the repaired ${image}`);
+      return 1;
+    }
+  }
+  return 0;
+}
+
+// Wherever a target triple or profile put them, but only this build's.
+function builtAppImages() {
+  const found = [];
+  const walk = (dir, depth) => {
+    if (depth > 4 || !existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path, depth + 1);
+      else if (
+        entry.name.endsWith(".AppImage") &&
+        dir.endsWith(join("bundle", "appimage")) &&
+        statSync(path).mtimeMs >= started
+      ) {
+        found.push(path);
+      }
+    }
+  };
+  walk(join("src-tauri", "target"), 0);
+  return found;
+}
+
 tauri.on("exit", (code, signal) => {
   // Re-raise a signal as a signal so Ctrl-C out of `tauri dev` looks like one.
   if (signal) process.kill(process.pid, signal);
-  process.exit(code ?? 1);
+  process.exit(code === 0 ? repairAppImages() : (code ?? 1));
 });

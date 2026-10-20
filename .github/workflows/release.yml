@@ -353,7 +353,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # Same set ci.yml installs, plus the AppImage bundler's needs: it
-      # reaches for file(1) and fuse to assemble and test the image.
+      # reaches for file(1) and fuse to assemble and test the image, and
+      # scripts/repair-appimage.sh for squashfs-tools to repack it.
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -365,7 +366,8 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             libfuse2 \
-            file
+            file \
+            squashfs-tools
 
       - uses: dtolnay/rust-toolchain@stable
 

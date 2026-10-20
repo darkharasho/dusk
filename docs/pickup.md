@@ -6,8 +6,21 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.9 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It adds Settings › Streaming › Bitrate (Automatic
+**v0.3.10 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It adds Settings › Hosting › "Stream a screen sized
+to the other device" (`host/virtual_screen.rs`), Windows only, needing the
+virtual display driver. Enabling it (one UAC prompt) merges `MODES` × `RATES`
+into `C:\VirtualDisplayDriver\vdd_settings.xml`, restarts the device with
+`pnputil /restart-device` (the driver only rereads resolutions on a device
+restart), restarts the host, reads the driver's device id from the host log
+(it is only logged at startup), and sets `output_name` to it with
+`dd_configuration_option = ensure_only_display` and resolution/refresh on
+`auto`. The peer `display` request now carries the client's `screen`; a host
+with the setting on answers `best_mode` from the modes the XML lists, because
+an unlisted mode makes the host revert to the physical monitor. Untested on
+real Windows hardware as of tagging: check it on Venus first. Fixed and
+Match-this-display resolutions don't consult the host, so they only land on
+the virtual screen at a listed size. v0.3.9 added Settings › Streaming › Bitrate (Automatic
 or 5–150 Mbps, `--bitrate`) and Video codec (Automatic, H.264, HEVC, AV1,
 `--video-codec`, passed only when not Automatic). The client now keeps the
 in-stream handle inside a letterboxed picture on VDPAU too, which is what
@@ -26,7 +39,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.9>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.10>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -62,7 +75,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

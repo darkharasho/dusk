@@ -1,5 +1,27 @@
 # Release Notes
 
+Version v0.3.10 — October 20, 2026
+
+Windows hosts can stream a screen the size of the device you're
+connecting from.
+
+## Changes
+
+- **Stream a screen sized to the other device.** On a Windows host with
+  the virtual display installed (Setup › Virtual display), turn on
+  Settings › Hosting › **Stream a screen sized to the other device**.
+  Windows asks for permission once. After that, connecting with
+  Settings › Streaming › Resolution on **Match the host** streams at your
+  own screen's size, for example 3440×1440 on an ultrawide, with no black
+  bars. The host's own monitors switch off while a stream runs and come
+  back when it ends. A screen size the host doesn't have streams at the
+  closest one of the same shape.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.9 — October 20, 2026
 
 Bitrate and video format settings, and the in-stream Dusk icon within

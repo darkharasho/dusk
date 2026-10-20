@@ -97,8 +97,9 @@ pub async fn remove_manual_device(
 }
 
 #[tauri::command]
-pub async fn refresh_now(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn refresh_now(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.request_refresh();
+    crate::discovery::sweep(&app, state.inner());
     Ok(())
 }
 

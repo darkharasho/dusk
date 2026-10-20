@@ -6,6 +6,7 @@
 //! which is why the manual address book is a peer of this, not a fallback.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use tauri::AppHandle;
@@ -14,13 +15,34 @@ use crate::state::{emit_snapshot, AppState};
 
 pub const SERVICE_TYPE: &str = "_nvstream._tcp.local.";
 
+/// How long the window says it is looking. Browsing never stops, so
+/// "looking" means the stretch in which a machine on the network would have
+/// answered: the first queries go out within a second or two, and a host
+/// answers at once.
+const SWEEP: Duration = Duration::from_secs(6);
+
+/// Show the window looking for a while, if there is anything to look with.
+pub fn sweep(app: &AppHandle, state: &Arc<AppState>) {
+    if !state.is_browsing() {
+        return;
+    }
+    let ticket = state.begin_sweep();
+    let (app, state) = (app.clone(), state.clone());
+    tauri::async_runtime::spawn(async move {
+        emit_snapshot(&app, &state).await;
+        tokio::time::sleep(SWEEP).await;
+        if state.end_sweep(ticket) {
+            emit_snapshot(&app, &state).await;
+        }
+    });
+}
+
 pub fn spawn(app: AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
         let daemon = match ServiceDaemon::new() {
             Ok(daemon) => daemon,
             Err(err) => {
                 eprintln!("dusk: mDNS unavailable, manual entries only: {err}");
-                state.set_discovering(false);
                 emit_snapshot(&app, &state).await;
                 return;
             }
@@ -30,14 +52,13 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>) {
             Ok(receiver) => receiver,
             Err(err) => {
                 eprintln!("dusk: could not browse {SERVICE_TYPE}: {err}");
-                state.set_discovering(false);
                 emit_snapshot(&app, &state).await;
                 return;
             }
         };
 
-        state.set_discovering(true);
-        emit_snapshot(&app, &state).await;
+        state.set_browsing(true);
+        sweep(&app, &state);
 
         while let Ok(event) = receiver.recv_async().await {
             match event {
@@ -65,7 +86,7 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>) {
             }
         }
 
-        state.set_discovering(false);
+        state.set_browsing(false);
         emit_snapshot(&app, &state).await;
     });
 }

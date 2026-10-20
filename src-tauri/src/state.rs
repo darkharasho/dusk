@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,7 +49,15 @@ pub struct AppState {
     /// Each carries the way to talk to that stream's client, for the
     /// controls in Dusk's own window.
     sessions: RwLock<HashMap<DeviceId, crate::session::Control>>,
+    /// mDNS is being browsed. It always is once started, so this alone is
+    /// not something to show.
+    browsing: AtomicBool,
+    /// A sweep is under way: the first seconds of browsing, or the seconds
+    /// after a Refresh. This is what the window shows as looking.
     discovering: AtomicBool,
+    /// Bumped by each sweep, so an earlier sweep ending does not cut short
+    /// one started after it.
+    sweeps: AtomicU64,
     refresh: Notify,
 }
 
@@ -204,7 +212,9 @@ impl AppState {
             peer: Default::default(),
             account: Default::default(),
             sessions: RwLock::new(HashMap::new()),
+            browsing: AtomicBool::new(false),
             discovering: AtomicBool::new(false),
+            sweeps: AtomicU64::new(0),
             refresh: Notify::new(),
         }
     }
@@ -230,8 +240,30 @@ impl AppState {
         });
     }
 
-    pub fn set_discovering(&self, value: bool) {
-        self.discovering.store(value, Ordering::Relaxed);
+    pub fn set_browsing(&self, value: bool) {
+        self.browsing.store(value, Ordering::Relaxed);
+        if !value {
+            self.discovering.store(false, Ordering::Relaxed);
+        }
+    }
+
+    pub fn is_browsing(&self) -> bool {
+        self.browsing.load(Ordering::Relaxed)
+    }
+
+    /// Start a sweep, returning the ticket that ends it.
+    pub fn begin_sweep(&self) -> u64 {
+        self.discovering.store(true, Ordering::Relaxed);
+        self.sweeps.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// End a sweep if no later one has started. Returns whether it ended.
+    pub fn end_sweep(&self, ticket: u64) -> bool {
+        if self.sweeps.load(Ordering::Relaxed) != ticket {
+            return false;
+        }
+        self.discovering.store(false, Ordering::Relaxed);
+        true
     }
 
     pub fn is_discovering(&self) -> bool {

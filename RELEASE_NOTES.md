@@ -1,5 +1,30 @@
 # Release Notes
 
+Version v0.3.8 — October 20, 2026
+
+A tidier window that holds still.
+
+## Changes
+
+- **The header stays put.** Switching between Machines and Settings no
+  longer shifts the top of the window. Refresh and Add machine now sit
+  beside the "Your machines" heading, with a count of your machines.
+- **Machine cards say something useful.** An online machine shows how
+  quickly it answers; an offline one shows when it was last seen.
+- **This machine matches the rest.** It is a slim card showing whether
+  hosting is on and at what address. Click it to open Hosting settings,
+  or Setup if hosting isn't set up yet.
+- **Settings is easier to scan.** The sidebar has icons, each switch sits
+  on the same line as its label, and stacked settings have a divider
+  between them.
+- **Ending a stream from the drawer** uses a smaller button sized to its
+  label.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.7 — October 19, 2026
 
 Fixes v0.3.6 opening to an empty window.

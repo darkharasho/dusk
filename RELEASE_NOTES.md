@@ -1,5 +1,44 @@
 # Release Notes
 
+Version v0.3.2 — October 19, 2026
+
+Dusk can start when you sign in and wait in the tray.
+
+## Startup
+
+- **Open Dusk when you sign in**, in the new **Startup** section of
+  Settings. On a Mac, Dusk has to be in Applications first.
+- **Start in the tray** (the menu bar on a Mac) when opened at sign-in, so
+  Dusk is ready to accept pairing and switch hosting without a window in
+  the way.
+- **Closing the window keeps Dusk running** in the tray by default. Turn
+  this off to have closing the window quit Dusk.
+- **Opening Dusk again shows the window** that is already running rather
+  than starting a second copy.
+- **On a Mac, Dusk's dock icon goes with its window.** It leaves the dock
+  while Dusk waits in the menu bar or steps aside for a stream, and comes
+  back with the window.
+
+## Fixes
+
+- **"Looking for machines" no longer stays on forever.** It shows for a few
+  seconds when Dusk starts and after **Refresh**, while Dusk is actually
+  looking. Dusk still notices a machine that appears later.
+
+## Known limits
+
+- The startup settings have been built for every platform but not yet run
+  on each. Please report what you find.
+- During a stream the stream's own window keeps its dock icon on a Mac.
+- Hosting on a Mac has not been run end to end yet.
+- Windows builds remain unsigned (SmartScreen: *More info* → *Run anyway*).
+- Networking is LAN or your own VPN only, by design.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.1 — October 19, 2026
 
 Hosting is now built into Dusk on macOS too.

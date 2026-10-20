@@ -6,19 +6,22 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.1 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.2`, phases 3–6 and hosting embedded on macOS.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.1>
+**v0.3.2 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.2`, phases 3–6, hosting embedded on macOS and the
+startup settings. <https://github.com/darkharasho/dusk/releases/tag/v0.3.2>
 
-Since then, unreleased: **startup settings** on the `startup-settings`
-branch (Settings › Startup): open at sign-in, start in the tray, keep
-running when the window is closed; on macOS the dock icon follows the
-window. `src-tauri/src/startup.rs`, with
+**Startup settings** (Settings › Startup): open at sign-in, start in the
+tray, keep running when the window is closed; on macOS the dock icon
+follows the window. `src-tauri/src/startup.rs`, with
 `tauri-plugin-autostart` for the sign-in entry and
 `tauri-plugin-single-instance` so a second launch shows the window instead
 of opening another Dusk. The window is created hidden and shown in setup
 unless a `--background` launch says otherwise. Compile- and unit-tested on
-Linux only.
+Linux, built in CI for all three; not run as an app yet.
+
+**"Looking for machines"** is a timed sweep (`discovery::sweep`, six
+seconds) at startup and after Refresh. mDNS browsing never ends, so the old
+flag tied to it stayed on forever.
 
 | Phase | State |
 | --- | --- |
@@ -41,7 +44,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2
 └── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
 ```
 

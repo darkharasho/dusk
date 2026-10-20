@@ -54,9 +54,6 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-const SERVICE: &str = "dev.dusk.app";
-const ACCOUNT: &str = "sunshine-local-api";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Credentials {
     pub username: String,
@@ -232,12 +229,8 @@ where
 }
 
 fn read_keystore() -> Result<Option<Credentials>, String> {
-    let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| e.to_string())?;
-    let raw = match entry.get_password() {
-        Ok(raw) => raw,
-        // The one error that is a real answer: nothing has been stored.
-        Err(keyring::Error::NoEntry) => return Ok(None),
-        Err(err) => return Err(err.to_string()),
+    let Some(raw) = crate::secrets::get(crate::secrets::HOST)? else {
+        return Ok(None);
     };
 
     // Stored as `username\npassword`: the keystore holds one secret per
@@ -252,13 +245,10 @@ fn read_keystore() -> Result<Option<Credentials>, String> {
 }
 
 fn to_keystore(credentials: &Credentials) -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| e.to_string())?;
-    entry
-        .set_password(&format!(
-            "{}\n{}",
-            credentials.username, credentials.password
-        ))
-        .map_err(|e| e.to_string())
+    crate::secrets::set(
+        crate::secrets::HOST,
+        &format!("{}\n{}", credentials.username, credentials.password),
+    )
 }
 
 #[cfg(test)]

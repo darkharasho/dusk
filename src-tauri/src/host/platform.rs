@@ -221,12 +221,26 @@ impl HostBackend for LinuxHost {
 
     async fn start(&self) -> Result<(), HostError> {
         let unit = installed_unit().await.ok_or_else(not_installed)?;
-        expect(service::run("systemctl", &["--user", "start", unit]).await?)
+        expect(
+            service::run_for(
+                "systemctl",
+                &["--user", "start", unit],
+                service::LIFECYCLE_TIMEOUT,
+            )
+            .await?,
+        )
     }
 
     async fn stop(&self) -> Result<(), HostError> {
         let unit = installed_unit().await.ok_or_else(not_installed)?;
-        expect(service::run("systemctl", &["--user", "stop", unit]).await?)
+        expect(
+            service::run_for(
+                "systemctl",
+                &["--user", "stop", unit],
+                service::LIFECYCLE_TIMEOUT,
+            )
+            .await?,
+        )
     }
 
     async fn set_credentials(&self, credentials: &Credentials) -> Result<(), HostError> {
@@ -238,7 +252,7 @@ impl HostBackend for LinuxHost {
             // only there does it see the configuration the service uses.
             let mut args = vec!["run", "--command=sunshine", FLATPAK_ID];
             args.extend(creds);
-            service::run("flatpak", &args).await?
+            service::run_for("flatpak", &args, service::LIFECYCLE_TIMEOUT).await?
         } else {
             // The unit's own binary, not whatever `sunshine` is on PATH: a
             // second copy would write a credentials file the service never
@@ -255,7 +269,14 @@ impl HostBackend for LinuxHost {
         };
         expect(run)?;
 
-        expect(service::run("systemctl", &["--user", "restart", unit]).await?)
+        expect(
+            service::run_for(
+                "systemctl",
+                &["--user", "restart", unit],
+                service::LIFECYCLE_TIMEOUT,
+            )
+            .await?,
+        )
     }
 }
 
@@ -394,9 +415,10 @@ impl HostBackend for MacosHost {
                     "The hosting launch agent is missing, so Dusk cannot start it.".into(),
                 ));
             };
-            let out = service::run(
+            let out = service::run_for(
                 "launchctl",
                 &["bootstrap", &domain, &plist.to_string_lossy()],
+                service::LIFECYCLE_TIMEOUT,
             )
             .await?;
             if !out.ok() {
@@ -405,9 +427,10 @@ impl HostBackend for MacosHost {
         }
 
         expect(
-            service::run(
+            service::run_for(
                 "launchctl",
                 &["kickstart", &format!("{domain}/{MACOS_LABEL}")],
+                service::LIFECYCLE_TIMEOUT,
             )
             .await?,
         )
@@ -416,9 +439,10 @@ impl HostBackend for MacosHost {
     async fn stop(&self) -> Result<(), HostError> {
         let domain = service::gui_domain_or_default();
         expect(
-            service::run(
+            service::run_for(
                 "launchctl",
                 &["bootout", &format!("{domain}/{MACOS_LABEL}")],
+                service::LIFECYCLE_TIMEOUT,
             )
             .await?,
         )
@@ -440,9 +464,10 @@ impl HostBackend for MacosHost {
         // a stopped one simply starts, which is also fine.
         let domain = service::gui_domain_or_default();
         expect(
-            service::run(
+            service::run_for(
                 "launchctl",
                 &["kickstart", "-k", &format!("{domain}/{MACOS_LABEL}")],
+                service::LIFECYCLE_TIMEOUT,
             )
             .await?,
         )

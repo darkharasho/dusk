@@ -31,8 +31,40 @@ USAGE:
     dusk setup     Carry out every setup step Dusk can do by itself
     dusk status    Print what this machine's hosting looks like
 
+SETUP OPTIONS:
+    --unlock-keyring   Unlock this machine's keyring first, reading the
+                       password from standard input. For a machine that logs
+                       in automatically, whose keyring nothing has opened.
+                       Lasts until the next restart; its password is left as
+                       it is.
+    --store=tpm        Keep Dusk's secrets sealed to this machine's TPM
+                       instead of in the keyring, so they survive a restart
+                       with nobody there to unlock anything. Refuses if there
+                       is no TPM to seal to.
+
 Run dusk with no arguments to open the window as usual.
 ";
+
+/// What `dusk setup` was asked to do besides the steps themselves.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Options {
+    unlock_keyring: bool,
+    seal: bool,
+}
+
+fn parse(args: &[String]) -> Result<Options, String> {
+    let mut options = Options::default();
+    for arg in args {
+        match arg.as_str() {
+            "--unlock-keyring" => options.unlock_keyring = true,
+            "--store=tpm" => options.seal = true,
+            // Named rather than ignored: a misspelt flag that silently did
+            // nothing would look like the flag not working.
+            other => return Err(format!("dusk setup does not understand {other}")),
+        }
+    }
+    Ok(options)
+}
 
 /// Handle a subcommand if one was given, and return the exit code.
 ///
@@ -40,9 +72,16 @@ Run dusk with no arguments to open the window as usual.
 /// Matching only the first argument keeps this out of the way of the flags
 /// the window understands, such as `--background`.
 pub fn run_if_asked() -> Option<i32> {
-    let arg = std::env::args().nth(1)?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let arg = args.first()?;
     match arg.as_str() {
-        "setup" => Some(block_on(setup())),
+        "setup" => match parse(&args[1..]) {
+            Ok(options) => Some(block_on(setup(options))),
+            Err(err) => {
+                eprintln!("{err}\n\n{USAGE}");
+                Some(2)
+            }
+        },
         "status" => Some(block_on(status())),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -52,6 +91,39 @@ pub fn run_if_asked() -> Option<i32> {
         // the platform appends — and is not ours to reject.
         _ => None,
     }
+}
+
+/// The password for `--unlock-keyring`, from standard input.
+///
+/// Standard input and nothing else. As an argument it would be visible to
+/// anything that can run `ps`; in an environment variable it would be
+/// readable from `/proc`. A pipe is the one channel that is neither.
+fn read_password() -> Result<String, String> {
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| format!("could not read the password from standard input ({e})"))?;
+    let password = line.trim_end_matches(['\n', '\r']).to_string();
+    if password.is_empty() {
+        return Err("no password arrived on standard input".to_string());
+    }
+    Ok(password)
+}
+
+#[cfg(target_os = "linux")]
+fn unlock_keyring(password: &str) -> Result<(), String> {
+    crate::secrets::unlock::login_keyring(password)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unlock_keyring(_password: &str) -> Result<(), String> {
+    Err(
+        "Only Linux keeps its keystore behind a lock a session has to open; \
+         this platform's needs no unlocking."
+            .to_string(),
+    )
 }
 
 /// Run an async body without Tauri's runtime, which is not up yet.
@@ -92,10 +164,63 @@ async fn status() -> i32 {
             "no, Dusk has no sign-in for this host"
         }
     );
+    println!("Secrets:   {}", crate::secrets::backend().describe());
+    if let Some(warning) = keyring_warning() {
+        println!("           {warning}");
+    }
     0
 }
 
-async fn setup() -> i32 {
+/// Said plainly, because the failure it describes is otherwise silent: the
+/// machine looks set up, and forgets who it is at the next restart.
+fn keyring_warning() -> Option<String> {
+    if crate::secrets::backend() != crate::secrets::Backend::Keystore {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    if crate::secrets::unlock::login_keyring_locked().unwrap_or(false) {
+        return Some(
+            "this machine's keyring is locked, so nothing can be kept across a restart.\n           \
+             Run `dusk setup --unlock-keyring` for this boot, or `--store=tpm` for good."
+                .to_string(),
+        );
+    }
+    None
+}
+
+async fn setup(options: Options) -> i32 {
+    // Both of these decide *where* a secret will land, so they happen before
+    // any step that might write one. Provisioning a host and then finding
+    // the answer went somewhere unintended is not recoverable by rerunning:
+    // the password is already Sunshine's.
+    if options.unlock_keyring {
+        match read_password() {
+            Ok(password) => {
+                if let Err(err) = unlock_keyring(&password) {
+                    eprintln!("dusk: could not unlock the keyring: {err}");
+                    return 1;
+                }
+                println!("• Unlocked this machine's keyring");
+            }
+            Err(err) => {
+                eprintln!("dusk: {err}");
+                return 1;
+            }
+        }
+    }
+    if options.seal {
+        match crate::secrets::enable_sealed() {
+            Ok(dir) => println!(
+                "• Sealing Dusk's secrets to this machine ({})",
+                dir.display()
+            ),
+            Err(err) => {
+                eprintln!("dusk: {err}");
+                return 1;
+            }
+        }
+    }
+
     let host = host::detect();
     let credentials = CredentialStore::default();
 
@@ -121,6 +246,19 @@ async fn setup() -> i32 {
 
     let setup = build(host.as_ref(), &credentials).await;
     report(&setup.steps);
+
+    // A host that was set up but whose sign-in cannot outlive the process is
+    // the failure this whole path exists to stop being silent. Hosting works,
+    // so it is not an error — but it is never nothing.
+    if !credentials.is_persistent().await {
+        eprintln!(
+            "\nWARNING: Dusk could not keep this host's sign-in.\n\
+             It works now and is forgotten at the next restart, so this machine\n\
+             will not be one your others recognise.\n\
+             Fix it with `dusk setup --unlock-keyring` (this boot) or\n\
+             `dusk setup --store=tpm` (for good)."
+        );
+    }
 
     // What is left that Dusk could never do itself is not a failure: a
     // firewall it cannot identify, a permission only a person can grant.
@@ -359,6 +497,36 @@ mod tests {
         .steps;
         assert!(s.iter().any(|s| s.state == StepState::Unknown));
         assert!(!s.iter().any(unfinished_and_automatable));
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn setup_takes_no_options_by_default() {
+        // Neither flag may be reachable by accident: one wants a password,
+        // the other moves where every secret on the machine is kept.
+        assert_eq!(parse(&[]).unwrap(), Options::default());
+        assert!(!Options::default().unlock_keyring);
+        assert!(!Options::default().seal);
+    }
+
+    #[test]
+    fn both_options_are_understood_together() {
+        // The real headless case: unlock the keyring to get going, and seal
+        // so the next restart does not need unlocking at all.
+        let o = parse(&args(&["--unlock-keyring", "--store=tpm"])).unwrap();
+        assert!(o.unlock_keyring && o.seal);
+    }
+
+    #[test]
+    fn a_misspelt_option_is_refused_rather_than_ignored() {
+        // Ignoring it would look exactly like the flag not working, on the
+        // one command whose whole job is to be run unattended.
+        assert!(parse(&args(&["--store=tmp"])).is_err());
+        assert!(parse(&args(&["--unlock_keyring"])).is_err());
+        assert!(parse(&args(&["--store=file"])).is_err());
     }
 
     #[test]

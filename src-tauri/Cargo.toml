@@ -55,6 +55,12 @@ tauri-plugin-process = "2"
 # getuid, for the launchd user domain every launchctl verb needs.
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Unlocking the Secret Service on a machine that logs in automatically, so
+# `dusk setup` can reach the keystore over SSH. Already in the tree under
+# keyring's sync-secret-service, so this names it rather than adding it.
+zbus = "5"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"
 

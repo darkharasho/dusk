@@ -33,9 +33,6 @@ use keys::MachineKey;
 
 pub const ACCOUNT_EVENT: &str = "dusk://account";
 
-const KEYSTORE_SERVICE: &str = "dev.dusk.app";
-const KEYSTORE_ACCOUNT: &str = "github-account";
-
 /// A machine not on the cached list is looked up again, but not more often
 /// than this, so a stream of bogus requests cannot become a stream of calls
 /// to GitHub.
@@ -414,30 +411,22 @@ where
         .unwrap_or_else(|err| Err(format!("keystore call did not finish: {err}")))
 }
 
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYSTORE_SERVICE, KEYSTORE_ACCOUNT).map_err(|e| e.to_string())
-}
-
 fn read_keystore() -> Result<Option<Stored>, String> {
-    match entry()?.get_password() {
-        Ok(raw) => serde_json::from_str(&raw)
+    match crate::secrets::get(crate::secrets::ACCOUNT)? {
+        Some(raw) => serde_json::from_str(&raw)
             .map(Some)
             .map_err(|e| e.to_string()),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) => Err(err.to_string()),
+        None => Ok(None),
     }
 }
 
 fn write_keystore(stored: &Stored) -> Result<(), String> {
     let raw = serde_json::to_string(stored).map_err(|e| e.to_string())?;
-    entry()?.set_password(&raw).map_err(|e| e.to_string())
+    crate::secrets::set(crate::secrets::ACCOUNT, &raw)
 }
 
 fn clear_keystore() -> Result<(), String> {
-    match entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(err) => Err(err.to_string()),
-    }
+    crate::secrets::delete(crate::secrets::ACCOUNT)
 }
 
 #[cfg(test)]

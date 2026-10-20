@@ -16,6 +16,7 @@ mod moonlight;
 mod peer;
 mod poller;
 mod registry;
+mod secrets;
 mod serverinfo;
 mod session;
 mod startup;

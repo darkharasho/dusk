@@ -13,7 +13,21 @@ use super::HostError;
 
 /// Service tools answer fast or they are stuck. Long enough for a cold
 /// `sc query`, short enough that the UI is never wedged on one.
+///
+/// This is the budget for *asking*: `is-active`, `sc query`, `launchctl
+/// list`. Measured at 0.01s on a working machine.
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Starting, stopping or restarting is not asking, and cannot share a budget
+/// with it.
+///
+/// Sunshine's own terminate handler waits ten seconds before forcing the
+/// issue — "10 seconds passed, yet Sunshine's still running: Forcing
+/// shutdown" — so a restart measured at 10.13s against a 10s budget, and
+/// `dusk setup` reported "systemctl did not answer" twice for operations
+/// that had in fact succeeded. Reporting a success as a failure is worse
+/// than waiting: it sends someone to debug a machine that is working.
+pub const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Anything elevated waits on a person reading a UAC prompt before the work
 /// even begins, so the unelevated budget above would cut the prompt off
@@ -358,6 +372,19 @@ mod tests {
         // Start-Process rejects an empty -ArgumentList.
         let script = elevation_script("foo.exe", &[]);
         assert!(!script.contains("-ArgumentList"), "{script}");
+    }
+
+    #[test]
+    fn starting_a_service_is_given_longer_than_asking_about_one() {
+        // Sunshine's own shutdown waits 10s before forcing the issue, so a
+        // restart cannot fit in the query budget. It measured 10.13s against
+        // a 10s limit, and the success was reported as "systemctl did not
+        // answer". The margin has to be wide enough that a slow machine does
+        // not reproduce that.
+        assert!(
+            LIFECYCLE_TIMEOUT >= TIMEOUT * 6,
+            "a restart must not race the query budget"
+        );
     }
 
     #[test]

@@ -24,7 +24,7 @@ env:
   # Pinned rather than "latest" on purpose: the two are a matched pair, and a
   # tagged Dusk should build the same way next year as it does today.
   CLIENT_REPO: darkharasho/moonlight-qt
-  CLIENT_TAG: dusk-v0.2.2
+  CLIENT_TAG: dusk-v0.2.3
 
   # The Sunshine this Dusk ships: its installer on Linux and Windows, and the
   # app itself inside Dusk on macOS (scripts/stage-host-macos.sh). Pinned for

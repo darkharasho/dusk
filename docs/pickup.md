@@ -6,15 +6,15 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.4 is released**, all three platforms, from `main`. On top of
-v0.3.3 it makes the GitHub account the only sign-in (Dusk keeps the host
-password itself), pairs your own machines without a PIN, puts everyone
-else behind "Let other devices pair", explains failed streams, and fixes
-the AppImage: the bundler had corrupted the nested client and host, so no
-v0.3.3 AppImage could stream. `scripts/repair-appimage.sh`, run by
-`scripts/tauri.mjs` after every Linux build, undoes that and re-signs.
-It is the first release reached by self-update from v0.3.3.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.4>
+**v0.3.5 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.3`. On top of v0.3.4 it streams at the host's screen
+size by default (Settings › Streaming › Resolution; the host's Dusk
+answers a `display` question on the peer port, and anything that can't
+gets 1080p), and the client keeps the in-stream handle inside a
+letterboxed picture on OpenGL, SDL, D3D11 and Metal, not just Vulkan.
+The rarer renderers (VA-API direct, VDPAU, DXVA2, DRM, MMAL,
+AVSampleLayer) still place it relative to the window.
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.5>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -34,14 +34,14 @@ flag tied to it stayed on forever.
 | --- | --- |
 | 0 — bundle the fork, fix the client search path | done, verified in artifacts |
 | 1 — rename and identity | done, verified in artifacts |
-| 2 — control socket, overlay actions, live stats | **done and live-tested; client `dusk-v0.2.2`, shipped since v0.3.0; quality not started** |
+| 2 — control socket, overlay actions, live stats | **done and live-tested; client `dusk-v0.2.3`, shipped since v0.3.0; quality not started** |
 | 3 — bundle Sunshine, provision credentials | built, not live-tested |
 | 4 — installer, service registration | built, not live-tested; Windows display driver built, not run on Windows |
 | 5 — zero-click pairing | built, not live-tested |
 | 6 — window choreography | built, not live-tested |
 
 The fork's half of phase 2 is merged to its `master` and published as
-`dusk-v0.2.2`, which `CLIENT_TAG` pins. v0.3.0 was the first Dusk release
+`dusk-v0.2.3`, which `CLIENT_TAG` pins. v0.3.0 was the first Dusk release
 to ship it, with phases 3–6. See *Phase 2* and *Phases 3–6* below.
 
 ## The map
@@ -50,13 +50,13 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4
-└── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5
+└── moonlight-qt/    master @ 09de578a  tags dusk-v0.1.0 … dusk-v0.2.3
 ```
 
 The fork builds and publishes a client; Dusk downloads a pinned one at
 release time. That pin is one line — `CLIENT_TAG` in
-`.github/workflows/release.yml`, currently `dusk-v0.2.2`. Bumping the client
+`.github/workflows/release.yml`, currently `dusk-v0.2.3`. Bumping the client
 means tagging `dusk-v*` in the fork, waiting for its release, and editing
 that line.
 
@@ -110,7 +110,7 @@ FFmpeg and libplacebo from source — hours. Don't. Download the published
 client instead and put it where the search already looks:
 
 ```sh
-gh release download dusk-v0.2.2 --repo darkharasho/moonlight-qt \
+gh release download dusk-v0.2.3 --repo darkharasho/moonlight-qt \
   --pattern 'dusk-client-linux-x86_64.tar.gz'
 tar xzf dusk-client-linux-x86_64.tar.gz
 mkdir -p ../moonlight-qt/app && mv moonlight ../moonlight-qt/app/moonlight

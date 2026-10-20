@@ -1,5 +1,43 @@
 # Release Notes
 
+Version v0.3.5 — October 19, 2026
+
+Streams match the host's screen, and the Dusk button stays within reach.
+
+## Streaming
+
+- **Streams run at the host's screen size.** Until now every stream was
+  1280×720. Dusk now asks the host's Dusk how big its screen is before a
+  stream starts. A host that doesn't run Dusk, or runs an older version,
+  streams at 1080p.
+- **Settings › Streaming › Resolution** chooses something else: the size
+  of the screen you're sitting at, or 720p, 1080p, 1440p or 4K. The
+  bitrate follows the size.
+
+## Fixes
+
+- **The Dusk button stays inside the picture.** When the window's shape
+  didn't match the stream's, as on an ultrawide, the picture had black
+  bars and the Dusk button sat out in a bar where the mouse couldn't
+  reach it. Only Linux with Vulkan got this right; Windows, Mac and
+  Linux's other drawing paths now do too. On Windows the menu's buttons
+  also missed clicks.
+
+## Known limits
+
+- While a game holds the mouse, the button can't be pointed at;
+  Ctrl+Alt+Shift+O opens the menu.
+- The titlebar has been checked on Linux, not yet on Windows or a Mac.
+- On a Mac, hosting keeps running the previous version until it next
+  restarts.
+- Windows builds remain unsigned (SmartScreen: *More info* → *Run anyway*).
+- Networking is LAN or your own VPN only, by design.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.4 — October 19, 2026
 
 Your GitHub account is the only sign-in, and streaming works from the

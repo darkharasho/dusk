@@ -28,6 +28,38 @@ pub struct Store {
     /// Off by default, because both need someone at this machine, and your
     /// own machines never do.
     pub allow_other_devices: bool,
+    /// How big a stream from this machine asks to be.
+    pub resolution: Resolution,
+}
+
+/// How big a stream asks to be.
+///
+/// Matching the host is the default because a stream whose shape differs
+/// from the host's screen gets bars on the host's side, baked into the
+/// picture, and the pointer cannot reach into them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Resolution {
+    #[default]
+    MatchHost,
+    MatchThisDisplay,
+    Fixed { width: u32, height: u32 },
+}
+
+impl Resolution {
+    /// Sizes a stream can actually be: encoders want even dimensions, and
+    /// nothing outside these bounds is a screen.
+    pub fn is_valid(&self) -> bool {
+        match *self {
+            Resolution::Fixed { width, height } => {
+                (320..=15360).contains(&width)
+                    && (240..=8640).contains(&height)
+                    && width % 2 == 0
+                    && height % 2 == 0
+            }
+            _ => true,
+        }
+    }
 }
 
 impl Store {
@@ -87,6 +119,32 @@ mod tests {
         let stored = r#"{"manual":[],"startup":{"startInBackground":true,"closeToTray":true}}"#;
         let store: Store = serde_json::from_str(stored).unwrap();
         assert!(!store.allow_other_devices);
+    }
+
+    #[test]
+    fn a_file_from_before_the_setting_matches_the_host() {
+        let stored = r#"{"manual":[],"allow_other_devices":true}"#;
+        let store: Store = serde_json::from_str(stored).unwrap();
+        assert_eq!(store.resolution, Resolution::MatchHost);
+    }
+
+    #[test]
+    fn a_resolution_round_trips_in_the_shape_the_window_sends() {
+        let fixed: Resolution =
+            serde_json::from_str(r#"{"kind":"fixed","width":1920,"height":1080}"#).unwrap();
+        assert_eq!(fixed, Resolution::Fixed { width: 1920, height: 1080 });
+        assert_eq!(
+            serde_json::to_string(&Resolution::MatchThisDisplay).unwrap(),
+            r#"{"kind":"matchThisDisplay"}"#
+        );
+    }
+
+    #[test]
+    fn only_a_real_screen_size_is_a_resolution() {
+        assert!(Resolution::Fixed { width: 2560, height: 1440 }.is_valid());
+        assert!(!Resolution::Fixed { width: 0, height: 1440 }.is_valid());
+        assert!(!Resolution::Fixed { width: 1921, height: 1080 }.is_valid());
+        assert!(Resolution::MatchHost.is_valid());
     }
 
     #[test]

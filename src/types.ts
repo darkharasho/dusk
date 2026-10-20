@@ -171,7 +171,19 @@ export interface Snapshot {
    * an Allow press or a PIN. Your own machines pair without either.
    */
   allowOtherDevices: boolean;
+  /** How big a stream from this machine asks to be. */
+  resolution: Resolution;
 }
+
+/**
+ * How big a stream asks to be. Matching the host is the default: a stream
+ * shaped differently from the host's screen gets bars the pointer cannot
+ * reach into.
+ */
+export type Resolution =
+  | { kind: "matchHost" }
+  | { kind: "matchThisDisplay" }
+  | { kind: "fixed"; width: number; height: number };
 
 export interface GithubUser {
   id: number;

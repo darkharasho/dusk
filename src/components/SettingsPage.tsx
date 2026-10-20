@@ -6,13 +6,15 @@ import { HostingPanel } from "./HostingPanel";
 import { HostSettings } from "./HostSettings";
 import { SetupChecklist } from "./SetupChecklist";
 import { StartupSection } from "./StartupSection";
+import { StreamingSection } from "./StreamingSection";
 import { checkForUpdate, restartToUpdate, useUpdateState, type UpdateState } from "../updates";
 
-export type SettingsSection = "account" | "startup" | "hosting" | "setup" | "host" | "about";
+export type SettingsSection = "account" | "startup" | "streaming" | "hosting" | "setup" | "host" | "about";
 
 const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "account", label: "Account" },
   { id: "startup", label: "Startup" },
+  { id: "streaming", label: "Streaming" },
   { id: "hosting", label: "Hosting" },
   { id: "setup", label: "Setup" },
   { id: "host", label: "Host settings" },
@@ -53,6 +55,8 @@ export function SettingsPage({ name, snapshot, section, onSection }: Props) {
         {section === "account" && <AccountSection />}
 
         {section === "startup" && <StartupSection />}
+
+        {section === "streaming" && <StreamingSection snapshot={snapshot} />}
 
         {section === "hosting" && <HostingPanel name={name} snapshot={snapshot} />}
 

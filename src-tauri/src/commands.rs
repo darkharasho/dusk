@@ -9,7 +9,7 @@ use crate::model::{Device, HostStatus, Snapshot};
 use crate::registry::split_address;
 use crate::startup;
 use crate::state::{emit_snapshot, AppState};
-use crate::store::ManualEntry;
+use crate::store::{ManualEntry, Resolution};
 use crate::sunshine::{self, Credentials, Known, SunshineApi};
 
 #[tauri::command]
@@ -297,6 +297,36 @@ pub async fn open_sign_in_page() -> Result<(), String> {
     Ok(())
 }
 
+/// What a stream asks for when the size it should match cannot be found:
+/// a host without Dusk, or one too old to say. The commonest screen there
+/// is, and a size every host can encode.
+const FALLBACK_SIZE: (u32, u32) = (1920, 1080);
+
+/// The size to stream at, from the Streaming setting.
+async fn stream_size(app: &AppHandle, state: &Arc<AppState>, address: &str) -> (u32, u32) {
+    let resolution = state.store.lock().await.resolution;
+    let size = match resolution {
+        Resolution::MatchHost => crate::peer::display_size(crate::peer::host_part(address)).await,
+        Resolution::MatchThisDisplay => this_display(app),
+        Resolution::Fixed { width, height } => Some((width, height)),
+    };
+    // Encoders want even dimensions; a screen with an odd one is rare, but
+    // one pixel less is better than a stream that will not start.
+    let (width, height) = size.unwrap_or(FALLBACK_SIZE);
+    (width & !1, height & !1)
+}
+
+/// The screen Dusk's window is on, which is where the stream will open.
+fn this_display(app: &AppHandle) -> Option<(u32, u32)> {
+    let window = app.get_webview_window("main")?;
+    let monitor = match window.current_monitor() {
+        Ok(Some(monitor)) => monitor,
+        _ => app.primary_monitor().ok()??,
+    };
+    let size = monitor.size();
+    (size.width > 0 && size.height > 0).then_some((size.width, size.height))
+}
+
 /// Start streaming an app, and watch the session for the card's sake.
 #[tauri::command]
 pub async fn launch_app(
@@ -330,9 +360,14 @@ pub async fn launch_app(
         .await
         .map_err(|e| format!("could not open a control channel: {e}"))?;
 
+    let options = crate::moonlight::cli::StreamOptions {
+        resolution: Some(stream_size(&app, &inner, &address).await),
+        ..Default::default()
+    };
+
     // moonlight-qt takes the app's title, not its id.
     let child = moonlight(&inner)?
-        .stream(&address, &app_name, &Default::default(), &session.env())
+        .stream(&address, &app_name, &options, &session.env())
         .map_err(|e| e.to_string())?;
 
     // The session ending is a state change the grid has to notice, and
@@ -637,6 +672,25 @@ pub async fn set_allow_other_devices(
     {
         let mut store = state.store.lock().await;
         store.allow_other_devices = on;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// How big streams from this machine ask to be.
+#[tauri::command]
+pub async fn set_resolution(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    resolution: Resolution,
+) -> Result<(), String> {
+    if !resolution.is_valid() {
+        return Err("That is not a size a stream can be.".into());
+    }
+    {
+        let mut store = state.store.lock().await;
+        store.resolution = resolution;
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;

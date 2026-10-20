@@ -42,6 +42,17 @@
 //!
 //! A connection refused means no Dusk is listening there, and the
 //! connecting side falls back to showing the PIN.
+//!
+//! The same port answers one other question, asked before a stream so it
+//! can match the host's screen:
+//!
+//! ```text
+//! connecting → host   {"type":"display"}
+//! host → connecting   {"type":"display_size","width":2560,"height":1440}
+//! ```
+//!
+//! A Dusk too old to know it declines, and the stream falls back to a
+//! fixed size.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -85,6 +96,13 @@ pub enum Message {
     Accepted,
     Declined {
         reason: String,
+    },
+    /// What size is the screen being streamed? Nothing secret: it is the
+    /// size every stream from this machine already shows.
+    Display,
+    DisplaySize {
+        width: u32,
+        height: u32,
     },
 }
 
@@ -193,11 +211,31 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
                 None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
             }
         }
+        Ok(Message::Display) => match host_display(&app) {
+            Some((width, height)) => Message::DisplaySize { width, height },
+            None => Message::Declined {
+                reason: "This machine could not tell its screen size.".into(),
+            },
+        },
         _ => Message::Declined {
             reason: "Dusk did not understand that request.".into(),
         },
     };
     let _ = send(&mut write, &reply).await;
+}
+
+/// The size of the screen a stream from here shows, in real pixels.
+///
+/// The primary screen, because that is the one the host streams unless
+/// someone has picked another. Wayland may not name a primary, so the first
+/// screen stands in for it there.
+fn host_display(app: &AppHandle) -> Option<(u32, u32)> {
+    let monitor = match app.primary_monitor() {
+        Ok(Some(monitor)) => monitor,
+        _ => app.available_monitors().ok()?.into_iter().next()?,
+    };
+    let size = monitor.size();
+    (size.width > 0 && size.height > 0).then_some((size.width, size.height))
 }
 
 /// Pair without asking, when the request is signed by another machine on
@@ -389,6 +427,35 @@ async fn ask_at(
     }
 }
 
+/// Ask the Dusk at `address` how big its screen is. `None` when there is
+/// no Dusk there, or one too old to say. Kept short: a stream is waiting.
+pub async fn display_size(address: &str) -> Option<(u32, u32)> {
+    display_size_at(address, PORT).await
+}
+
+async fn display_size_at(address: &str, port: u16) -> Option<(u32, u32)> {
+    let budget = Duration::from_secs(2);
+    let connect = TcpStream::connect((address, port));
+    let stream = tokio::time::timeout(budget, connect).await.ok()?.ok()?;
+    let (read, mut write) = stream.into_split();
+    send(&mut write, &Message::Display).await.ok()?;
+    let mut lines = BufReader::new(read.take(MAX_LINE as u64)).lines();
+    let line = tokio::time::timeout(budget, lines.next_line())
+        .await
+        .ok()?
+        .ok()??;
+    match serde_json::from_str::<Message>(&line).ok()? {
+        // Nothing streams at a size like 0x0 or 100000 wide; a host saying
+        // so is broken, and a fixed size serves better than believing it.
+        Message::DisplaySize { width, height }
+            if (320..=15360).contains(&width) && (240..=8640).contains(&height) =>
+        {
+            Some((width, height))
+        }
+        _ => None,
+    }
+}
+
 // ------------------------------------------------------------------ helpers
 
 /// The host part of an address as the grid stores it, which may carry
@@ -517,6 +584,55 @@ mod tests {
         let (_, rx) = requests.open().await.unwrap();
         drop(rx);
         assert!(requests.open().await.is_some());
+    }
+
+    #[test]
+    fn the_display_question_is_the_one_documented() {
+        assert_eq!(
+            serde_json::to_string(&Message::Display).unwrap(),
+            r#"{"type":"display"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Message::DisplaySize {
+                width: 2560,
+                height: 1440
+            })
+            .unwrap(),
+            r#"{"type":"display_size","width":2560,"height":1440}"#
+        );
+    }
+
+    /// A stand-in host that answers one request with `reply`.
+    async fn host_answering(reply: &'static str) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut lines = BufReader::new(read).lines();
+            let line = lines.next_line().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::from_str::<Message>(&line).unwrap(),
+                Message::Display
+            );
+            write.write_all(reply.as_bytes()).await.unwrap();
+            write.write_all(b"\n").await.unwrap();
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_host_says_how_big_its_screen_is() {
+        let port = host_answering(r#"{"type":"display_size","width":3440,"height":1440}"#).await;
+        assert_eq!(display_size_at("127.0.0.1", port).await, Some((3440, 1440)));
+    }
+
+    #[tokio::test]
+    async fn an_older_dusk_or_a_nonsense_size_is_no_answer() {
+        let port = host_answering(r#"{"type":"declined","reason":"Dusk did not understand that request."}"#).await;
+        assert_eq!(display_size_at("127.0.0.1", port).await, None);
+        let port = host_answering(r#"{"type":"display_size","width":0,"height":1440}"#).await;
+        assert_eq!(display_size_at("127.0.0.1", port).await, None);
     }
 
     #[tokio::test]

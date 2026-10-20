@@ -246,4 +246,6 @@ pub struct Snapshot {
     /// Whether machines outside this one's GitHub account may pair with it.
     /// See [`crate::store::Store::allow_other_devices`].
     pub allow_other_devices: bool,
+    /// How big a stream from this machine asks to be.
+    pub resolution: crate::store::Resolution,
 }

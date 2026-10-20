@@ -4,6 +4,7 @@ import type {
   AccountView,
   Device,
   DownloadPreview,
+  Resolution,
   Setup,
   SignInCode,
   Snapshot,
@@ -181,6 +182,11 @@ export function saveHostConfig(changes: HostConfig, restart: boolean): Promise<v
 /** Accept an incoming pairing PIN on this machine. */
 export function setAllowOtherDevices(on: boolean): Promise<void> {
   return invoke("set_allow_other_devices", { on });
+}
+
+/** How big streams from this machine ask to be. */
+export function setResolution(resolution: Resolution): Promise<void> {
+  return invoke("set_resolution", { resolution });
 }
 
 export function acceptPin(pin: string, deviceName?: string): Promise<void> {

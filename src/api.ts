@@ -4,6 +4,7 @@ import type {
   AccountView,
   Device,
   DownloadPreview,
+  Codec,
   Resolution,
   Setup,
   SignInCode,
@@ -187,6 +188,16 @@ export function setAllowOtherDevices(on: boolean): Promise<void> {
 /** How big streams from this machine ask to be. */
 export function setResolution(resolution: Resolution): Promise<void> {
   return invoke("set_resolution", { resolution });
+}
+
+/** Kbps, or null to let the stream pick. */
+export function setBitrate(kbps: number | null): Promise<void> {
+  return invoke("set_bitrate", { kbps });
+}
+
+/** Which video format streams from this machine ask for. */
+export function setCodec(codec: Codec): Promise<void> {
+  return invoke("set_codec", { codec });
 }
 
 export function acceptPin(pin: string, deviceName?: string): Promise<void> {

@@ -9,7 +9,7 @@ use crate::model::{Device, HostStatus, Snapshot};
 use crate::registry::split_address;
 use crate::startup;
 use crate::state::{emit_snapshot, AppState};
-use crate::store::{ManualEntry, Resolution};
+use crate::store::{Codec, ManualEntry, Resolution, BITRATE_RANGE};
 use crate::sunshine::{self, Credentials, Known, SunshineApi};
 
 #[tauri::command]
@@ -360,8 +360,14 @@ pub async fn launch_app(
         .await
         .map_err(|e| format!("could not open a control channel: {e}"))?;
 
+    let (bitrate, codec) = {
+        let store = inner.store.lock().await;
+        (store.bitrate_kbps, store.codec)
+    };
     let options = crate::moonlight::cli::StreamOptions {
         resolution: Some(stream_size(&app, &inner, &address).await),
+        bitrate,
+        codec: (codec != Codec::Auto).then_some(codec),
         ..Default::default()
     };
 
@@ -697,6 +703,42 @@ pub async fn set_resolution(
     Ok(())
 }
 
+/// How much data streams from this machine may use, in Kbps, or `None` to
+/// let the client pick from the stream's size and frame rate.
+#[tauri::command]
+pub async fn set_bitrate(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    kbps: Option<u32>,
+) -> Result<(), String> {
+    if kbps.is_some_and(|k| !BITRATE_RANGE.contains(&k)) {
+        return Err("Bitrate has to be between 0.5 and 500 Mbps.".into());
+    }
+    {
+        let mut store = state.store.lock().await;
+        store.bitrate_kbps = kbps;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// Which video format streams from this machine ask the host for.
+#[tauri::command]
+pub async fn set_codec(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    codec: Codec,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.codec = codec;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
 /// The first-run checklist for this machine.
 #[tauri::command]
 pub async fn get_setup(state: State<'_, Arc<AppState>>) -> Result<install::Setup, String> {
@@ -899,7 +941,7 @@ pub async fn allow_input() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Add firewall rules for Sunshine. Windows only; elevates when it runs.
+/// Add firewall rules for Sunshine and Dusk. Windows only; elevates when it runs.
 #[tauri::command]
 pub async fn open_firewall() -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -910,7 +952,9 @@ pub async fn open_firewall() -> Result<(), String> {
             .ok_or_else(|| {
                 "Dusk could not find sunshine.exe, so it cannot add a rule for it.".to_string()
             })?;
-        install::apply::open_firewall(&program)
+        let dusk = std::env::current_exe()
+            .map_err(|e| format!("Dusk could not find its own program file: {e}"))?;
+        install::apply::open_firewall(&program, &dusk)
             .await
             .map_err(|e| e.to_string())
     }

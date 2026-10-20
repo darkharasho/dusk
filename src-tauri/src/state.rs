@@ -301,9 +301,14 @@ impl AppState {
         // Copied out under one short lock. Two `lock().await`s in the
         // literal below would deadlock: the first guard lives until the
         // whole expression ends, so the second waits on it forever.
-        let (allow_other_devices, resolution) = {
+        let (allow_other_devices, resolution, bitrate_kbps, codec) = {
             let store = self.store.lock().await;
-            (store.allow_other_devices, store.resolution)
+            (
+                store.allow_other_devices,
+                store.resolution,
+                store.bitrate_kbps,
+                store.codec,
+            )
         };
         for device in &mut devices {
             // Or-ed rather than assigned: mock fixtures set this directly
@@ -328,6 +333,8 @@ impl AppState {
             host_credentials_persistent: self.credentials.is_persistent().await,
             allow_other_devices,
             resolution,
+            bitrate_kbps,
+            codec,
         }
     }
 }

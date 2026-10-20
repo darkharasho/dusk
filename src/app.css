@@ -188,6 +188,19 @@ body,
   border-top: var(--axi-border-hairline) solid var(--axi-rule);
 }
 
+/* A choice and the sentence explaining it, kept together and ruled off
+   from the next one. */
+.dusk-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dusk-setting + .dusk-setting {
+  padding-top: 16px;
+  border-top: var(--axi-border-hairline) solid var(--axi-rule);
+}
+
 /* A secondary action in the drawer's column, sized to its label rather than
    stretched across the column like the primary one. */
 .dusk-drawer__end {

@@ -270,21 +270,26 @@ async fn windows_msi(msi: &Path) -> Result<(), ApplyError> {
     }))
 }
 
-/// Let Sunshine through the Windows firewall.
+/// Let Sunshine, and Dusk itself, through the Windows firewall.
 ///
 /// Rules are bound to the program rather than to a list of ports: Sunshine
 /// listens on several TCP and UDP ranges that have changed between releases,
 /// and a program rule stays correct when they do. It is also narrower —
 /// opening a port range admits anything that binds it.
+///
+/// Dusk needs its own rule because a connecting Dusk asks this one things
+/// directly — its screen size, a PIN-free pairing — on [`crate::peer::PORT`].
+/// Without it those questions time out, and a stream set to match the
+/// host's screen quietly falls back to 1080p.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub async fn open_firewall(program: &Path) -> Result<(), ApplyError> {
+pub async fn open_firewall(program: &Path, dusk: &Path) -> Result<(), ApplyError> {
     if !cfg!(target_os = "windows") {
         return Err(ApplyError::Unsupported);
     }
 
-    // Both rules in one elevated script, so it costs one prompt rather than
-    // one per protocol.
-    let script = firewall_script(&program.to_string_lossy());
+    // Every rule in one elevated script, so it costs one prompt rather than
+    // one per rule.
+    let script = firewall_script(&program.to_string_lossy(), &dusk.to_string_lossy());
     let run = service::run_elevated(
         "powershell.exe",
         &[
@@ -307,18 +312,26 @@ pub async fn open_firewall(program: &Path) -> Result<(), ApplyError> {
     }
 }
 
-/// One `netsh` rule per protocol, stopping at the first that fails.
-fn firewall_script(program: &str) -> String {
-    let mut script = String::new();
-    for (name, protocol) in [
-        ("Dusk hosting (inbound TCP)", "TCP"),
-        ("Dusk hosting (inbound UDP)", "UDP"),
+/// One `netsh` rule per protocol for hosting and one for Dusk, stopping at
+/// the first that fails.
+fn firewall_script(program: &str, dusk: &str) -> String {
+    // Dismissing the prompt Windows shows the first time Dusk listens leaves
+    // block rules behind for it, and a block rule beats any allow rule. They
+    // go first; finding none is not a failure, so its exit code is ignored.
+    let mut script = format!(
+        "& netsh.exe advfirewall firewall delete rule name=all {} | Out-Null\n",
+        service::powershell_quote(&format!("program={dusk}")),
+    );
+    for (name, path, protocol) in [
+        ("Dusk hosting (inbound TCP)", program, "TCP"),
+        ("Dusk hosting (inbound UDP)", program, "UDP"),
+        ("Dusk (inbound TCP)", dusk, "TCP"),
     ] {
         script.push_str(&format!(
             "& netsh.exe advfirewall firewall add rule {} dir=in action=allow {} protocol={protocol} enable=yes\n\
              if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n",
             service::powershell_quote(&format!("name={name}")),
-            service::powershell_quote(&format!("program={program}")),
+            service::powershell_quote(&format!("program={path}")),
         ));
     }
     script.push_str("exit 0");
@@ -512,9 +525,12 @@ mod tests {
     }
 
     #[test]
-    fn both_firewall_rules_go_in_one_script_and_a_failure_stops_it() {
-        let script = firewall_script(r"C:\Program Files\Sunshine\sunshine.exe");
-        assert_eq!(script.matches("netsh.exe").count(), 2, "{script}");
+    fn every_firewall_rule_goes_in_one_script_and_a_failure_stops_it() {
+        let script = firewall_script(
+            r"C:\Program Files\Sunshine\sunshine.exe",
+            r"C:\Program Files\Dusk\dusk.exe",
+        );
+        assert_eq!(script.matches("add rule").count(), 3, "{script}");
         assert!(
             script.contains(r"'program=C:\Program Files\Sunshine\sunshine.exe'"),
             "{script}"
@@ -523,7 +539,22 @@ mod tests {
             script.contains("'name=Dusk hosting (inbound UDP)'"),
             "{script}"
         );
-        assert_eq!(script.matches("$LASTEXITCODE").count(), 4, "{script}");
+        assert_eq!(script.matches("$LASTEXITCODE").count(), 6, "{script}");
+    }
+
+    #[test]
+    fn dusk_is_let_through_and_its_old_block_rules_go_first() {
+        let script = firewall_script(
+            r"C:\Program Files\Sunshine\sunshine.exe",
+            r"C:\Program Files\Dusk\dusk.exe",
+        );
+        let delete = script
+            .find(r"delete rule name=all 'program=C:\Program Files\Dusk\dusk.exe'")
+            .expect(&script);
+        let allow = script
+            .find(r"'name=Dusk (inbound TCP)' dir=in action=allow 'program=C:\Program Files\Dusk\dusk.exe' protocol=TCP")
+            .expect(&script);
+        assert!(delete < allow, "{script}");
     }
 
     #[test]

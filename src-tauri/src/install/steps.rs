@@ -222,7 +222,7 @@ fn firewall_step(platform: HostPlatform) -> Step {
         HostPlatform::Windows => step(
             StepId::Firewall,
             "Open the firewall for hosting",
-            "Adds inbound rules for the ports hosting listens on.",
+            "Adds inbound rules for hosting and for Dusk itself.",
             StepState::Todo,
             true,
         ),

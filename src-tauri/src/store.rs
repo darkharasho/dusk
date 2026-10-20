@@ -30,6 +30,29 @@ pub struct Store {
     pub allow_other_devices: bool,
     /// How big a stream from this machine asks to be.
     pub resolution: Resolution,
+    /// How much data a stream may use, in Kbps. `None` lets the client pick
+    /// from the stream's size and frame rate.
+    pub bitrate_kbps: Option<u32>,
+    /// Which video format a stream asks the host for.
+    pub codec: Codec,
+}
+
+/// The lowest and highest bitrates the client accepts, in Kbps.
+pub const BITRATE_RANGE: std::ops::RangeInclusive<u32> = 500..=500_000;
+
+/// Which video format a stream asks the host for.
+///
+/// Automatic is the default because the client and host agree on the best
+/// format both can decode and encode in hardware, which a person picking
+/// by name cannot see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Codec {
+    #[default]
+    Auto,
+    H264,
+    Hevc,
+    Av1,
 }
 
 /// How big a stream asks to be.
@@ -129,6 +152,22 @@ mod tests {
         let stored = r#"{"manual":[],"allow_other_devices":true}"#;
         let store: Store = serde_json::from_str(stored).unwrap();
         assert_eq!(store.resolution, Resolution::MatchHost);
+    }
+
+    #[test]
+    fn a_file_from_before_the_settings_leaves_bitrate_and_codec_to_the_client() {
+        let stored = r#"{"manual":[],"resolution":{"kind":"matchHost"}}"#;
+        let store: Store = serde_json::from_str(stored).unwrap();
+        assert_eq!(store.bitrate_kbps, None);
+        assert_eq!(store.codec, Codec::Auto);
+    }
+
+    #[test]
+    fn a_codec_round_trips_in_the_shape_the_window_sends() {
+        let codec: Codec = serde_json::from_str(r#""hevc""#).unwrap();
+        assert_eq!(codec, Codec::Hevc);
+        assert_eq!(serde_json::to_string(&Codec::Av1).unwrap(), r#""av1""#);
+        assert_eq!(serde_json::to_string(&Codec::H264).unwrap(), r#""h264""#);
     }
 
     #[test]

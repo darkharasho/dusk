@@ -173,7 +173,13 @@ export interface Snapshot {
   allowOtherDevices: boolean;
   /** How big a stream from this machine asks to be. */
   resolution: Resolution;
+  /** Kbps, or null to let the stream pick from its size and frame rate. */
+  bitrateKbps: number | null;
+  /** Which video format a stream asks the host for. */
+  codec: Codec;
 }
+
+export type Codec = "auto" | "h264" | "hevc" | "av1";
 
 /**
  * How big a stream asks to be. Matching the host is the default: a stream

@@ -91,6 +91,47 @@ pub struct StreamOptions {
     pub bitrate: Option<u32>,
     /// `borderless`, `fullscreen` or `windowed`.
     pub display_mode: Option<String>,
+    /// Left out for Automatic, so a stock client too old to know a codec
+    /// name is only ever handed one somebody chose.
+    pub codec: Option<crate::store::Codec>,
+}
+
+/// The client's name for a codec on its command line.
+fn codec_arg(codec: crate::store::Codec) -> &'static str {
+    use crate::store::Codec;
+    match codec {
+        Codec::Auto => "auto",
+        Codec::H264 => "H.264",
+        Codec::Hevc => "HEVC",
+        Codec::Av1 => "AV1",
+    }
+}
+
+/// The command line for a stream.
+fn stream_args(host: &str, app: &str, options: &StreamOptions) -> Vec<String> {
+    let mut args: Vec<String> = vec!["stream".into(), host.into(), app.into()];
+
+    if let Some((w, h)) = options.resolution {
+        args.push("--resolution".into());
+        args.push(format!("{w}x{h}"));
+    }
+    if let Some(fps) = options.fps {
+        args.push("--fps".into());
+        args.push(fps.to_string());
+    }
+    if let Some(bitrate) = options.bitrate {
+        args.push("--bitrate".into());
+        args.push(bitrate.to_string());
+    }
+    if let Some(mode) = &options.display_mode {
+        args.push("--display-mode".into());
+        args.push(mode.clone());
+    }
+    if let Some(codec) = options.codec {
+        args.push("--video-codec".into());
+        args.push(codec_arg(codec).into());
+    }
+    args
 }
 
 impl Moonlight {
@@ -198,24 +239,7 @@ impl Moonlight {
         options: &StreamOptions,
         env: &[(&'static str, String)],
     ) -> Result<Child, MoonlightError> {
-        let mut args: Vec<String> = vec!["stream".into(), host.into(), app.into()];
-
-        if let Some((w, h)) = options.resolution {
-            args.push("--resolution".into());
-            args.push(format!("{w}x{h}"));
-        }
-        if let Some(fps) = options.fps {
-            args.push("--fps".into());
-            args.push(fps.to_string());
-        }
-        if let Some(bitrate) = options.bitrate {
-            args.push("--bitrate".into());
-            args.push(bitrate.to_string());
-        }
-        if let Some(mode) = &options.display_mode {
-            args.push("--display-mode".into());
-            args.push(mode.clone());
-        }
+        let args = stream_args(host, app, options);
 
         let mut command = Command::new(&self.binary);
         command
@@ -586,6 +610,41 @@ fn on_path(name: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_bitrate_and_codec_leave_the_client_to_choose() {
+        let options = StreamOptions {
+            resolution: Some((1920, 1080)),
+            ..Default::default()
+        };
+        assert_eq!(
+            stream_args("host", "Desktop", &options),
+            ["stream", "host", "Desktop", "--resolution", "1920x1080"]
+        );
+    }
+
+    #[test]
+    fn a_chosen_bitrate_and_codec_are_passed_in_the_clients_own_words() {
+        let options = StreamOptions {
+            bitrate: Some(40_000),
+            codec: Some(crate::store::Codec::H264),
+            ..Default::default()
+        };
+        assert_eq!(
+            stream_args("host", "Desktop", &options),
+            [
+                "stream",
+                "host",
+                "Desktop",
+                "--bitrate",
+                "40000",
+                "--video-codec",
+                "H.264"
+            ]
+        );
+        assert_eq!(codec_arg(crate::store::Codec::Hevc), "HEVC");
+        assert_eq!(codec_arg(crate::store::Codec::Av1), "AV1");
+    }
 
     /// Stand-ins for moonlight-qt, so the timeout and success paths are
     /// covered on every platform rather than only on the developer's.

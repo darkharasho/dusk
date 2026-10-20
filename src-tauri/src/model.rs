@@ -248,4 +248,7 @@ pub struct Snapshot {
     pub allow_other_devices: bool,
     /// How big a stream from this machine asks to be.
     pub resolution: crate::store::Resolution,
+    /// Kbps, or `None` for the client's own choice.
+    pub bitrate_kbps: Option<u32>,
+    pub codec: crate::store::Codec,
 }

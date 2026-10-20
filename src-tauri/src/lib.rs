@@ -253,6 +253,8 @@ pub fn run() {
             commands::accept_pin,
             commands::set_allow_other_devices,
             commands::set_resolution,
+            commands::set_bitrate,
+            commands::set_codec,
             commands::answer_pair_request,
             commands::get_account,
             commands::sign_in_with_github,

@@ -6,23 +6,27 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.8 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.3`. It is a UI polish pass: the masthead is the same
-on both tabs (Refresh and Add machine live in the "Your machines" heading),
-machine cards show latency or "Seen … ago", This machine is a slim card
-that opens Hosting settings, and the settings sidebar is Axi's
-`axi-rail__nav--quiet` with icons (`src/components/Icon.tsx` wraps Axi's
-raw SVGs). v0.3.7 fixed v0.3.6, which deadlocked building its first
+**v0.3.9 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It adds Settings › Streaming › Bitrate (Automatic
+or 5–150 Mbps, `--bitrate`) and Video codec (Automatic, H.264, HEVC, AV1,
+`--video-codec`, passed only when not Automatic). The client now keeps the
+in-stream handle inside a letterboxed picture on VDPAU too, which is what
+an NVIDIA card picks on Linux; before, its handle rect was never set. The
+Windows firewall step now also allows Dusk itself on TCP (the peer port,
+47850), deleting any block rules Windows left for dusk.exe first: without
+it "Match the host's screen" timed out and fell back to 1080p. A Linux
+host running firewalld blocks the peer port the same way and Dusk does
+not handle that yet. v0.3.8 was a UI polish pass (steady masthead, cards
+with latency or "Seen … ago", a slim This machine card, the settings rail
+with icons). v0.3.7 fixed v0.3.6, which deadlocked building its first
 snapshot (two `store.lock().await`s in one struct literal) and so opened
 to an empty window; `state::tests::snapshot_does_not_hang` guards it.
 Since v0.3.6 Dusk streams at the host's screen
 size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
-gets 1080p), and the client keeps the in-stream handle inside a
-letterboxed picture on OpenGL, SDL, D3D11 and Metal, not just Vulkan.
-The rarer renderers (VA-API direct, VDPAU, DXVA2, DRM, MMAL,
-AVSampleLayer) still place it relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.8>
+gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
+AVSampleLayer) still place the handle relative to the window.
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.9>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -58,13 +62,13 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8
-└── moonlight-qt/    master @ 89610aa2  tags dusk-v0.1.0 … dusk-v0.2.3
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9
+└── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 
 The fork builds and publishes a client; Dusk downloads a pinned one at
 release time. That pin is one line — `CLIENT_TAG` in
-`.github/workflows/release.yml`, currently `dusk-v0.2.3`. Bumping the client
+`.github/workflows/release.yml`, currently `dusk-v0.2.4`. Bumping the client
 means tagging `dusk-v*` in the fork, waiting for its release, and editing
 that line.
 

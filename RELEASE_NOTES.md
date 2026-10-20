@@ -1,5 +1,36 @@
 # Release Notes
 
+Version v0.3.9 — October 20, 2026
+
+Bitrate and video format settings, and the in-stream Dusk icon within
+reach on NVIDIA Linux machines.
+
+## Changes
+
+- **Choose a bitrate.** Settings › Streaming › Bitrate is Automatic, which
+  sizes it to the stream's resolution and frame rate, or a fixed 5 to
+  150 Mbps. Lower it if the picture stutters; raise it if it looks blocky.
+- **Choose a video format.** Settings › Streaming › Video codec is
+  Automatic, H.264, HEVC (H.265) or AV1. Automatic picks the best one both
+  machines can handle in hardware.
+
+## Fixes
+
+- **The Dusk icon stays inside the picture on NVIDIA Linux machines.**
+  There the stream is drawn a different way, which put the icon in the
+  window's corner. When the stream is narrower than the screen, that
+  corner is in a black bar the mouse can't reach.
+- **Matching the host's screen works with Windows hosts.** Windows'
+  firewall blocked Dusk from asking a host its screen size, so streams
+  fell back to 1080p. On each Windows host, update Dusk and run **Open the
+  firewall for hosting** in Setup again; it now lets Dusk through as well
+  as hosting, and clears any rule that was blocking Dusk.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.8 — October 20, 2026
 
 A tidier window that holds still.

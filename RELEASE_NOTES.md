@@ -1,5 +1,31 @@
 # Release Notes
 
+Version v0.3.12 — October 20, 2026
+
+Set a machine up to host without sitting in front of it.
+
+## Changes
+
+- **`dusk setup` and `dusk status`.** A machine you only ever stream from
+  often has nobody at it — a box in a cupboard, a headless Linux host, one
+  you reach over SSH. Until now setting one up needed a desktop session and
+  a mouse, because every step was a button. `dusk setup` carries out the
+  same steps the Setup screen does, in the same order, and prints what it
+  did and what is left. `dusk status` says whether hosting is installed,
+  running, and set up. Running `dusk` with no arguments opens the window as
+  before. Steps only you can finish are listed, with what to do, and do not
+  count as a failure. A virtual display is never installed this way: that
+  stays a thing you ask for.
+- **Hosting comes back after a reboot on Linux.** Its background service was
+  tied to a target that Ubuntu's GNOME never switches on, so it was set to
+  start at sign-in and then quietly didn't. Only affects a host set up from
+  this version onwards; one already installed keeps the service it has.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.11 — October 20, 2026
 
 Setting up hosting works on Windows. It never did before this release.

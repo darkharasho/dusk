@@ -6,8 +6,27 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.11 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It fixes three Windows faults in the elevation and
+**v0.3.12 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It adds `dusk setup` and `dusk status` (`cli.rs`),
+handled in `main.rs` before Tauri starts — the same hook the elevated driver
+helper uses — so a machine with no display can be set up. The work list is
+`install::steps::build`, the same call `get_setup` makes, and each step runs
+the same function the button runs; `provision` moved from `commands.rs` to
+`sunshine::provision::run(&dyn HostBackend, &CredentialStore)` so both share
+it. Optional steps (the Windows display driver) are never run unasked, and
+steps marked Unknown don't fail the run. The bundled installer only, never
+the download: a headless run can't show what it is about to fetch.
+`resource_dir()` rediscovers what `app.path().resource_dir()` would give —
+`/usr/lib/Dusk` on Linux, the exe dir on Windows, `../Resources` on macOS —
+by looking for `sunshine/bundled.json`. The Linux user unit is now
+`WantedBy=graphical-session.target xdg-desktop-autostart.target`: Ubuntu's
+GNOME launches autostart entries as its own `app-gnome-*.scope` units and
+never activates `xdg-desktop-autostart.target`, so the unit was enabled and
+never started and hosting didn't survive a reboot. `register_user_unit`
+still won't overwrite an existing unit, so this only reaches hosts set up
+from v0.3.12 on. **Known gap:** WebKitGTK under Xorg ignores XTEST synthetic
+input, so the window can't be driven with `xdotool` — use the CLI for
+headless work rather than trying to automate the UI. v0.3.11 fixes three Windows faults in the elevation and
 spawn layer (`host/service.rs`). `Start-Process -ArgumentList` takes an
 array, joins it with spaces and quotes nothing, so the staged installer's
 path — always under `C:\Program Files\Dusk\resources` — reached `msiexec`
@@ -56,7 +75,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.11>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.12>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -92,7 +111,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

@@ -1,5 +1,36 @@
 # Release Notes
 
+Version v0.3.13 — October 20, 2026
+
+A machine that logs in on its own can now keep its sign-in.
+
+## Changes
+
+- **Hosting set up over SSH keeps its sign-in.** On Linux the place Dusk
+  keeps secrets has to be unlocked, normally by the password you type at
+  the login screen. A machine set to log in automatically never types one,
+  so Dusk could not save anything: it looked set up, then forgot which
+  machine it was at the next restart and quietly stopped being one your
+  other machines recognise. `dusk setup --unlock-keyring` opens it for
+  this restart, reading the password from standard input and leaving the
+  keyring's own password untouched.
+- **`dusk setup --store=tpm`, for a machine nobody logs in to.** Keeps
+  Dusk's secrets sealed to that machine instead, so they survive a restart
+  with nobody there. They can only be read back on the machine that wrote
+  them — move the disk elsewhere and they are unreadable. If there is no
+  TPM to seal to, the command refuses rather than storing anything in the
+  clear.
+- **`dusk status` says where secrets are kept**, and says so plainly when
+  a locked keyring means nothing can be saved.
+- **No more "systemctl did not answer" when it did.** Turning hosting on or
+  off could take a few seconds longer than Dusk was willing to wait, so
+  work that had succeeded was reported as having failed.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.12 — October 20, 2026
 
 Set a machine up to host without sitting in front of it.

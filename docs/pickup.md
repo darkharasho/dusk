@@ -6,8 +6,38 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.12 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It adds `dusk setup` and `dusk status` (`cli.rs`),
+**v0.3.13 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. `secrets/mod.rs` is now the one place that decides
+where this machine's secrets live; `account/mod.rs` and
+`sunshine/credentials.rs` both go through it instead of reaching for
+`keyring::Entry`. Two backends: the OS keystore (default, always) and blobs
+sealed with `systemd-creds encrypt --with-key=tpm2` under
+`$XDG_DATA_HOME/dusk/sealed`. Which one is in use is decided by that
+directory existing, not by a setting — a setting would have to be read
+identically by the window and by `dusk setup` from two different config
+paths, and the day they disagreed one would write a secret where the other
+never looks. `dusk setup --store=tpm` turns it on and carries existing
+entries over; it refuses if there is no TPM rather than falling back to the
+clear. The reasoning for why sealing is not a downgrade is in the module
+doc and worth reading before changing it: a keyring protects a secret only
+while *locked*, and in any logged-in session it is unlocked and readable
+over D-Bus by anything running as you, so sealing matches it on both
+threats while needing no password. `dusk setup --unlock-keyring` reads a
+password from **stdin** (never argv) and unlocks the login collection via
+`org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface.UnlockWithMasterPassword`
+over zbus, leaving its password alone. **Do not** reach for
+`gnome-keyring-daemon --unlock`: measured on Venus it left the keyring
+locked *and* `--replace` tore down the session's own daemon, taking
+`GNOME_KEYRING_CONTROL` and `SSH_AUTH_SOCK` with it. `service.rs` now has
+`LIFECYCLE_TIMEOUT` (90s) separate from the 10s query budget: Sunshine's
+terminate handler waits 10s before forcing shutdown, so a restart measured
+10.13s against a 10s limit and `dusk setup` twice reported "systemctl did
+not answer" for work that had succeeded. One more Linux gotcha from the
+same session: a Sunshine with an empty `sunshine.conf` auto-detects capture,
+cannot gain `CAP_SYS_ADMIN` from an AppImage, finds no `WAYLAND_DISPLAY`,
+fails `[portalgrab] RemoteDesktop CreateSession`, and then **hangs without
+binding any port at all** — `capture = x11` in `sunshine.conf` fixes it on
+an X11 session. v0.3.12 added `dusk setup` and `dusk status` (`cli.rs`),
 handled in `main.rs` before Tauri starts — the same hook the elevated driver
 helper uses — so a machine with no display can be set up. The work list is
 `install::steps::build`, the same call `get_setup` makes, and each step runs
@@ -75,7 +105,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.12>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.13>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -111,7 +141,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

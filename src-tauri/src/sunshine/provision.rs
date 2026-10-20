@@ -17,7 +17,8 @@
 //! person stops being able to sign in to Sunshine's web page, and stops
 //! needing to.
 
-use super::Credentials;
+use super::{CredentialStore, Credentials, SunshineApi};
+use crate::host::HostBackend;
 
 /// Not a secret, and not chosen to be guessable either: it is what someone
 /// would see if they ever looked in Sunshine's credentials file and wondered
@@ -66,6 +67,71 @@ fn password_from(mut fill: impl FnMut(&mut [u8]) -> Result<(), String>) -> Resul
 /// The arguments that set a credential, after the Sunshine binary.
 pub fn creds_args(credentials: &Credentials) -> [&str; 3] {
     ["--creds", &credentials.username, &credentials.password]
+}
+
+/// Give this machine's host a sign-in of Dusk's own, and keep it.
+///
+/// Takes the two things it actually needs rather than the whole application
+/// state, so the headless `dusk setup` runs the same code the window does.
+/// A second implementation of this is the last thing anyone wants: it is the
+/// step that decides whether a host is configurable at all.
+pub async fn run(host: &dyn HostBackend, store: &CredentialStore) -> Result<(), String> {
+    let credentials = generate()?;
+    host.set_credentials(&credentials)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Kept before it is checked, not after. From here this is Sunshine's
+    // password whether or not the check below passes, and losing it would
+    // leave a host nobody can configure until this runs again.
+    store.save(credentials.clone()).await?;
+
+    let api = SunshineApi::new(super::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
+    wait_until_accepted(&api, &credentials).await?;
+
+    // This is the moment Dusk takes over presenting this host, so it is also
+    // the moment Sunshine's own tray icon should go. Doing it here and not at
+    // every launch matters: applying it needs a restart, and restarting
+    // Sunshine on a schedule Dusk chooses would cut off whatever is
+    // streaming. Failing is not worth failing over — the sign-in works
+    // either way and a second icon is a blemish, not a breakage.
+    if let Err(err) = hide_tray(&api, &credentials).await {
+        eprintln!("dusk: could not hide Sunshine's tray icon: {err}");
+    }
+    Ok(())
+}
+
+/// Sunshine was just restarted to read the new credential, and takes a few
+/// seconds to listen again. Until it does, "unreachable" means "not yet".
+async fn wait_until_accepted(api: &SunshineApi, credentials: &Credentials) -> Result<(), String> {
+    const ATTEMPTS: u32 = 20;
+    let mut last = String::new();
+    for _ in 0..ATTEMPTS {
+        match api.verify(credentials).await {
+            Ok(_) => return Ok(()),
+            // Answering and refusing is a real failure, not a slow start.
+            Err(super::ApiError::Unauthorized) => {
+                return Err("Hosting restarted but did not accept the sign-in Dusk set.".into())
+            }
+            Err(err) => last = err.to_string(),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    Err(format!(
+        "Hosting did not come back after restarting: {last}"
+    ))
+}
+
+/// Turn Sunshine's tray icon off and restart it if that changed anything.
+async fn hide_tray(api: &SunshineApi, credentials: &Credentials) -> Result<(), String> {
+    let changed = api
+        .set_tray(credentials, false)
+        .await
+        .map_err(|e| e.to_string())?;
+    if changed {
+        api.restart(credentials).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

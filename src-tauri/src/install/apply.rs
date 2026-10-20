@@ -462,7 +462,7 @@ fn user_unit(program: &Path) -> String {
          Description=Sunshine, managed by Dusk\n\
          StartLimitIntervalSec=500\n\
          StartLimitBurst=5\n\
-         After=xdg-desktop-autostart.target\n\
+         After=graphical-session.target xdg-desktop-autostart.target\n\
          \n\
          [Service]\n\
          ExecStart=\"{}\"\n\
@@ -470,7 +470,7 @@ fn user_unit(program: &Path) -> String {
          RestartSec=5s\n\
          \n\
          [Install]\n\
-         WantedBy=xdg-desktop-autostart.target\n",
+         WantedBy=graphical-session.target xdg-desktop-autostart.target\n",
         program.display()
     )
 }
@@ -486,8 +486,13 @@ mod tests {
             unit.contains("ExecStart=\"/home/a b/.local/bin/sunshine\"\n"),
             "{unit}"
         );
+        // Both targets, because desktops disagree about which they use.
+        // Ubuntu's GNOME launches autostart entries as its own scopes and
+        // never activates xdg-desktop-autostart.target, so a unit wanted
+        // only by that one is enabled and then never starts — hosting that
+        // silently does not come back after a reboot.
         assert!(
-            unit.contains("WantedBy=xdg-desktop-autostart.target"),
+            unit.contains("WantedBy=graphical-session.target xdg-desktop-autostart.target"),
             "{unit}"
         );
         assert!(unit.contains("Restart=on-failure"), "{unit}");

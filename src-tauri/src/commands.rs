@@ -562,64 +562,7 @@ pub async fn adopt_host(app: &AppHandle, inner: &Arc<AppState>) {
 }
 
 async fn provision(inner: &Arc<AppState>) -> Result<(), String> {
-    let credentials = sunshine::provision::generate()?;
-    inner
-        .host
-        .set_credentials(&credentials)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Kept before it is checked, not after. From here this is Sunshine's
-    // password whether or not the check below passes, and losing it would
-    // leave a host nobody can configure until this runs again.
-    inner.credentials.save(credentials.clone()).await?;
-
-    let api = SunshineApi::new(sunshine::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
-    wait_until_accepted(&api, &credentials).await?;
-
-    // This is the moment Dusk takes over presenting this host, so it is also
-    // the moment Sunshine's own tray icon should go. Doing it here and not at
-    // every launch matters: applying it needs a restart, and restarting
-    // Sunshine on a schedule Dusk chooses would cut off whatever is
-    // streaming. Failing is not worth failing over — the sign-in works
-    // either way and a second icon is a blemish, not a breakage.
-    if let Err(err) = hide_sunshine_tray(&api, &credentials).await {
-        eprintln!("dusk: could not hide Sunshine's tray icon: {err}");
-    }
-    Ok(())
-}
-
-/// Sunshine was just restarted to read the new credential, and takes a few
-/// seconds to listen again. Until it does, "unreachable" means "not yet".
-async fn wait_until_accepted(api: &SunshineApi, credentials: &Credentials) -> Result<(), String> {
-    const ATTEMPTS: u32 = 20;
-    let mut last = String::new();
-    for _ in 0..ATTEMPTS {
-        match api.verify(credentials).await {
-            Ok(_) => return Ok(()),
-            // Answering and refusing is a real failure, not a slow start.
-            Err(sunshine::ApiError::Unauthorized) => {
-                return Err("Hosting restarted but did not accept the sign-in Dusk set.".into())
-            }
-            Err(err) => last = err.to_string(),
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    Err(format!(
-        "Hosting did not come back after restarting: {last}"
-    ))
-}
-
-/// Turn Sunshine's tray icon off and restart it if that changed anything.
-async fn hide_sunshine_tray(api: &SunshineApi, credentials: &Credentials) -> Result<(), String> {
-    let changed = api
-        .set_tray(credentials, false)
-        .await
-        .map_err(|e| e.to_string())?;
-    if changed {
-        api.restart(credentials).await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    sunshine::provision::run(inner.host.as_ref(), &inner.credentials).await
 }
 
 // Putting the icon back needs no command of its own: `system_tray` is an

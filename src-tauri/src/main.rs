@@ -6,5 +6,10 @@ fn main() {
     if let Some(code) = dusk_lib::run_helper_if_asked() {
         std::process::exit(code);
     }
+    // `dusk setup` and `dusk status` need no window, and must not create one:
+    // the machines that want them have no display to put it on.
+    if let Some(code) = dusk_lib::run_cli_if_asked() {
+        std::process::exit(code);
+    }
     dusk_lib::run()
 }

@@ -5,6 +5,7 @@
 
 mod account;
 mod applist;
+mod cli;
 mod commands;
 mod discovery;
 mod host;
@@ -95,6 +96,12 @@ fn avoid_wayland_dmabuf_crash() {
     // Safety: called from `run` before any window, thread or GTK init, so
     // nothing else can be reading the environment yet.
     unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+}
+
+/// See [`cli::run_if_asked`]. Runs before any window exists, so a machine
+/// with no display can still be set up.
+pub fn run_cli_if_asked() -> Option<i32> {
+    cli::run_if_asked()
 }
 
 /// See [`install::display_driver::run_helper_if_asked`].

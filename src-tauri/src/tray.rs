@@ -102,6 +102,13 @@ pub fn show_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
+    // Coming back from hidden is a fresh look at the network: a Dusk that
+    // started in the tray finished its first sweep before anyone saw it.
+    if !window.is_visible().unwrap_or(true) {
+        if let Some(state) = app.try_state::<Arc<AppState>>() {
+            crate::discovery::sweep(app, state.inner());
+        }
+    }
     set_dock_icon(app, true);
     let _ = window.unminimize();
     let _ = window.show();

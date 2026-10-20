@@ -1,5 +1,67 @@
 # Release Notes
 
+Version v0.3.0 — October 19, 2026
+
+Dusk sets up a machine to host by itself, pairs your own machines without a
+PIN, and keeps every setting in one place.
+
+## Hosting without the setup
+
+- **Hosting comes with Dusk** on Windows and Linux. Installing it no longer
+  means a separate download, and Dusk registers it to start in the background.
+- **No password to make up.** Dusk creates the host's sign-in itself and keeps
+  it in the system keystore, so the sign-in form is gone. **Finish setting up
+  hosting** on a host that was set up before Dusk replaces the password it
+  had.
+- **Set up this machine** runs every step that can be automated, in order:
+  the background service, the firewall (one prompt on Windows, not two) and,
+  on Linux, the input permission controllers need.
+- **A virtual display on Windows**, for hosts with no monitor attached or
+  for streaming at a resolution the monitor lacks. It is an optional step with
+  its own confirmation, never part of **Set up this machine**. It installs the
+  user-mode Virtual Display Driver (MIT, signed), pinned to release 25.7.23
+  and checked against a hash written into Dusk.
+
+## Pairing
+
+- **Pair without typing a PIN** when the other machine runs Dusk. It shows
+  **Allow** with your machine's name, and one press finishes the pairing.
+  Dusk listens on TCP port 47850 for this; Windows asks to allow it once.
+- **Sign in with GitHub** under Settings › Account, and machines signed in to
+  the same account pair with each other with no prompt at all. It is
+  optional. Dusk asks GitHub only for permission to keep one private gist
+  listing your machines, which holds each one's name and public key. There
+  is still no server of Dusk's own.
+
+## Streaming
+
+- Dusk steps aside once a stream starts and comes back when it ends.
+- **Leave the stream** in the device drawer ends the stream and leaves the
+  game running on the host.
+- When a stream fails, the drawer says why.
+
+## Settings
+
+Everything that changes this machine is now under a **Settings** tab, split
+into Account, Hosting, Setup, Host settings and About. The Machines tab
+shows a summary of this machine with a link to the right section.
+
+## Known limits
+
+- None of this has run end to end between two real machines yet: hosting
+  setup, PIN-free pairing, GitHub pairing, Leave the stream and the Windows
+  display driver are unit-tested and compile-checked only. Expect rough
+  edges and please report them.
+- macOS still downloads hosting rather than bundling it, and its dock icon
+  does not step aside during a stream.
+- Windows builds remain unsigned (SmartScreen: *More info* → *Run anyway*).
+- Networking is LAN or your own VPN only, by design.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.2.0 — October 19, 2026
 
 Windows and Linux builds, and the in-stream overlay actually ships.

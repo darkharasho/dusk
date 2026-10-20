@@ -7,6 +7,8 @@ import type {
   Setup,
   SignInCode,
   Snapshot,
+  StartupPrefs,
+  StartupView,
 } from "./types";
 
 export const SNAPSHOT_EVENT = "dusk://snapshot";
@@ -253,4 +255,16 @@ export function onAccount(
   handler: (e: { error: string | null }) => void,
 ): Promise<() => void> {
   return listen<{ error: string | null }>(ACCOUNT_EVENT, (event) => handler(event.payload));
+}
+
+export function getStartup(): Promise<StartupView> {
+  return invoke<StartupView>("get_startup");
+}
+
+export function setOpenAtLogin(on: boolean): Promise<StartupView> {
+  return invoke<StartupView>("set_open_at_login", { on });
+}
+
+export function setStartupPrefs(prefs: StartupPrefs): Promise<StartupView> {
+  return invoke<StartupView>("set_startup_prefs", { prefs });
 }

@@ -17,6 +17,7 @@ mod poller;
 mod registry;
 mod serverinfo;
 mod session;
+mod startup;
 mod state;
 mod store;
 mod sunshine;
@@ -104,13 +105,40 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     avoid_wayland_dmabuf_crash();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        // First, so a second launch hands over before anything else of it
+        // starts: clicking Dusk while it sits in the tray brings the window
+        // back rather than opening another Dusk beside it.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_window(app)
+        }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(startup::BACKGROUND_ARG)
+                .build(),
+        )
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                startup::on_close_requested(window, api);
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
 
             let config_dir = app.path().app_config_dir()?;
             let store_path = store::store_path(&config_dir);
             let store = Store::load(&store_path);
+
+            // The window is created hidden (tauri.conf.json) and shown here,
+            // unless this is a sign-in launch that should stay in the tray.
+            // Hiding it after the fact would flash it on screen first.
+            app.manage(startup::Live::new(&store.startup));
+            if startup::starts_hidden(std::env::args(), &store.startup) {
+                // Already hidden; this takes the dock icon with it.
+                tray::hide_window(&handle);
+            } else {
+                tray::show_window(&handle);
+            }
 
             let mut registry = Registry::new(self_name(), local_addresses());
 
@@ -231,7 +259,18 @@ pub fn run() {
             commands::open_firewall,
             commands::allow_input,
             commands::install_display_driver,
+            commands::get_startup,
+            commands::set_open_at_login,
+            commands::set_startup_prefs,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running Dusk");
+
+    app.run(|_app, _event| {
+        // Clicking the dock icon of a Dusk whose window is hidden.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = _event {
+            tray::show_window(_app);
+        }
+    });
 }

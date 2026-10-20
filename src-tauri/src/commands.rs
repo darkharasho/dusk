@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::install;
 use crate::model::{Device, Snapshot};
 use crate::registry::split_address;
+use crate::startup;
 use crate::state::{emit_snapshot, AppState};
 use crate::store::ManualEntry;
 use crate::sunshine::{self, Credentials, SunshineApi};
@@ -916,4 +917,39 @@ pub async fn quit_session(
     inner.request_refresh();
     emit_snapshot(&app, &inner).await;
     Ok(())
+}
+
+/// Whether Dusk opens at sign-in, and how it opens and closes.
+#[tauri::command]
+pub async fn get_startup(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<startup::StartupView, String> {
+    let prefs = state.store.lock().await.startup;
+    Ok(startup::view(&app, prefs))
+}
+
+#[tauri::command]
+pub async fn set_open_at_login(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<startup::StartupView, String> {
+    startup::set_open_at_login(&app, on)?;
+    get_startup(app, state).await
+}
+
+#[tauri::command]
+pub async fn set_startup_prefs(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    prefs: startup::Prefs,
+) -> Result<startup::StartupView, String> {
+    {
+        let mut store = state.store.lock().await;
+        store.startup = prefs;
+        store.save(&state.store_path)?;
+    }
+    app.state::<startup::Live>().set(&prefs);
+    get_startup(app, state).await
 }

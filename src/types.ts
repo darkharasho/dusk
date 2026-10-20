@@ -189,3 +189,15 @@ export interface SignInCode {
   verificationUrl: string;
   expiresIn: number;
 }
+
+/** Whether Dusk opens at sign-in, and how it opens and closes. */
+export interface StartupPrefs {
+  startInBackground: boolean;
+  closeToTray: boolean;
+}
+
+export interface StartupView extends StartupPrefs {
+  openAtLogin: boolean;
+  /** Why opening at sign-in cannot be turned on from where Dusk is now. */
+  openAtLoginBlocked: string | null;
+}

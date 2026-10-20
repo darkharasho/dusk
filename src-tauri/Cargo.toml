@@ -38,6 +38,11 @@ ring = "0.17"
 if-addrs = "0.13"
 # The Sunshine web-UI password belongs in the OS keystore, not a JSON file.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+# Opening at sign-in: a launch agent, a Run key or an autostart file, each
+# written the way its platform expects.
+tauri-plugin-autostart = "2"
+# A Dusk waiting in the tray is shown, not doubled, when launched again.
+tauri-plugin-single-instance = "2"
 
 # Reading moonlight-qt's identity out of its QSettings store, which is a
 # different backend on each platform: a plist on macOS, an INI file on Linux

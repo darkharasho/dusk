@@ -6,11 +6,19 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.0 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.2` and phases 3–6.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.0>
+**v0.3.1 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.2`, phases 3–6 and hosting embedded on macOS.
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.1>
 
-Since then, unreleased: **macOS embeds hosting** (see *Phases 3–6*).
+Since then, unreleased: **startup settings** on the `startup-settings`
+branch (Settings › Startup): open at sign-in, start in the tray, keep
+running when the window is closed; on macOS the dock icon follows the
+window. `src-tauri/src/startup.rs`, with
+`tauri-plugin-autostart` for the sign-in entry and
+`tauri-plugin-single-instance` so a second launch shows the window instead
+of opening another Dusk. The window is created hidden and shown in setup
+unless a `--background` launch says otherwise. Compile- and unit-tested on
+Linux only.
 
 | Phase | State |
 | --- | --- |
@@ -33,7 +41,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1
 └── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
 ```
 
@@ -240,9 +248,8 @@ build cross-checks clean, and none has run end to end yet.
   `apply::install_embedded`: a launch agent pointing at the helper, refused
   while Dusk runs from the disk image or translocated. An agent left by a
   copy of Dusk that has moved is rewritten; anyone else's is left alone.
-  `MacosHost` finds the bundle from the agent's program. **Not yet built in
-  CI or run on a Mac**: the first tag (or a `workflow_dispatch` dry run)
-  is what proves the merge, signing and notarization.
+  `MacosHost` finds the bundle from the agent's program. Built, signed and
+  notarized in CI (v0.3.1); **not yet run on a Mac**.
 - **Service registration (4).** The AppImage gets a systemd user unit, the
   macOS app a launch agent; an existing one is left alone. Linux has a new
   step for the uinput udev rule via polkit, which recognises Bazzite's own
@@ -269,9 +276,11 @@ build cross-checks clean, and none has run end to end yet.
   far as the decline path ("not set up to host yet"), because this Dusk does
   not manage its Sunshine. Firewalls must allow 47850; Windows will prompt.
 - **Choreography (6).** Dusk hides once the client authenticates on the
-  session channel and comes back when it exits, or on a failure. Nothing was
-  done about the macOS dock: hiding the client's dock icon changes focus and
-  input grab, and wants a Mac to test on.
+  session channel and comes back when it exits, or on a failure. On macOS
+  Dusk's own dock icon now goes with its window (`tray::set_dock_icon`,
+  on the `startup-settings` branch), so during a stream only the client's
+  shows. The client's icon is left alone: hiding it changes focus and input
+  grab, and wants a Mac to test on.
 
 ## Its own app: rebrand, Settings tab, GitHub sign-in
 

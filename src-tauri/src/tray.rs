@@ -102,6 +102,7 @@ pub fn show_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
+    set_dock_icon(app, true);
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
@@ -113,6 +114,20 @@ pub fn hide_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+    set_dock_icon(app, false);
+}
+
+/// On macOS the dock icon follows the window: a Dusk waiting in the menu
+/// bar, or stepping aside for a stream, has no window to switch to, and an
+/// icon there would only open one it did not mean to. Windows and Linux
+/// already drop the taskbar entry with the window.
+fn set_dock_icon(app: &AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_dock_visibility(visible);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, visible);
 }
 
 fn toggle_hosting(app: AppHandle) {

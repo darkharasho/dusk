@@ -1,7 +1,9 @@
-//! Persistence for the manual address book.
+//! Persistence for the manual address book and Dusk's startup settings.
 //!
 //! Only hand-entered machines are stored. Anything found over mDNS is
 //! rediscovered on launch, so writing it down would just create stale cards.
+//! The file keeps its old name, `devices.json`, so an existing address book
+//! is still found.
 
 use std::path::{Path, PathBuf};
 
@@ -20,6 +22,7 @@ pub struct ManualEntry {
 #[serde(default)]
 pub struct Store {
     pub manual: Vec<ManualEntry>,
+    pub startup: crate::startup::Prefs,
 }
 
 impl Store {

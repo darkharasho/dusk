@@ -5,11 +5,13 @@ import { AccountSection } from "./AccountSection";
 import { HostingPanel } from "./HostingPanel";
 import { HostSettings } from "./HostSettings";
 import { SetupChecklist } from "./SetupChecklist";
+import { StartupSection } from "./StartupSection";
 
-export type SettingsSection = "account" | "hosting" | "setup" | "host" | "about";
+export type SettingsSection = "account" | "startup" | "hosting" | "setup" | "host" | "about";
 
 const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "account", label: "Account" },
+  { id: "startup", label: "Startup" },
   { id: "hosting", label: "Hosting" },
   { id: "setup", label: "Setup" },
   { id: "host", label: "Host settings" },
@@ -48,6 +50,8 @@ export function SettingsPage({ name, snapshot, section, onSection }: Props) {
         <h2>{SECTIONS.find((s) => s.id === section)?.label}</h2>
 
         {section === "account" && <AccountSection />}
+
+        {section === "startup" && <StartupSection />}
 
         {section === "hosting" && <HostingPanel name={name} snapshot={snapshot} />}
 

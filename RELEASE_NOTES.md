@@ -1,5 +1,44 @@
 # Release Notes
 
+Version v0.3.4 — October 19, 2026
+
+Your GitHub account is the only sign-in, and streaming works from the
+Linux AppImage again.
+
+## Pairing
+
+- **Machines on your GitHub account pair with each other on their own.**
+  No PIN, and nobody has to be at the other machine.
+- **Dusk looks after the host's password itself.** There is nothing to
+  sign in to apart from GitHub.
+- **Let other devices pair** (Settings › Hosting) is off to begin with.
+  Turn it on for phones, TVs or someone else's machine; each one then
+  needs someone at this machine to allow it.
+
+## Fixes
+
+- **Streaming works from the Linux AppImage.** In v0.3.3 the streaming
+  client inside the AppImage was damaged while it was being built, so every
+  stream failed straight away. Hosting from the AppImage was broken the
+  same way. The `.deb` was not affected.
+- **A failed stream says why.** Dusk shows the reason the stream gave, or
+  says that the streaming client crashed.
+
+## Known limits
+
+- This is the first update self-update delivers. A v0.3.3 Dusk offers it on
+  its own; older versions need installing by hand.
+- The titlebar has been checked on Linux, not yet on Windows or a Mac.
+- On a Mac, hosting keeps running the previous version until it next
+  restarts.
+- Windows builds remain unsigned (SmartScreen: *More info* → *Run anyway*).
+- Networking is LAN or your own VPN only, by design.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.3 — October 19, 2026
 
 Dusk has its own titlebar and now keeps itself up to date.

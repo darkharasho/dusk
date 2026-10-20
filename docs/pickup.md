@@ -6,11 +6,15 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.3 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.2`, phases 3–6, hosting embedded on macOS, the
-startup settings, Dusk's own titlebar and self-update. It is the first
-release that updates itself; anything older is upgraded by hand.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.3>
+**v0.3.4 is released**, all three platforms, from `main`. On top of
+v0.3.3 it makes the GitHub account the only sign-in (Dusk keeps the host
+password itself), pairs your own machines without a PIN, puts everyone
+else behind "Let other devices pair", explains failed streams, and fixes
+the AppImage: the bundler had corrupted the nested client and host, so no
+v0.3.3 AppImage could stream. `scripts/repair-appimage.sh`, run by
+`scripts/tauri.mjs` after every Linux build, undoes that and re-signs.
+It is the first release reached by self-update from v0.3.3.
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.4>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -46,7 +50,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4
 └── moonlight-qt/    master @ 4670364e  tags dusk-v0.1.0 … dusk-v0.2.2
 ```
 

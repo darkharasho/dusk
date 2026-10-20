@@ -54,12 +54,27 @@ pub async fn run(program: &str, args: &[&str]) -> Result<Run, HostError> {
 }
 
 pub async fn run_for(program: &str, args: &[&str], budget: Duration) -> Result<Run, HostError> {
-    let child = tokio::process::Command::new(program)
+    let mut command = tokio::process::Command::new(program);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+
+    // `sc` and `powershell` are console programs, and Dusk is not a console
+    // app, so Windows gives each one a console of its own — a window that
+    // opens and shuts on every call. The status probe runs on the poll tick,
+    // which turns that into a steady flashing. Nothing here is interactive
+    // and the pipes above carry the output, so the console is pure artefact.
+    #[cfg(target_os = "windows")]
+    {
+        // tokio's own method, not `std::os::windows::process::CommandExt`.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let child = command
         .spawn()
         .map_err(|e| HostError::Failed(format!("could not run {program}: {e}")))?;
 
@@ -176,19 +191,68 @@ fn elevation_script(program: &str, args: &[&str]) -> String {
     let arg_list = if args.is_empty() {
         String::new()
     } else {
-        format!(
-            " -ArgumentList {}",
-            args.iter()
-                .map(|a| powershell_quote(a))
-                .collect::<Vec<_>>()
-                .join(",")
-        )
+        // One pre-joined command line, not a PowerShell array. Given an array
+        // `Start-Process` joins the elements with spaces and quotes nothing,
+        // so an argument containing one — `C:\Program Files\...` — arrives at
+        // the child split into several. Quoting each element for *PowerShell*
+        // does not help: those quotes are consumed parsing the array literal
+        // and never reach the command line. So the Windows quoting is applied
+        // here, and the result handed over as a single string.
+        format!(" -ArgumentList {}", powershell_quote(&command_line(args)))
     };
     format!(
         "$p = Start-Process {}{} -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
         powershell_quote(program),
         arg_list
     )
+}
+
+/// Join arguments the way `CommandLineToArgvW` will take them apart again.
+///
+/// Only arguments that need it are quoted, so a command line stays readable
+/// in Task Manager and in anything a person is asked to reproduce by hand.
+fn command_line(args: &[&str]) -> String {
+    args.iter()
+        .map(|a| quote_argument(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One argument, quoted for the Windows command-line parser.
+///
+/// The backslash rules are the awkward part: a run of backslashes is literal
+/// on its own, but doubles when it precedes a quote — including the closing
+/// one this adds. Without that, a path ending in a separator (`C:\dir\`)
+/// would escape its own closing quote and swallow the next argument.
+fn quote_argument(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0;
+    for c in arg.chars() {
+        match c {
+            '\\' => {
+                backslashes += 1;
+                out.push(c);
+            }
+            '"' => {
+                // Double the run that precedes the quote, then escape it.
+                out.extend(std::iter::repeat('\\').take(backslashes + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                backslashes = 0;
+                out.push(c);
+            }
+        }
+    }
+    // The closing quote is a quote too, so any trailing run doubles as well.
+    out.extend(std::iter::repeat('\\').take(backslashes));
+    out.push('"');
+    out
 }
 
 /// The launchd domain for the logged-in user, as `gui/<uid>`.
@@ -232,16 +296,40 @@ mod tests {
         // sc.exe and the quoting must preserve it.
         let script = elevation_script("sc.exe", &["start", "SunshineService"]);
         assert!(script.contains("'sc.exe'"), "{script}");
-        assert!(script.contains("'start','SunshineService'"), "{script}");
+        assert!(script.contains("'start SunshineService'"), "{script}");
     }
 
     #[test]
-    fn arguments_are_quoted_individually_so_spaces_do_not_split_them() {
-        let script = elevation_script("netsh.exe", &["advfirewall", "name=Sunshine (inbound TCP)"]);
+    fn an_installer_path_containing_a_space_reaches_msiexec_whole() {
+        // The bug this guards: Dusk's own installer puts the staged Sunshine
+        // under `C:\Program Files\Dusk\resources`, so *every* Windows install
+        // went through here. Handed to Start-Process as an array the path
+        // arrived as `C:\Program`, and msiexec answered "this installation
+        // package could not be opened".
+        let msi = r"C:\Program Files\Dusk\resources\sunshine\sunshine.msi";
+        let script = elevation_script("msiexec.exe", &["/i", msi, "/qb"]);
         assert!(
-            script.contains("'advfirewall','name=Sunshine (inbound TCP)'"),
-            "{script}"
+            script.contains(&format!("'/i \"{msi}\" /qb'")),
+            "the path must reach msiexec as one argument: {script}"
         );
+    }
+
+    #[test]
+    fn only_arguments_that_need_quoting_get_it() {
+        assert_eq!(command_line(&["start", "SunshineService"]), "start SunshineService");
+        assert_eq!(command_line(&["a b", "c"]), r#""a b" c"#);
+    }
+
+    #[test]
+    fn a_trailing_separator_does_not_escape_its_own_closing_quote() {
+        // `"C:\dir\"` would leave the quote escaped and swallow whatever
+        // followed; the run before a quote has to double.
+        assert_eq!(command_line(&[r"C:\a dir\", "/qb"]), r#""C:\a dir\\" /qb"#);
+    }
+
+    #[test]
+    fn an_embedded_quote_is_escaped_rather_than_ending_the_argument() {
+        assert_eq!(command_line(&[r#"a "b" c"#]), r#""a \"b\" c""#);
     }
 
     #[test]

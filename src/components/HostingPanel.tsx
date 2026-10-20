@@ -13,6 +13,8 @@ import { Toggle } from "./StartupSection";
 interface Props {
   name: string;
   snapshot: Snapshot;
+  /** Where installing hosting actually happens, for a machine without it. */
+  onSetup(): void;
 }
 
 type Panel = null | "pin";
@@ -44,7 +46,7 @@ function virtualScreenDetail(snapshot: Snapshot): string {
  * Hosting on the machine you are sitting at: whether it is on, and the
  * controls that act on it. Lives in Settings; the grid shows a summary.
  */
-export function HostingPanel({ name, snapshot }: Props) {
+export function HostingPanel({ name, snapshot, onSetup }: Props) {
   const host = snapshot.host;
   const { status, capabilities } = host;
   const installed = status.kind === "installed";
@@ -119,16 +121,25 @@ export function HostingPanel({ name, snapshot }: Props) {
               {busy ? "Setting up" : "Finish setting up hosting"}
             </button>
           )}
-          <button
-            type="button"
-            className="axi-btn"
-            disabled={!installed || busy}
-            onClick={() =>
-              run(running ? stopHosting : startHosting)
-            }
-          >
-            {running ? "Turn off hosting" : "Turn on hosting"}
-          </button>
+          {/* Without this the panel is a dead end: it says hosting is not
+              installed and every control on it is disabled, with the one
+              screen that can install it unnamed. */}
+          {status.kind === "notInstalled" ? (
+            <button type="button" className="axi-btn" onClick={onSetup}>
+              Go to setup
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="axi-btn"
+              disabled={!installed || busy}
+              onClick={() =>
+                run(running ? stopHosting : startHosting)
+              }
+            >
+              {running ? "Turn off hosting" : "Turn on hosting"}
+            </button>
+          )}
         </div>
       </div>
 

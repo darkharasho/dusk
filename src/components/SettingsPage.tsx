@@ -62,7 +62,9 @@ export function SettingsPage({ name, snapshot, section, onSection }: Props) {
 
         {section === "streaming" && <StreamingSection snapshot={snapshot} />}
 
-        {section === "hosting" && <HostingPanel name={name} snapshot={snapshot} />}
+        {section === "hosting" && (
+          <HostingPanel name={name} snapshot={snapshot} onSetup={() => onSection("setup")} />
+        )}
 
         {section === "setup" && <SetupChecklist />}
 

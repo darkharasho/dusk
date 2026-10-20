@@ -312,7 +312,12 @@ body,
   -webkit-user-select: none;
 }
 
-/* Clears macOS's traffic lights, which sit over the strip's left end. */
+/* Clears macOS's traffic lights, which sit over the strip's left end. Their
+   height is tauri.macos.conf.json's trafficLightPosition.y, which is not an
+   offset from the top: it sets the native titlebar container to
+   `buttonHeight + y`, and the 14px button sits 9px above that container's
+   bottom, so the centre lands at y - 2. Centre it in the strip above and
+   y is 21; change that height and this follows it. */
 .dusk-titlebar[data-mac] {
   padding-left: 78px;
 }

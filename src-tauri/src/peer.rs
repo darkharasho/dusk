@@ -8,16 +8,18 @@
 //!
 //! # The trust decision
 //!
-//! Nothing on the network may pair itself to a machine unattended, so the
-//! host always asks: one Allow press, showing which machine is asking. That
-//! is the whole difference from typing a PIN, and it is enough — the press
-//! is the consent the PIN used to stand for.
+//! Nothing on the network may pair itself to a machine unattended. What
+//! stands in for the PIN is the GitHub account: a machine signed in to the
+//! same account as this one sends a signature over the PIN, made with a key
+//! whose public half is on the account's machine list. When that checks
+//! out, the person already said yes by signing both machines in, and
+//! nothing is asked. See [`crate::account`].
 //!
-//! The one exception is a machine signed in to the same account as this
-//! one. Its request carries a signature over the PIN, made with a key whose
-//! public half is on the account's machine list; when that checks out, the
-//! person already said yes by signing both machines in, and nothing is
-//! asked. See [`crate::account`].
+//! Anyone else is turned away, unless this machine has Let other devices
+//! pair on ([`crate::store::Store::allow_other_devices`]). Then the host
+//! asks instead: one Allow press, showing which machine is asking — the
+//! consent the PIN used to stand for. It is off by default because it needs
+//! someone at the host, and pairing your own machines never should.
 //!
 //! The PIN crosses the network in the clear, so someone already able to
 //! intercept and rewrite traffic on the LAN at that moment could interpose
@@ -179,6 +181,15 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
             let gone = async { while let Ok(Some(_)) = lines.next_line().await {} };
             match pair_for_account(&state, &pin, &name, proof.as_ref()).await {
                 Some(reply) => reply,
+                // A host that is not set up yet gets past this, so that
+                // `handle_pair` can say that instead, which is the real reason.
+                None if !state.store.lock().await.allow_other_devices
+                    && state.credentials.load().await.is_some() =>
+                {
+                    Message::Declined {
+                        reason: not_on_this_account(proof.is_some()),
+                    }
+                }
                 None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
             }
         }
@@ -266,6 +277,23 @@ async fn handle_pair(
         Err(err) => Message::Declined {
             reason: err.to_string(),
         },
+    }
+}
+
+/// Why a machine outside this one's account was turned away, said to the
+/// person at the machine that asked. `signed_in` is whether it sent a proof.
+fn not_on_this_account(signed_in: bool) -> String {
+    let host = host_name();
+    if signed_in {
+        format!(
+            "{host} is not signed in to the same GitHub account as this machine. \
+             Sign in to that account on {host} too, in Settings › Account."
+        )
+    } else {
+        format!(
+            "Sign in to GitHub in Settings › Account, with the same account as \
+             {host}, and the two will pair on their own."
+        )
     }
 }
 

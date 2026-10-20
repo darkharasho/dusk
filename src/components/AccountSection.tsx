@@ -12,9 +12,8 @@ import type { AccountView, SignInCode } from "../types";
 /**
  * Signing in with GitHub, so your own machines pair without asking.
  *
- * Nothing about streaming needs this. It only changes one thing: when the
- * machine you pair with is signed in to the same account, it says yes on
- * its own instead of waiting for someone to press Allow.
+ * This is how your machines trust each other: one signed in to the same
+ * account pairs on its own, and by default nothing else can pair at all.
  */
 export function AccountSection() {
   const [account, setAccount] = useState<AccountView | null>(null);
@@ -103,8 +102,9 @@ export function AccountSection() {
             </button>
           </div>
           <p className="axi-ink-dim">
-            Machines signed in to this account pair with each other without
-            asking. Anyone else still needs someone to press Allow.
+            Machines signed in to this account pair with each other on their
+            own. Nothing else can pair with this one unless Let other devices
+            pair is on in Settings › Hosting.
           </p>
           {account.machines.length > 0 && (
             <div className="axi-stack" style={{ "--axi-stack-gap": "6px" } as React.CSSProperties}>

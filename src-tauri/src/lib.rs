@@ -222,6 +222,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 primed.credentials.prime().await;
                 state::emit_snapshot(&primed_handle, &primed).await;
+                if !mock_mode() {
+                    commands::adopt_host(&primed_handle, &primed).await;
+                }
                 // After, not alongside: two keystore prompts at once on
                 // macOS is one too many to make sense of.
                 primed.account.prime(&primed.http).await;
@@ -248,6 +251,7 @@ pub fn run() {
             commands::stop_hosting,
             commands::provision_host,
             commands::accept_pin,
+            commands::set_allow_other_devices,
             commands::answer_pair_request,
             commands::get_account,
             commands::sign_in_with_github,

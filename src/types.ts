@@ -166,6 +166,11 @@ export interface Snapshot {
   hostSignedIn: boolean | null;
   /** False when the sign-in is only held for this run (no OS keystore). */
   hostCredentialsPersistent: boolean;
+  /**
+   * Whether machines outside this one's GitHub account may pair with it, by
+   * an Allow press or a PIN. Your own machines pair without either.
+   */
+  allowOtherDevices: boolean;
 }
 
 export interface GithubUser {

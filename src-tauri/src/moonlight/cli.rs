@@ -12,6 +12,9 @@
 //!   banner it prints on every run, goes to **stderr**. stdout carries only
 //!   data, which is why errors here are built from stderr with that banner
 //!   stripped.
+//! - Except a stream's own failures. Those go only to the log file the
+//!   banner names, so stderr holds the banner and nothing else, and the
+//!   reason has to be fetched from that file. See [`reason_from_log`].
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -273,10 +276,12 @@ impl Moonlight {
         };
 
         if status.success() {
-            Ok(())
-        } else {
-            Err(MoonlightError::Failed(clean_stderr(&stderr)))
+            return Ok(());
         }
+        let message = reason(&stderr)
+            .or_else(|| crashed(status).then(|| "The streaming client crashed.".to_string()))
+            .unwrap_or_else(|| NO_REASON.into());
+        Err(MoonlightError::Failed(message))
     }
 
     async fn run(&self, args: &[&str], budget: Duration) -> Result<String, MoonlightError> {
@@ -308,21 +313,137 @@ impl Moonlight {
     }
 }
 
+const NO_REASON: &str = "The stream failed but gave no reason.";
+
+const LOG_BANNER: &str = "Redirecting log output to ";
+
+/// How much of the end of a client log to read. The reason a stream ended
+/// is in its last few lines; a long session's log is megabytes of trace.
+const LOG_TAIL_BYTES: usize = 256 * 1024;
+
 /// Turn moonlight-qt's stderr into something worth showing a person.
-///
-/// Drops the log-redirection banner it prints unconditionally, and keeps the
-/// last real line — the earlier ones are Qt plumbing, the last is the reason.
 fn clean_stderr(stderr: &str) -> String {
-    let message = stderr
+    reason(stderr).unwrap_or_else(|| NO_REASON.into())
+}
+
+/// Why moonlight-qt failed, if it said.
+///
+/// The last real line of stderr when there is one: the earlier lines are Qt
+/// plumbing, the last is the reason. Failing that, the log file the banner
+/// points at, which is where a stream's failures actually go.
+fn reason(stderr: &str) -> Option<String> {
+    let last = stderr
         .lines()
         .map(str::trim)
-        .rfind(|line| !line.is_empty() && !line.starts_with("Redirecting log output"))
-        .unwrap_or("");
+        .rfind(|line| !line.is_empty() && !line.starts_with(LOG_BANNER));
+    if let Some(line) = last {
+        return Some(line.to_string());
+    }
 
-    if message.is_empty() {
-        "The stream failed but gave no reason.".into()
-    } else {
-        message.to_string()
+    let path = log_path(stderr)?;
+    let found = read_tail(&path).as_deref().and_then(reason_from_log);
+    if found.is_none() {
+        eprintln!("dusk: the streaming client failed without a reason; its log is {path:?}");
+    }
+    found
+}
+
+/// The log file named by the banner moonlight-qt prints when it starts.
+fn log_path(stderr: &str) -> Option<PathBuf> {
+    stderr
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(LOG_BANNER))
+        .map(|path| PathBuf::from(path.trim()))
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+fn read_tail(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let start = bytes.len().saturating_sub(LOG_TAIL_BYTES);
+    Some(String::from_utf8_lossy(&bytes[start..]).into_owned())
+}
+
+/// Pull the reason a stream failed out of a moonlight-qt log.
+///
+/// Each entry starts `HH:MM:SS - `, and one can run on over several lines:
+/// the client's own error dialogs are written whole, blank lines included.
+/// What it put in front of the person is logged at `Qt Critical` (QML's
+/// `console.error`), so the last of those is the reason. Without one, the
+/// last `SDL Error` — the streaming library's own account, terser but still
+/// better than nothing.
+fn reason_from_log(log: &str) -> Option<String> {
+    let mut entries: Vec<Vec<&str>> = Vec::new();
+    for line in log.lines() {
+        match line.get(8..11) {
+            Some(" - ") if is_timestamp(&line[..8]) => entries.push(vec![&line[11..]]),
+            _ => {
+                if let Some(entry) = entries.last_mut() {
+                    entry.push(line);
+                }
+            }
+        }
+    }
+
+    let message = |entry: &Vec<&str>, prefixes: &[&str]| -> Option<String> {
+        let first = prefixes.iter().find_map(|p| entry[0].strip_prefix(p))?;
+        Some(sentence(
+            std::iter::once(first.trim_start_matches("qml: ")).chain(entry[1..].iter().copied()),
+        ))
+    };
+    let shown = ["Qt Critical: ", "Qt Fatal: "];
+    entries
+        .iter()
+        .rev()
+        .find_map(|e| message(e, &shown))
+        .or_else(|| {
+            entries.iter().rev().find_map(|e| {
+                let rest = ["SDL Error (", "SDL Critical ("]
+                    .iter()
+                    .find_map(|p| e[0].strip_prefix(p))?;
+                let (_, text) = rest.split_once("): ")?;
+                Some(sentence(
+                    std::iter::once(text).chain(e[1..].iter().copied()),
+                ))
+            })
+        })
+        .filter(|m| !m.is_empty())
+}
+
+fn is_timestamp(text: &str) -> bool {
+    let b = text.as_bytes();
+    b.len() == 8
+        && b[2] == b':'
+        && b[5] == b':'
+        && [0, 1, 3, 4, 6, 7].iter().all(|&i| b[i].is_ascii_digit())
+}
+
+/// Lines of a dialog as one sentence: "Connection terminated" over "Error
+/// code: -1" reads as "Connection terminated. Error code: -1".
+fn sentence<'a>(lines: impl Iterator<Item = &'a str>) -> String {
+    let mut out = String::new();
+    for line in lines.map(str::trim).filter(|l| !l.is_empty()) {
+        if !out.is_empty() {
+            if !out.ends_with(['.', '!', '?', ':']) {
+                out.push('.');
+            }
+            out.push(' ');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Whether the client died rather than exited: killed by a signal on Unix,
+/// an NTSTATUS exception code (0xC…) on Windows.
+fn crashed(status: std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal().is_some()
+    }
+    #[cfg(windows)]
+    {
+        status.code().is_some_and(|c| (c as u32) >= 0xC000_0000)
     }
 }
 
@@ -514,6 +635,59 @@ mod tests {
             "The stream failed but gave no reason."
         );
         assert_eq!(clean_stderr(""), "The stream failed but gave no reason.");
+    }
+
+    #[test]
+    fn a_dialog_written_only_to_the_log_is_the_reason() {
+        let log = "00:00:01 - Qt Info: Dusk fork: in-stream overlay menu available\n\
+                   00:00:04 - SDL Error (0): Connection terminated: -1\n\
+                   00:00:04 - Qt Critical: Connection terminated\n\
+                   \n\
+                   Error code: -1\n\
+                   00:00:05 - Qt Info: Session finished\n";
+        assert_eq!(
+            reason_from_log(log).as_deref(),
+            Some("Connection terminated. Error code: -1")
+        );
+    }
+
+    #[test]
+    fn without_a_dialog_the_library_error_will_do() {
+        let log = "00:00:01 - Qt Warning: qt.qpa noise\n\
+                   00:00:02 - SDL Error (0): Starting RTSP handshake failed: 10060\n";
+        assert_eq!(
+            reason_from_log(log).as_deref(),
+            Some("Starting RTSP handshake failed: 10060")
+        );
+        assert_eq!(reason_from_log("00:00:01 - Qt Info: fine\n"), None);
+    }
+
+    #[test]
+    fn the_banner_leads_to_the_log() {
+        let dir = std::env::temp_dir().join("dusk-test-client-log");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Moonlight-1.log");
+        std::fs::write(
+            &path,
+            "00:00:03 - Qt Critical: No video received from host.\n\nCheck your firewall.\n",
+        )
+        .unwrap();
+        let stderr = format!("Redirecting log output to {}\n", path.display());
+        assert_eq!(
+            clean_stderr(&stderr),
+            "No video received from host. Check your firewall."
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_client_that_crashes_says_so() {
+        let mut child = a_child_that("kill -SEGV $$");
+        let err = Moonlight::wait_for_session(&mut child)
+            .await
+            .expect_err("a crash is a failure");
+        assert!(matches!(&err, MoonlightError::Failed(m) if m == "The streaming client crashed."));
     }
 
     /// Regression test for a real hang: `moonlight quit` against a host that

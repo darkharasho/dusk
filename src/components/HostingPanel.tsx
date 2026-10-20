@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { HostState, Snapshot } from "../types";
-import { acceptPin, provisionHost, startHosting, stopHosting } from "../api";
+import { acceptPin, provisionHost, setAllowOtherDevices, startHosting, stopHosting } from "../api";
+import { Toggle } from "./StartupSection";
 
 interface Props {
   name: string;
@@ -77,7 +78,7 @@ export function HostingPanel({ name, snapshot }: Props) {
         </div>
 
         <div className="axi-row dusk-row__end">
-          {installed && managed && (
+          {installed && managed && snapshot.allowOtherDevices && (
             <button
               type="button"
               className="axi-btn"
@@ -87,7 +88,11 @@ export function HostingPanel({ name, snapshot }: Props) {
               Accept a PIN
             </button>
           )}
-          {installed && managedKnown && !managed && (
+          {/* Dusk sets a host up on its own: on the way up when hosting is
+              turned on, and at launch for one already running (except on
+              Windows, where it would mean an unasked-for elevation prompt).
+              This is what is left: a running host it has not reached yet. */}
+          {running && managedKnown && !managed && (
             <button
               type="button"
               className="axi-btn"
@@ -118,7 +123,20 @@ export function HostingPanel({ name, snapshot }: Props) {
         </p>
       )}
 
-      {panel === "pin" && (
+      <Toggle
+        id="allow-other-devices"
+        label="Let other devices pair"
+        detail={
+          snapshot.allowOtherDevices
+            ? "Someone else's Dusk can ask, and someone here presses Allow. Phones, TVs and other streaming apps pair with a PIN typed here."
+            : "Only machines signed in to your GitHub account pair with this one, on their own. Turn this on for phones, TVs, or someone else's machine; each then needs someone here to allow it."
+        }
+        on={snapshot.allowOtherDevices}
+        disabled={busy}
+        onChange={(on) => run(() => setAllowOtherDevices(on))}
+      />
+
+      {panel === "pin" && snapshot.allowOtherDevices && (
         <AcceptPinPanel
           busy={busy}
           onSubmit={(pin, deviceName) =>

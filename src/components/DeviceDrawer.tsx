@@ -254,8 +254,8 @@ function PairPanel({
     return (
       <div className="axi-stack">
         <p className="axi-ink-dim">
-          Dusk is not paired with this machine yet. If it runs Dusk too,
-          someone there presses Allow; otherwise you type a PIN on it.
+          Dusk is not paired with this machine yet. When both are signed in
+          to the same GitHub account, it pairs on its own.
         </p>
         <button type="button" className="axi-btn axi-btn--primary" onClick={onPair}>
           Pair with this machine
@@ -271,7 +271,8 @@ function PairPanel({
         <p className="dusk-pin">{pin}</p>
         <p className="axi-ink-dim">
           {name} did not answer as Dusk, so it cannot be asked directly. In
-          Dusk, that is Settings › Hosting › Accept a PIN.
+          Dusk, that is Settings › Hosting › Accept a PIN, once Let other
+          devices pair is on.
         </p>
       </div>
     );
@@ -284,10 +285,12 @@ function PairPanel({
           ? `Waiting for someone at ${name} to press Allow.`
           : `Asking ${name}.`}
       </p>
-      <p className="axi-ink-dim">
-        No PIN needed: Dusk on {name} asks whoever is there to allow this
-        machine.
-      </p>
+      {stage === "waitingForApproval" && (
+        <p className="axi-ink-dim">
+          {name} lets other devices pair, and this machine is not on its
+          GitHub account, so someone there has to allow it.
+        </p>
+      )}
     </div>
   );
 }

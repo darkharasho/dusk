@@ -5,12 +5,12 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::install;
-use crate::model::{Device, Snapshot};
+use crate::model::{Device, HostStatus, Snapshot};
 use crate::registry::split_address;
 use crate::startup;
 use crate::state::{emit_snapshot, AppState};
 use crate::store::ManualEntry;
-use crate::sunshine::{self, Credentials, SunshineApi};
+use crate::sunshine::{self, Credentials, Known, SunshineApi};
 
 #[tauri::command]
 pub async fn get_snapshot(state: State<'_, Arc<AppState>>) -> Result<Snapshot, String> {
@@ -456,7 +456,14 @@ pub async fn launch_app(
 #[tauri::command]
 pub async fn start_hosting(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let inner = state.inner().clone();
-    inner.host.start().await.map_err(|e| e.to_string())?;
+    // A host Dusk holds no sign-in for gets one on the way up. Setting it
+    // restarts the service, and restarting a stopped one starts it, so this
+    // is the start too, and on Windows it is one elevation prompt, not two.
+    if inner.credentials.load().await.is_none() {
+        provision(&inner).await?;
+    } else {
+        inner.host.start().await.map_err(|e| e.to_string())?;
+    }
     emit_snapshot(&app, &inner).await;
     Ok(())
 }
@@ -482,6 +489,33 @@ pub async fn provision_host(app: AppHandle, state: State<'_, Arc<AppState>>) -> 
     provision(&inner).await?;
     emit_snapshot(&app, &inner).await;
     Ok(())
+}
+
+/// Take over a running host Dusk holds no sign-in for, without asking.
+///
+/// Dusk's own sign-in is GitHub; the host's password is plumbing, and the
+/// person should never meet it. So a host someone installed before Dusk, or
+/// one whose password was lost with a keystore, is simply given a new one.
+///
+/// Runs once, after the keystore read. Not on Windows, where setting the
+/// password needs an elevation prompt nobody asked for; there it happens
+/// the next time hosting is turned on, or from Settings. Not for a stopped
+/// host either, since setting the password restarts it and a host someone
+/// turned off should stay off.
+pub async fn adopt_host(app: &AppHandle, inner: &Arc<AppState>) {
+    if cfg!(windows) || inner.credentials.peek().await != Known::SignedOut {
+        return;
+    }
+    if !matches!(
+        inner.host.probe().await,
+        Ok(HostStatus::Installed { running: true, .. })
+    ) {
+        return;
+    }
+    match provision(inner).await {
+        Ok(()) => emit_snapshot(app, inner).await,
+        Err(err) => eprintln!("dusk: could not set up hosting on its own: {err}"),
+    }
 }
 
 async fn provision(inner: &Arc<AppState>) -> Result<(), String> {
@@ -568,6 +602,9 @@ pub async fn accept_pin(
     if pin.len() != 4 || !pin.chars().all(|c| c.is_ascii_digit()) {
         return Err("A pairing PIN is four digits.".into());
     }
+    if !inner.store.lock().await.allow_other_devices {
+        return Err("Turn on Let other devices pair first.".into());
+    }
 
     let credentials = inner
         .credentials
@@ -587,6 +624,22 @@ pub async fn accept_pin(
         .map_err(|e| e.to_string())?;
 
     emit_snapshot(&app, &inner).await;
+    Ok(())
+}
+
+/// Whether machines outside this one's GitHub account may pair with it.
+#[tauri::command]
+pub async fn set_allow_other_devices(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.allow_other_devices = on;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
     Ok(())
 }
 

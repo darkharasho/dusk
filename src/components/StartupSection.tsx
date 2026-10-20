@@ -91,7 +91,7 @@ export function StartupSection() {
   );
 }
 
-function Toggle({
+export function Toggle({
   id,
   label,
   detail,

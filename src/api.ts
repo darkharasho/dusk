@@ -179,6 +179,10 @@ export function saveHostConfig(changes: HostConfig, restart: boolean): Promise<v
 }
 
 /** Accept an incoming pairing PIN on this machine. */
+export function setAllowOtherDevices(on: boolean): Promise<void> {
+  return invoke("set_allow_other_devices", { on });
+}
+
 export function acceptPin(pin: string, deviceName?: string): Promise<void> {
   return invoke("accept_pin", { pin, deviceName: deviceName ?? null });
 }

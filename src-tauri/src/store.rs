@@ -23,6 +23,11 @@ pub struct ManualEntry {
 pub struct Store {
     pub manual: Vec<ManualEntry>,
     pub startup: crate::startup::Prefs,
+    /// Let a machine that is not on this one's GitHub account pair with it:
+    /// another person's Dusk by an Allow press here, anything else by a PIN.
+    /// Off by default, because both need someone at this machine, and your
+    /// own machines never do.
+    pub allow_other_devices: bool,
 }
 
 impl Store {
@@ -76,6 +81,13 @@ pub fn store_path(config_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_from_before_the_setting_keeps_other_devices_out() {
+        let stored = r#"{"manual":[],"startup":{"startInBackground":true,"closeToTray":true}}"#;
+        let store: Store = serde_json::from_str(stored).unwrap();
+        assert!(!store.allow_other_devices);
+    }
 
     #[test]
     fn a_corrupt_file_reads_as_empty_rather_than_failing() {

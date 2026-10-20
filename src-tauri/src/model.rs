@@ -243,4 +243,7 @@ pub struct Snapshot {
     /// keystore was unavailable. The UI says so rather than letting someone
     /// believe it was saved.
     pub host_credentials_persistent: bool,
+    /// Whether machines outside this one's GitHub account may pair with it.
+    /// See [`crate::store::Store::allow_other_devices`].
+    pub allow_other_devices: bool,
 }

@@ -319,6 +319,7 @@ impl AppState {
                 Known::SignedOut => Some(false),
             },
             host_credentials_persistent: self.credentials.is_persistent().await,
+            allow_other_devices: self.store.lock().await.allow_other_devices,
         }
     }
 }

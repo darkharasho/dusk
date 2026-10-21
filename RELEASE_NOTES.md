@@ -1,5 +1,11 @@
 # Release Notes
 
+Version v0.3.23 — October 21, 2026
+
+No change you can see. The last release's fix is now proven rather than
+assumed: the case it guards against — a keystore that will not answer —
+could not be reached by a test before, and now is.
+
 Version v0.3.22 — October 21, 2026
 
 Signing in again keeps the machine you already had.

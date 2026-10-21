@@ -29,6 +29,8 @@ Dusk — set this machine up to host, without opening the window.
 
 USAGE:
     dusk setup     Carry out every setup step Dusk can do by itself
+    dusk signin    Sign this machine in to GitHub, so your own machines
+                   pair with it without anyone typing a PIN
     dusk status    Print what this machine's hosting looks like
 
 SETUP OPTIONS:
@@ -82,6 +84,7 @@ pub fn run_if_asked() -> Option<i32> {
                 Some(2)
             }
         },
+        "signin" => Some(block_on(signin())),
         "status" => Some(block_on(status())),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -169,6 +172,81 @@ async fn status() -> i32 {
         println!("           {warning}");
     }
     0
+}
+
+/// Sign this machine in to GitHub, from a terminal.
+///
+/// A device flow is already the right shape for this: GitHub hands out a
+/// short code meant to be typed somewhere else, which is exactly what a
+/// machine with no browser needs. The window's version of this opens a
+/// browser and waits; here the code is printed and the person uses whatever
+/// device they are already holding.
+///
+/// Signing in is what makes this machine one your others will pair with
+/// unasked — it publishes this machine's public key to the account, and the
+/// private half goes wherever [`crate::secrets`] keeps things.
+async fn signin() -> i32 {
+    let Some(client_id) = crate::account::github::client_id() else {
+        eprintln!("dusk: this build of Dusk was made without GitHub sign-in.");
+        return 1;
+    };
+    let http = match crate::state::plain_client() {
+        Ok(http) => http,
+        Err(err) => {
+            eprintln!("dusk: could not reach the network ({err})");
+            return 1;
+        }
+    };
+
+    let code = match crate::account::github::start(&http, &client_id).await {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("dusk: {err}");
+            return 1;
+        }
+    };
+
+    println!(
+        "On any device, open:  {}",
+        crate::account::github::VERIFICATION_URL
+    );
+    println!("and enter this code:  {}", code.user_code);
+    println!(
+        "\nWaiting — this code lasts {} minutes.",
+        code.expires_in / 60
+    );
+
+    let token = match crate::account::wait_for_token(&http, &client_id, &code).await {
+        Ok(token) => token,
+        Err(err) => {
+            eprintln!("dusk: {err}");
+            return 1;
+        }
+    };
+
+    let account = crate::account::AccountState::default();
+    match crate::account::finish(&http, &account, token).await {
+        Ok(user) => {
+            println!("\nSigned in as {}.", user.login);
+            // The sign-in is only worth anything if it outlives the process:
+            // the key published to the account a moment ago has to still be
+            // here next boot, or this machine is a stranger again.
+            if !account.view().await.persistent {
+                eprintln!(
+                    "\nWARNING: Dusk could not keep this sign-in.\n\
+                     It is gone at the next restart, and this machine stops being one\n\
+                     your others recognise. Run `dusk setup --store=tpm` to fix that."
+                );
+                return 1;
+            }
+            println!("This machine will now pair with your others without a PIN.");
+            0
+        }
+        Err(err) => {
+            eprintln!("dusk: {err}");
+            1
+        }
+    }
 }
 
 /// Said plainly, because the failure it describes is otherwise silent: the
@@ -535,7 +613,10 @@ mod tests {
         // Dusk ever starting hidden.
         for arg in ["--background", "dusk://x", "-"] {
             assert!(
-                !matches!(arg, "setup" | "status" | "help" | "--help" | "-h"),
+                !matches!(
+                    arg,
+                    "setup" | "signin" | "status" | "help" | "--help" | "-h"
+                ),
                 "{arg} must fall through to the window"
             );
         }

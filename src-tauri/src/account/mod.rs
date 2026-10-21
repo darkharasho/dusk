@@ -305,9 +305,11 @@ pub async fn begin(app: AppHandle, state: Arc<AppState>) -> Result<SignInCode, S
 
     let worker = state.clone();
     let task = tauri::async_runtime::spawn(async move {
-        let result = wait_for_token(&worker, &client_id, &code).await;
+        let result = wait_for_token(&worker.http, &client_id, &code).await;
         let result = match result {
-            Ok(token) => finish(&worker, token).await,
+            Ok(token) => finish(&worker.http, &worker.account, token)
+                .await
+                .map(|_| ()),
             Err(err) => Err(err),
         };
         let _ = app.emit(
@@ -335,8 +337,13 @@ pub async fn cancel(state: &AppState) {
     }
 }
 
-async fn wait_for_token(
-    state: &AppState,
+/// Wait for the person to enter the code on github.com.
+///
+/// Takes the HTTP client rather than the whole application state so that
+/// `dusk signin` can wait for the same code on a machine with no window —
+/// which is the whole point of a device flow.
+pub(crate) async fn wait_for_token(
+    http: &reqwest::Client,
     client_id: &str,
     code: &github::DeviceCode,
 ) -> Result<String, String> {
@@ -344,7 +351,7 @@ async fn wait_for_token(
     let mut interval = code.interval.max(5);
     while Instant::now() < deadline {
         tokio::time::sleep(Duration::from_secs(interval)).await;
-        match github::poll(&state.http, client_id, &code.device_code).await {
+        match github::poll(http, client_id, &code.device_code).await {
             Poll::Pending => {}
             // GitHub's rule: back off by five seconds each time it asks.
             Poll::SlowDown => interval += 5,
@@ -355,30 +362,38 @@ async fn wait_for_token(
     Err("The code expired before it was entered. Try again.".into())
 }
 
-async fn finish(state: &AppState, token: String) -> Result<(), String> {
-    let user = github::user(&state.http, &token).await?;
+/// Record the sign-in and publish this machine's public key to the account.
+///
+/// Returns who was signed in, which is the one thing a caller wants to say
+/// out loud afterwards.
+pub(crate) async fn finish(
+    http: &reqwest::Client,
+    account: &AccountState,
+    token: String,
+) -> Result<User, String> {
+    let user = github::user(http, &token).await?;
     // Keep the machine's key across signing in again as the same person, so
     // its entry in the list is replaced rather than joined by a stale one.
-    let key = match state.account.load().await {
+    let key = match account.load().await {
         Some(old) if old.user.id == user.id => old.key,
         _ => MachineKey::generate()?,
     };
-    let list = github::find_list(&state.http, &token).await?;
+    let list = github::find_list(http, &token).await?;
     let entry = Entry {
         name: crate::peer::host_name(),
         key: key.public_hex(),
     };
-    let list = github::publish(&state.http, &token, list.as_deref(), &key.id, &entry).await?;
-    state
-        .account
+    let list = github::publish(http, &token, list.as_deref(), &key.id, &entry).await?;
+    account
         .save(Some(Account {
             token,
-            user,
+            user: user.clone(),
             key,
             list: Some(list),
         }))
         .await;
-    state.account.refresh_list(&state.http).await
+    account.refresh_list(http).await?;
+    Ok(user)
 }
 
 /// Forget the sign-in here, and take this machine off the account's list

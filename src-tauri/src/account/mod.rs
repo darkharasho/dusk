@@ -279,6 +279,13 @@ impl AccountState {
         let reader = self.reader.clone();
         match blocking(move || reader()).await {
             Ok(stored) => {
+                // A sign-in from before boxes existed has no key to receive
+                // them with. One is minted on load — but minting without
+                // keeping it is worse than not having one: the machine
+                // publishes a different public key every launch and can
+                // never open a box addressed to any of them. So a minted key
+                // is written back here, once, before anything uses it.
+                let minted = stored.as_ref().is_some_and(|s| s.box_key.is_none());
                 cached.account = stored.and_then(|s| match Account::from_stored(s) {
                     Ok(account) => Some(account),
                     Err(err) => {
@@ -288,6 +295,17 @@ impl AccountState {
                 });
                 cached.read = true;
                 cached.persistent = true;
+                if minted {
+                    if let Some(account) = cached.account.as_ref().map(Account::to_stored) {
+                        let writer = self.writer.clone();
+                        if let Err(err) = blocking(move || writer(Some(&account))).await {
+                            eprintln!(
+                                "dusk: could not keep this machine's box key ({err}); \
+                                       addresses from other machines will stay unreadable"
+                            );
+                        }
+                    }
+                }
                 Ok(cached.account.clone())
             }
             // Deliberately not cached: a failed read is not an answer, or
@@ -907,6 +925,60 @@ mod identity_tests {
             2,
             "the keystore is asked again"
         );
+    }
+
+    #[tokio::test]
+    async fn a_box_key_minted_on_load_is_kept() {
+        // Minting without keeping is worse than not having one: the machine
+        // publishes a different public key every launch and can never open
+        // a box addressed to any of them. Observed on a real machine whose
+        // sign-in predated sealing.
+        let stored = {
+            let mut s = an_account(42);
+            s.box_key = None;
+            s
+        };
+        let written: Arc<std::sync::Mutex<Option<Stored>>> = Arc::default();
+        let sink = written.clone();
+        let state = AccountState {
+            reader: Arc::new(move || Ok(Some(stored.clone()))),
+            writer: Arc::new(move |s| {
+                *sink.lock().unwrap() = s.cloned();
+                Ok(())
+            }),
+            ..Default::default()
+        };
+
+        let loaded = state.stored().await.unwrap().expect("an account");
+        let kept = written
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("it was written back");
+        assert_eq!(
+            kept.box_key.as_deref(),
+            Some(loaded.box_key.to_hex()).as_deref(),
+            "the key written back is the one in use"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stored_box_key_is_not_rewritten() {
+        // Only the machine that has none needs the write; doing it every
+        // load would touch the keystore on every launch for nothing.
+        let stored = an_account(42);
+        let written: Arc<std::sync::Mutex<bool>> = Arc::default();
+        let sink = written.clone();
+        let state = AccountState {
+            reader: Arc::new(move || Ok(Some(stored.clone()))),
+            writer: Arc::new(move |_| {
+                *sink.lock().unwrap() = true;
+                Ok(())
+            }),
+            ..Default::default()
+        };
+        state.stored().await.unwrap();
+        assert!(!*written.lock().unwrap(), "nothing to write");
     }
 
     #[tokio::test]

@@ -29,6 +29,17 @@
 //!   host's Dusk has no equivalent. So Dusk registers *itself* as the prep
 //!   command and is re-run by Sunshine with [`HOOK_FLAG`].
 //!
+//! Two things about the hooks that cost a wrong assumption each, both
+//! measured on a real stream in the end:
+//!
+//! - **Sunshine reads its configuration when it starts**, so the host has to
+//!   be restarted for a newly written prep command to exist at all. Writing
+//!   it and stopping there gives a host that has the setting and ignores it.
+//! - **`undo` goes with the session, not the client.** A client that
+//!   disconnects normally ends the session and the screen comes back; one
+//!   that is killed leaves the session up and the screen resized, which is
+//!   what [`restore_if_left_resized`] is for.
+//!
 //! Not done: the client's frame rate is ignored, so a mode is chosen by
 //! size and keeps whatever rate `xrandr` picks first for it.
 //!
@@ -563,8 +574,13 @@ async fn save_prep(
 
 /// Register Dusk as the thing that resizes the screen around a stream.
 ///
-/// No restart: Sunshine reads its prep commands when a stream starts, and
-/// restarting the host would drop one that is running.
+/// The restart is not optional, and this is the one thing here that was got
+/// wrong by reasoning instead of measuring. Sunshine reads `sunshine.conf`
+/// when it **starts**, not when a stream does, so writing the prep command
+/// and stopping there leaves a host that has the setting on paper and does
+/// nothing: measured, a stream ran with the command in the file and never
+/// invoked it. The Windows half of this always restarted, which should have
+/// been the clue.
 pub async fn enable(
     api: &crate::sunshine::SunshineApi,
     credentials: &crate::sunshine::Credentials,
@@ -574,7 +590,8 @@ pub async fn enable(
     }
     let command = own_command()?;
     let existing = existing_prep(api, credentials).await?;
-    save_prep(api, credentials, prep_with(existing.as_deref(), &command)).await
+    save_prep(api, credentials, prep_with(existing.as_deref(), &command)).await?;
+    api.restart(credentials).await.map_err(|e| e.to_string())
 }
 
 pub async fn disable(
@@ -586,7 +603,25 @@ pub async fn disable(
     // A stream interrupted by turning the setting off has no `undo` left to
     // run, so the screen is put back now rather than at the next stream.
     let _ = restore();
-    Ok(())
+    api.restart(credentials).await.map_err(|e| e.to_string())
+}
+
+/// Put the screen back if a stream left it resized.
+///
+/// Run when Dusk starts. `undo` is Sunshine's to call and it calls it when
+/// the *session* ends, which is not when the client goes away: a client that
+/// is killed rather than asked to quit leaves the session up and the screen
+/// scaled, measured on a real stream. Anything that got as far as a reboot
+/// is already covered, the record living in the runtime directory — this is
+/// for a Dusk, or a host, that was restarted instead.
+pub fn restore_if_left_resized() {
+    if !state_path().exists() {
+        return;
+    }
+    match restore() {
+        Ok(()) => eprintln!("dusk: put the screen back after a stream that did not"),
+        Err(err) => eprintln!("dusk: could not put the screen back: {err}"),
+    }
 }
 
 #[cfg(test)]

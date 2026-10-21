@@ -176,6 +176,31 @@ impl Registry {
     /// `own` is this machine's own id, which is already the self card and
     /// must not appear twice.
     pub fn sync_account(&mut self, entries: &[crate::account::AccountMachine], own: Option<&str>) {
+        // The account list is what decides whose machine this is, and it
+        // decides it again on every tick rather than once.
+        //
+        // A machine is asked who it is only while it has no id (see the
+        // poller), so the `mine` worked out from that one answer used to
+        // stick for the life of the window. At startup the answer can easily
+        // arrive before the account's list has been read, when nothing is
+        // known to be yours yet -- and the machine stayed filed under "Other
+        // machines on this network" until Dusk happened to be restarted at a
+        // luckier moment. Re-deciding here costs a set lookup per card and
+        // makes the list, not the timing, the authority.
+        //
+        // Only machines that have actually answered are touched. No id is
+        // "never said", which is not the same as "said it is not yours", and
+        // is for the name match below to deal with.
+        let on_account: HashSet<&str> = entries.iter().map(|m| m.id.as_str()).collect();
+        for device in self.devices.values_mut() {
+            if device.is_self || device.id.starts_with(ACCOUNT_PREFIX) {
+                continue;
+            }
+            if let Some(machine) = device.machine_id.as_deref() {
+                device.mine = on_account.contains(machine);
+            }
+        }
+
         // Which ids a real, discovered device already covers. Those need no
         // placeholder, and any placeholder they had is now stale.
         let found: HashSet<String> = self
@@ -692,6 +717,45 @@ mod account_tests {
             .find(|d| d.machine_id.as_deref() == Some("aaa"))
             .expect("still listed");
         assert_eq!(venus.addresses, vec!["100.101.8.99".to_string()]);
+    }
+
+    #[test]
+    fn a_machine_identified_before_the_account_was_read_is_still_filed_as_yours() {
+        // The startup race, which this got wrong for real. A machine is
+        // asked who it is only while it has no id, so the answer arrives
+        // once; if the account's list has not been read by then, nothing is
+        // known to be yours and the machine is filed as a stranger — and,
+        // never being asked again, stays one. Observed on a real grid: the
+        // only machine in the right half was the one that was *off*, because
+        // an undiscovered machine comes from the placeholder path, which
+        // re-decides every tick.
+        let mut r = registry();
+        let found = r.upsert_mdns("Venus", &["192.168.50.149".into()], 47989);
+
+        // It answered before the list arrived, so it was filed as not yours.
+        r.set_identity(&found, Some("aaa".into()), false);
+
+        // The list arrives on a later tick.
+        r.sync_account(&entries(), Some("ccc"));
+
+        let venus = r
+            .devices()
+            .into_iter()
+            .find(|d| d.id == found)
+            .expect("still listed");
+        assert!(venus.mine, "the account list decides, not the timing");
+
+        // And the reverse still holds: a machine that says who it is and is
+        // not on the account must not be claimed by this.
+        let stranger = r.upsert_mdns("someone-else", &["192.168.50.200".into()], 47989);
+        r.set_identity(&stranger, Some("zzz".into()), true);
+        r.sync_account(&entries(), Some("ccc"));
+        let stranger = r
+            .devices()
+            .into_iter()
+            .find(|d| d.id == stranger)
+            .expect("still listed");
+        assert!(!stranger.mine, "not on the account, not yours");
     }
 
     #[test]

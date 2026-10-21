@@ -186,6 +186,11 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             updates::ensure_self_executable();
+            // Before anything else reads the screen: a stream that ended
+            // badly can have left it resized, and this machine's own size is
+            // what the grid and the peer answer are about to report.
+            #[cfg(target_os = "linux")]
+            host::screen_mode::restore_if_left_resized();
 
             let config_dir = app.path().app_config_dir()?;
             // The CLI has to work this out for itself, having no Tauri to

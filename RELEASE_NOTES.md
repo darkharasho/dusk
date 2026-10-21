@@ -1,5 +1,31 @@
 # Release Notes
 
+Version v0.3.15 — October 21, 2026
+
+Dusk now says when a GitHub sign-in has run out.
+
+## Changes
+
+- **"You're not signed in to the same GitHub" when you were.** Signing in
+  lasted eight hours. After that a machine could no longer check which
+  machines are yours, so your own machines looked like strangers' and
+  pairing asked for a PIN — while the app still showed you as signed in.
+  Dusk now notices and says so, on the Account screen and in `dusk status`,
+  instead of leaving you to guess.
+- **`dusk status` shows the sign-in**, so a machine set up over SSH says
+  whether it will actually pair without a PIN.
+
+Signing in again fixes it. If you run your own GitHub app for Dusk, turn
+off "Expire user authorization tokens" in its settings and sign-ins stop
+running out at all — Dusk cannot renew them for you, because renewing
+needs a client secret that an app on your own computer has nowhere safe to
+keep.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.14 — October 20, 2026
 
 Sign a machine in without a screen in front of it.

@@ -6,8 +6,30 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.14 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It adds `dusk signin`: GitHub's device code printed
+**v0.3.15 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. **Read this before touching the account code.** The
+OAuth app was set to expire user tokens at eight hours, and `parse_poll`
+kept only `access_token`. Eight hours after any sign-in the machine could
+no longer read the account's machine list, so every pairing proof from one
+of your own machines failed verification and presented as "you are not
+signed in to the same GitHub" — while the Account screen still showed the
+user as signed in. All four machines were correctly enrolled in the gist
+throughout; only the token was dead. Diagnose this with
+`github-authentication-token-expiration` in any API response header.
+**Renewing is not possible from Dusk**: `grant_type=refresh_token` with only
+a `client_id` answers `incorrect_client_credentials` — the refresh grant is
+a confidential-client operation and wants the client secret, which a
+desktop app cannot hold (`strings` finds it) and which this project will
+not run a server for. The fix is on GitHub's side: turn **off** "Expire
+user authorization tokens" in the OAuth app settings. Dusk's half is
+`github::Tokens::expired()` plus `AccountView::expired`, a notice on the
+Account screen and an `Account:` line in `dusk status`. `Stored` gained
+`refresh`/`expires_at` behind `#[serde(default)]`, so entries written
+before v0.3.15 load untouched — they carry no expiry and so are never
+reported as lapsed, which is correct since nothing could be done about them
+anyway. A disproved theory worth not re-running: signing a second machine in
+does **not** revoke the first one's token; both were 200 simultaneously.
+v0.3.14 added `dusk signin`: GitHub's device code printed
 to stdout and polled, so a headless host can join the account — the last
 step that still needed the window, and the one without which a headless
 machine can never be PIN-free-paired with. `account::wait_for_token` and
@@ -114,7 +136,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.14>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.15>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -150,7 +172,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

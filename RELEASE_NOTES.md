@@ -1,5 +1,24 @@
 # Release Notes
 
+Version v0.3.14 — October 20, 2026
+
+Sign a machine in without a screen in front of it.
+
+## Changes
+
+- **`dusk signin`.** Signing in to GitHub is what lets your machines pair
+  with each other without anyone typing a PIN, and until now it needed the
+  window — so a machine in a cupboard could host, but could never be one
+  your others recognised. This prints a short code, you enter it on any
+  device you already have, and that machine joins the rest. It says so if
+  the sign-in could not be kept, rather than leaving a machine that looks
+  signed in and is forgotten at the next restart.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.13 — October 20, 2026
 
 A machine that logs in on its own can now keep its sign-in.

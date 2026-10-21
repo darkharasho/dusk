@@ -6,8 +6,17 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.13 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. `secrets/mod.rs` is now the one place that decides
+**v0.3.14 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It adds `dusk signin`: GitHub's device code printed
+to stdout and polled, so a headless host can join the account — the last
+step that still needed the window, and the one without which a headless
+machine can never be PIN-free-paired with. `account::wait_for_token` and
+`account::finish` moved off `&AppState` onto `(&reqwest::Client,
+&AccountState)`, the same narrowing `provision` had, so the window and the
+terminal share one implementation; `finish` returns the `User`. Note
+`github::client_id()` reads the **runtime** env var before the compile-time
+one, so `DUSK_GITHUB_CLIENT_ID=… dusk signin` works against a dev build
+without rebuilding. v0.3.13 made `secrets/mod.rs` the one place that decides
 where this machine's secrets live; `account/mod.rs` and
 `sunshine/credentials.rs` both go through it instead of reaching for
 `keyring::Entry`. Two backends: the OS keystore (default, always) and blobs
@@ -105,7 +114,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.13>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.14>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -141,7 +150,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

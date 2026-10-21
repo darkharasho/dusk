@@ -1,5 +1,27 @@
 # Release Notes
 
+Version v0.3.24 — October 21, 2026
+
+One machine, one card.
+
+## Changes
+
+- **Your machines no longer appear twice.** Since the grid was split into
+  your machines and everything else, a machine running an older Dusk
+  showed up in both lists — once from your account with no address, once
+  from the network with one. Dusk now recognises them as the same machine
+  by name when the other end is too old to say who it is, and shows a
+  single card with the address, as yours.
+- **A machine signed in before address sharing existed can now receive
+  it.** It was given a new key to receive with on every launch instead of
+  keeping one, so addresses from your other machines would never have
+  reached it.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.23 — October 21, 2026
 
 No change you can see. The last release's fix is now proven rather than

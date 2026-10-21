@@ -40,6 +40,34 @@ pub const ACCOUNT_EVENT: &str = "dusk://account";
 /// to GitHub.
 const LIST_REFRESH: Duration = Duration::from_secs(10);
 
+/// The keys this machine should sign in with: the ones it already has, or
+/// new ones.
+///
+/// Separated from [`finish`] because the case worth testing — a keystore
+/// that will not answer — is unreachable through `finish`, which would need
+/// GitHub on the other end first.
+async fn identity_for(
+    account: &AccountState,
+    user_id: u64,
+) -> Result<(MachineKey, BoxKey), String> {
+    // A keystore that will not answer is not grounds for minting: this
+    // machine may well have an identity that simply could not be read, and
+    // replacing it orphans its entry on the account and loses every sealed
+    // box already addressed to it. Two machines did exactly that before this
+    // check existed, each leaving a duplicate behind.
+    let existing = account.stored().await.map_err(|err| {
+        format!(
+            "Dusk could not read whether this machine is already signed in ({err}), \
+             so it stopped rather than give the machine a new identity and lose the one it has. \
+             Try again once the keystore is reachable."
+        )
+    })?;
+    match existing {
+        Some(old) if carries_its_key(Some(old.user.id), user_id) => Ok((old.key, old.box_key)),
+        _ => Ok((MachineKey::generate()?, BoxKey::generate()?)),
+    }
+}
+
 /// Whether a sign-in keeps this machine's existing identity.
 ///
 /// Pure, and separated from the read for one reason: the interesting case is
@@ -149,12 +177,37 @@ struct MachineList {
     fetched: Option<Instant>,
 }
 
-#[derive(Default)]
+/// How the sign-in is read.
+///
+/// Injectable for the reason `credentials.rs` gives: the interesting case is
+/// a keystore that *fails*, and the only way to reach it in a test is to
+/// provide one. It is also what stops a test touching the real keystore and
+/// deleting the developer's own sign-in.
+type Reader = Arc<dyn Fn() -> Result<Option<Stored>, String> + Send + Sync>;
+type Writer = Arc<dyn Fn(Option<&Stored>) -> Result<(), String> + Send + Sync>;
+
 pub struct AccountState {
     cached: RwLock<Cached>,
     list: RwLock<MachineList>,
     /// The sign-in being waited on, if any, so a second press replaces it.
     signing_in: Mutex<Option<tokio::task::AbortHandle>>,
+    reader: Reader,
+    writer: Writer,
+}
+
+impl Default for AccountState {
+    fn default() -> Self {
+        Self {
+            cached: RwLock::default(),
+            list: RwLock::default(),
+            signing_in: Mutex::default(),
+            reader: Arc::new(read_keystore),
+            writer: Arc::new(|stored| match stored {
+                Some(s) => write_keystore(s),
+                None => clear_keystore(),
+            }),
+        }
+    }
 }
 
 /// What the settings screen shows.
@@ -223,7 +276,8 @@ impl AccountState {
         if cached.read {
             return Ok(cached.account.clone());
         }
-        match blocking(read_keystore).await {
+        let reader = self.reader.clone();
+        match blocking(move || reader()).await {
             Ok(stored) => {
                 cached.account = stored.and_then(|s| match Account::from_stored(s) {
                     Ok(account) => Some(account),
@@ -247,11 +301,8 @@ impl AccountState {
 
     async fn save(&self, account: Option<Account>) {
         let stored = account.as_ref().map(Account::to_stored);
-        let written = blocking(move || match stored {
-            Some(s) => write_keystore(&s),
-            None => clear_keystore(),
-        })
-        .await;
+        let writer = self.writer.clone();
+        let written = blocking(move || writer(stored.as_ref())).await;
         let mut cached = self.cached.write().await;
         cached.persistent = match written {
             Ok(()) => true,
@@ -659,22 +710,8 @@ pub(crate) async fn finish(
     let user = github::user(http, &token).await?;
     // Keep the machine's key across signing in again as the same person, so
     // its entry in the list is replaced rather than joined by a stale one.
-    //
-    // A keystore that will not answer is not grounds for minting: this
-    // machine may well have an identity that simply could not be read, and
-    // replacing it orphans its entry on the account and loses every sealed
-    // box already addressed to it. Two machines did exactly that before this
-    // check existed, each leaving a duplicate behind.
-    let existing = account.stored().await.map_err(|err| {
-        format!(
-            "Dusk could not read whether this machine is already signed in ({err}),              so it stopped rather than give the machine a new identity and lose the one it has.              Try again once the keystore is reachable."
-        )
-    })?;
-    let carry = carries_its_key(existing.as_ref().map(|a| a.user.id), user.id);
-    let (key, box_key) = match (carry, existing) {
-        (true, Some(old)) => (old.key, old.box_key),
-        _ => (MachineKey::generate()?, BoxKey::generate()?),
-    };
+    let (key, box_key) = identity_for(account, user.id).await?;
+
     let list = github::find_list(http, &token).await?;
     let entry = Entry {
         name: crate::peer::host_name(),
@@ -748,17 +785,51 @@ fn clear_keystore() -> Result<(), String> {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn user(id: u64) -> User {
+        User {
+            id,
+            login: "someone".into(),
+            avatar_url: String::new(),
+        }
+    }
+
+    fn an_account(user_id: u64) -> Stored {
+        Account {
+            tokens: github::Tokens {
+                access: "gho_x".into(),
+                refresh: None,
+                expires_at: None,
+            },
+            user: user(user_id),
+            key: MachineKey::generate().unwrap(),
+            box_key: BoxKey::generate().unwrap(),
+            list: None,
+        }
+        .to_stored()
+    }
+
+    /// An `AccountState` whose keystore is whatever the test says it is.
+    fn with_keystore(
+        reader: impl Fn() -> Result<Option<Stored>, String> + Send + Sync + 'static,
+    ) -> AccountState {
+        AccountState {
+            reader: Arc::new(reader),
+            // Writes go nowhere: a test must never reach the real keystore,
+            // which would delete the developer's own sign-in.
+            writer: Arc::new(|_| Ok(())),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn signing_in_again_as_yourself_keeps_this_machine() {
-        // Otherwise every re-sign-in orphans the machine's entry on the
-        // account, and since sealing, every box addressed to it.
         assert!(carries_its_key(Some(42), 42));
     }
 
     #[test]
     fn signing_in_as_somebody_else_makes_a_new_machine() {
-        // The one honest reason to become a different machine.
         assert!(!carries_its_key(Some(42), 7));
     }
 
@@ -767,32 +838,84 @@ mod identity_tests {
         assert!(!carries_its_key(None, 42));
     }
 
-    #[test]
-    fn a_keystore_that_will_not_answer_is_not_a_machine_without_a_sign_in() {
-        // The bug this guards, and it bit twice before it was found. `load`
-        // flattens "nothing stored" and "could not read" into None, and
-        // `finish` used to mint on either -- so one dismissed keychain
-        // prompt or a locked keyring gave the machine a new identity,
-        // orphaned its entry, and lost every box sealed to it.
-        //
-        // `stored` keeps them apart and `finish` refuses on Err. This test
-        // pins the distinction at the type level, which is where it has to
-        // live: a bare Option cannot express it.
-        let unreadable: Result<Option<Account>, String> = Err("keyring locked".into());
-        let absent: Result<Option<Account>, String> = Ok(None);
+    #[tokio::test]
+    async fn a_keystore_that_will_not_answer_stops_the_sign_in() {
+        // The bug, which bit twice before it was found: `load` flattens
+        // "nothing stored" and "could not read" into None, and `finish` used
+        // to mint on either. So one dismissed keychain prompt or a locked
+        // keyring gave the machine a new identity, orphaned its entry on the
+        // account, and -- since sealing -- lost every box addressed to it.
+        let state = with_keystore(|| Err("keyring is locked".into()));
+        let err = identity_for(&state, 42)
+            .await
+            .expect_err("an unreadable keystore must not mint");
+        assert!(err.contains("keyring is locked"), "{err}");
+        assert!(err.contains("new identity"), "it must say what it avoided");
+    }
 
-        assert!(unreadable.is_err(), "a failed read must stay an error");
-        assert!(
-            absent.as_ref().is_ok_and(|a| a.is_none()),
-            "a settled absence is Ok(None)"
-        );
-        // And the two must not collapse into the same thing on the way to
-        // the decision, which is exactly what `load` does and why `finish`
-        // no longer uses it.
+    #[tokio::test]
+    async fn a_machine_that_has_never_signed_in_gets_an_identity() {
+        // The other half: Ok(None) is a settled answer and minting is right.
+        let state = with_keystore(|| Ok(None));
+        assert!(identity_for(&state, 42).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn signing_in_again_reuses_both_keys() {
+        // Both, together. Carrying one without the other leaves a machine
+        // that can prove who it is and cannot be told anything.
+        let stored = an_account(42);
+        let want = Account::from_stored(stored.clone()).unwrap();
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+
+        let (key, box_key) = identity_for(&state, 42).await.unwrap();
+        assert_eq!(key.id, want.key.id, "the signing key is kept");
         assert_eq!(
-            unreadable.ok().flatten().is_none(),
-            absent.ok().flatten().is_none()
+            box_key.public_hex(),
+            want.box_key.public_hex(),
+            "and the key that boxes are addressed to"
         );
+    }
+
+    #[tokio::test]
+    async fn signing_in_as_a_different_account_does_not_reuse_them() {
+        let stored = an_account(42);
+        let had = Account::from_stored(stored.clone()).unwrap();
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+
+        let (key, box_key) = identity_for(&state, 7).await.unwrap();
+        assert_ne!(key.id, had.key.id);
+        assert_ne!(box_key.public_hex(), had.box_key.public_hex());
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_is_not_remembered_as_an_answer() {
+        // Otherwise one dismissed prompt strands the whole run believing
+        // there is no sign-in -- the exact wording credentials.rs uses, and
+        // the property that makes refusing safe rather than sticky.
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        READS.store(0, Ordering::SeqCst);
+        let state = with_keystore(|| {
+            READS.fetch_add(1, Ordering::SeqCst);
+            Err("still locked".into())
+        });
+
+        assert!(identity_for(&state, 42).await.is_err());
+        assert!(identity_for(&state, 42).await.is_err());
+        assert_eq!(
+            READS.load(Ordering::SeqCst),
+            2,
+            "the keystore is asked again"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_still_flattens_for_callers_that_degrade() {
+        // `load` is deliberately lossy and that is fine for a grid showing
+        // signed-out or a pairing falling back to a PIN. The point is that
+        // the decision above no longer uses it.
+        let state = with_keystore(|| Err("locked".into()));
+        assert!(state.load().await.is_none());
     }
 }
 

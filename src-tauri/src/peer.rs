@@ -370,17 +370,40 @@ fn not_on_this_account(signed_in: bool) -> String {
     }
 }
 
-/// Enter the PIN into Sunshine, giving the client's own pairing request a
-/// moment to arrive: Sunshine refuses a PIN nobody is waiting on, and the
-/// two travel separately.
+/// How long the host keeps offering the PIN while the client gets ready.
+///
+/// This was five seconds, and five seconds is not enough. The client is a
+/// Qt application that has to start, initialise, resolve the host and send
+/// its pairing request, and [`crate::moonlight::cli`] allows it two minutes
+/// to do all that. Sunshine refuses a PIN nobody is waiting on yet, so the
+/// host would exhaust its five attempts, report "that PIN was not accepted",
+/// and — because declining makes the connecting side return — *kill the
+/// client it was waiting for*. A pairing that would have worked was aborted
+/// by the machine that was supposed to be completing it.
+///
+/// Thirty seconds covers a slow start with room to spare while staying
+/// inside the client's budget even when someone took most of
+/// [`ANSWER_TIMEOUT`] to press Allow first.
+const PIN_WINDOW: Duration = Duration::from_secs(30);
+
+/// Enter the PIN into Sunshine, giving the client's own pairing request time
+/// to arrive: Sunshine refuses a PIN nobody is waiting on, and the two
+/// travel separately.
+///
+/// Sunshine answers the same way for "no client is waiting yet" and "that
+/// PIN is wrong", so there is nothing to tell them apart by and no way to
+/// fail faster on a genuinely wrong PIN. Waiting is the right trade: a wrong
+/// PIN costs thirty seconds before it is reported, where giving up early
+/// cost every pairing on a machine whose client is slow to start.
 async fn enter_pin(
     credentials: &sunshine::Credentials,
     pin: &str,
     name: &str,
 ) -> Result<(), sunshine::ApiError> {
     let api = SunshineApi::new(sunshine::api::DEFAULT_PORT)?;
+    let deadline = tokio::time::Instant::now() + PIN_WINDOW;
     let mut last = None;
-    for _ in 0..5 {
+    while tokio::time::Instant::now() < deadline {
         match api.submit_pin(credentials, pin, name).await {
             Ok(()) => return Ok(()),
             Err(sunshine::ApiError::Unauthorized) => return Err(sunshine::ApiError::Unauthorized),
@@ -537,6 +560,28 @@ pub fn host_name() -> String {
         .to_string_lossy()
         .trim_end_matches(".local")
         .to_string()
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn the_host_waits_long_enough_for_a_client_that_is_slow_to_start() {
+        // The bug this replaces: the host gave up on the PIN after five
+        // seconds while the client had two minutes to send its request, so
+        // the host aborted pairings that were still getting under way.
+        // Whatever these numbers become, the host must not be the first to
+        // give up.
+        assert!(
+            PIN_WINDOW >= Duration::from_secs(30),
+            "a Qt client can take many seconds just to start"
+        );
+        assert!(
+            PIN_WINDOW < crate::moonlight::cli::PAIR_TIMEOUT,
+            "the client, not the host, decides when pairing has failed"
+        );
+    }
 }
 
 #[cfg(test)]

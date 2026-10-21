@@ -26,7 +26,7 @@ use tokio::process::{Child, Command};
 
 /// Pairing waits on a person walking to another machine and typing four
 /// digits, so it gets a generous budget.
-const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Everything else talks to a host that is either there or not. Measured
 /// against moonlight-qt 6.x, `quit` against a host that will not answer

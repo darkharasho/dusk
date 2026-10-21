@@ -316,9 +316,11 @@ manager happens to draw today. An interactive overlay is a new overlay type, a
 centred rect per renderer, input interception while it is open, and a hotkey
 beside the existing combos in `input/keyboard.cpp`.
 
-**Sunshine is not bundled.** It gets fetched and verified at first run (M5).
-That keeps Dusk out of GPL-3.0 conveying obligations, lets Sunshine ship security
-updates without a Dusk release, and defers to the distro package on Linux.
+**Sunshine is bundled, and runs as its own process.** Dusk is GPL-3.0-or-later,
+as are Sunshine and the client, so shipping them together is fine; the licence
+text and a source offer travel with the app. They stay separate programs because
+a crashed stream must not take the window down, not because of licensing (see
+`docs/architecture.md`, "Three programs, one face").
 
 **Two separate things broke TLS to a host, and one hid the other.** The
 symptom was the same for both — an app list that failed most ticks and a

@@ -15,6 +15,12 @@
 //! out, the person already said yes by signing both machines in, and
 //! nothing is asked. See [`crate::account`].
 //!
+//! Between two machines on the same account, a certificate pairing comes
+//! first: each sends the other its certificate, signed for the receiver, and
+//! no PIN is involved (see [`crate::cert_pairing`]). The PIN flow below is
+//! what everything else uses, and what a certificate pairing falls back to
+//! when the other side is too old, declines, or does not finish.
+//!
 //! Anyone else is turned away, unless this machine has Let other devices
 //! pair on ([`crate::store::Store::allow_other_devices`]). Then the host
 //! asks instead: one Allow press, showing which machine is asking — the
@@ -99,7 +105,9 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(90);
 /// replies.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(ANSWER_TIMEOUT.as_secs() + 30);
 
-/// A request line is a few dozen bytes; anything long is not one.
+/// The longest line read from a peer, 16 KiB. A request is small, but a
+/// certificate pairing carries PEM certificates and a signature; some reads
+/// allow a multiple of this.
 const MAX_LINE: usize = 16 * 1024;
 
 pub const PAIR_REQUEST_EVENT: &str = "dusk://pair-request";

@@ -6,6 +6,80 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
+**Branch `gpl-and-cert-pairing` (not released): Dusk is GPL-3.0-or-later, and
+your own machines pair without a PIN.** Design:
+`docs/superpowers/specs/2026-10-21-gpl-and-certificate-pairing-design.md`;
+the measurements it rests on:
+`docs/superpowers/specs/2026-10-21-certificate-pairing-spike.md`.
+
+*How pairing works now.* Machines on the same GitHub account try
+**certificates first**; everything else, and any certificate attempt that does
+not finish, uses the PIN as before. The two machines swap certificates over
+the peer channel (`peer.rs`, signed for the receiving host), and each writes
+its own half:
+
+- **The host half** (`cert_pairing/{host,reconcile}.rs`) adds the client's
+  certificate to `named_devices` in Sunshine's `sunshine_state.json` (default
+  `~/.config/sunshine/sunshine_state.json`; `file_state` and `cert` in the
+  config API override it, absent means the default) and **restarts the host**,
+  because it reads the file only at startup. It **never restarts mid-stream**;
+  the restart is owed and kept in Dusk's settings until the stream ends. And it
+  **re-merges from disk immediately before every restart**, because the host
+  rewrites the file from memory whenever it PIN-pairs anyone and drops entries
+  it never loaded (the spike reproduced this). A pairing leaves the settings
+  only after the host has loaded the file without it.
+- **The client half** (`cert_pairing/client.rs`) shells out to the fork's
+  `add-host` action, which records the host's certificate and address. It takes
+  a lock file and **exits 2 while another client is open**, so Dusk waits
+  (the drawer says so). `--version` prints `Dusk fork: add-host available`;
+  a client without that line is never offered the new path.
+- **Re-pairing.** When a host's certificate changes, the stored one no longer
+  matches what it presents, so the card drops to not paired and the next Pair
+  runs again; the host side gives the changed certificate a fresh uuid, since
+  the host matches by uuid.
+- **No half pairings on a card** (`poller.rs`, `shown_pairing`). A host that
+  trusts us while the client has no certificate for it (or a different one)
+  shows not paired, since a stream would fail. Paired **stands** whenever Dusk
+  cannot tell: the client's host list could not be read, is empty, or the host
+  has no `uniqueid` yet. An empty or unreadable list is never evidence.
+- Probing pairing over HTTPS must send `?uniqueid=`, or even a trusted
+  certificate reads `PairStatus 0`.
+
+*Fork and release.* The `add-host` action lives on the local fork branch
+`dusk-add-host` at commit `4a59931`. It is **not merged, pushed, tagged or
+released.** The owner's steps: merge, tag `dusk-v0.2.5`, wait for the release,
+then bump `CLIENT_TAG` in `.github/workflows/release.yml`. Until then a
+packaged build ships `dusk-v0.2.4`, which has no `add-host`, so **packaged
+builds always use the PIN.**
+
+*Owner-deferred checks* (they need machines this was not built on):
+
+- **Windows and macOS spike.** The state file's real path, and whether a
+  non-elevated user can write it. If Windows cannot, Windows hosts keep the PIN.
+- **Step 1 against the pinned `v2026.914.233613`.** The spike ran on
+  `2026.516.143833`; write a certificate in by hand, restart, expect a stream
+  with no prompt.
+- **Manual end to end:** two account machines pairing; a host that is
+  streaming to a third device while one pairs (it should wait, then finish); a
+  stock client giving the PIN fallback; and a host certificate rotation (the
+  card drops, re-pair works). Rotation would unpair the real PIN pairings on
+  the host, so it was not run.
+- **Per platform, a live check that the client's host-list read finds every
+  host.** A partial read would show hosts as not paired.
+
+*Known follow-ups.*
+
+- A fresh client with **no identity** still needs a PIN for its first pairing.
+  Suggested fix: a fork flag such as `--ensure-identity` that Dusk calls when
+  `identity::load` returns nothing and `supports_add_host()` is true.
+- `add-host` can report success on a failed flush: it checks a fresh
+  `QSettings`, not the flush thread's write. A read-back verify before the
+  release would close it.
+- Closing the drawer does not cancel a pairing in progress; a second Pair
+  starts a second loop (harmless, the host is idempotent).
+- The Windows `config_dir` (`%ProgramFiles%\Sunshine\config`) is a guess until
+  the Windows spike. Wrong means PIN fallback, not breakage.
+
 **v0.3.28 is released**, all three platforms, from `main`, carrying the
 client's `dusk-v0.2.4`. It lets a **`.deb` install update itself**, which was
 the one format that could not. The plugin handles the other four and cannot

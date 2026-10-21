@@ -118,6 +118,16 @@ export function AccountSection() {
               ))}
             </div>
           )}
+          {/* A lapsed sign-in looks exactly like your machines not being
+              yours, so it gets a notice rather than a dim line. */}
+          {account.expired && (
+            <div className="axi-notice axi-notice--danger">
+              <span className="axi-notice__icon" aria-hidden="true">
+                !
+              </span>
+              <p>{account.expired}</p>
+            </div>
+          )}
           {!account.persistent && (
             <p className="axi-ink-dim">
               No system keystore was available, so you will have to sign in

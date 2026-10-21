@@ -171,6 +171,19 @@ async fn status() -> i32 {
     if let Some(warning) = keyring_warning() {
         println!("           {warning}");
     }
+
+    // The sign-in, because a machine can be perfectly set up to host and
+    // still not be one your others will pair with.
+    let account = crate::account::AccountState::default();
+    let view = account.view().await;
+    match (&view.user, &view.expired) {
+        (Some(user), None) => println!("Account:   signed in to GitHub as {}", user.login),
+        (Some(user), Some(notice)) => {
+            println!("Account:   signed in as {} — EXPIRED", user.login);
+            println!("           {notice}");
+        }
+        (None, _) => println!("Account:   not signed in; pairing will need a PIN"),
+    }
     0
 }
 

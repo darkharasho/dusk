@@ -70,8 +70,80 @@ pub struct Entry {
 pub enum Poll {
     Pending,
     SlowDown,
-    Token(String),
+    Token(Tokens),
     Failed(String),
+}
+
+/// What GitHub hands back, which is not only an access token.
+///
+/// # Why there is no refresh here
+///
+/// An OAuth app can be set to expire user tokens, and when it is, the device
+/// flow returns a refresh token beside the access token. The obvious move is
+/// to keep it and renew. GitHub will not allow it:
+///
+/// ```text
+/// POST /login/oauth/access_token  grant_type=refresh_token, client_id=…
+/// {"error": "incorrect_client_credentials",
+///  "error_description": "The client_id and/or client_secret passed are incorrect."}
+/// ```
+///
+/// The device flow is secret-less on the way *in*, but the refresh grant is
+/// a confidential-client operation and wants the client secret. Dusk has
+/// none to give: one shipped in the binary is readable by anyone who runs
+/// `strings` on it, and holding it anywhere else means running a server,
+/// which this project deliberately does not do.
+///
+/// So the fix is on GitHub's side — the app must be set *not* to expire its
+/// tokens — and Dusk's job is to notice when one has and say so. That is
+/// what `expires_at` is for. Before it existed the only symptom was other
+/// machines quietly ceasing to be yours eight hours after signing in: an
+/// expired token cannot read the account's machine list, and every pairing
+/// proof then looks like a stranger's.
+///
+/// `refresh` is kept only so the stored shape need not change if GitHub ever
+/// permits this from a public client. Nothing reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tokens {
+    pub access: String,
+    pub refresh: Option<String>,
+    /// Unix seconds. Absent when the token does not expire, which is how the
+    /// app is meant to be configured.
+    pub expires_at: Option<u64>,
+}
+
+/// Seconds before the stated expiry at which a token is treated as done.
+///
+/// A token that expires during the request it was attached to fails exactly
+/// like a wrong one, so the margin covers a slow round trip and a clock that
+/// disagrees with GitHub's by a little.
+pub const EXPIRY_MARGIN: u64 = 120;
+
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+impl Tokens {
+    /// Whether GitHub will still accept this.
+    ///
+    /// A token with no stated expiry never lapses — the configuration Dusk
+    /// wants — so it is never reported as expired.
+    pub fn expired(&self) -> bool {
+        self.expires_at
+            .is_some_and(|at| now_unix() + EXPIRY_MARGIN >= at)
+    }
+}
+
+fn tokens_from(body: &Value) -> Option<Tokens> {
+    let access = body["access_token"].as_str()?.to_string();
+    Some(Tokens {
+        access,
+        refresh: body["refresh_token"].as_str().map(String::from),
+        expires_at: body["expires_in"].as_u64().map(|secs| now_unix() + secs),
+    })
 }
 
 fn api(
@@ -144,8 +216,8 @@ pub async fn poll(http: &reqwest::Client, client_id: &str, device_code: &str) ->
 }
 
 fn parse_poll(body: &Value) -> Poll {
-    if let Some(token) = body["access_token"].as_str() {
-        return Poll::Token(token.to_string());
+    if let Some(tokens) = tokens_from(body) {
+        return Poll::Token(tokens);
     }
     match body["error"].as_str() {
         Some("authorization_pending") | None => Poll::Pending,
@@ -299,18 +371,82 @@ mod tests {
             parse_poll(&json!({"error": "slow_down", "interval": 10})),
             Poll::SlowDown
         );
+        // An app that does not expire tokens sends neither a refresh token
+        // nor an expiry, and such a token is never treated as spent.
         assert_eq!(
             parse_poll(&json!({"access_token": "gho_x", "token_type": "bearer"})),
-            Poll::Token("gho_x".into())
+            Poll::Token(Tokens {
+                access: "gho_x".into(),
+                refresh: None,
+                expires_at: None,
+            })
         );
         assert!(matches!(
             parse_poll(&json!({"error": "expired_token"})),
             Poll::Failed(_)
         ));
+
+        // The case that actually bit: this app expires tokens at eight
+        // hours and sends a refresh token with them. Keeping only the
+        // access token made every machine stop being recognised by its own
+        // account overnight, with nothing said.
+        let Poll::Token(t) = parse_poll(&json!({
+            "access_token": "gho_x",
+            "refresh_token": "ghr_y",
+            "expires_in": 28800,
+            "token_type": "bearer"
+        })) else {
+            panic!("a token answer must parse as one");
+        };
+        assert_eq!(t.refresh.as_deref(), Some("ghr_y"));
+        let at = t.expires_at.expect("an expiry must be kept");
+        assert!(at > now_unix() + 28000 && at <= now_unix() + 28800, "{at}");
+        assert!(!t.expired(), "a token issued seconds ago has not lapsed");
         assert!(matches!(
             parse_poll(&json!({"error": "access_denied"})),
             Poll::Failed(_)
         ));
+    }
+
+    #[test]
+    fn a_token_near_its_expiry_counts_as_lapsed() {
+        // The margin exists so a token cannot lapse mid-request, which
+        // fails exactly like a wrong one and is far harder to recognise.
+        let nearly = Tokens {
+            access: "gho_x".into(),
+            refresh: Some("ghr_y".into()),
+            expires_at: Some(now_unix() + EXPIRY_MARGIN / 2),
+        };
+        assert!(nearly.expired());
+
+        let fresh = Tokens {
+            access: "gho_x".into(),
+            refresh: Some("ghr_y".into()),
+            expires_at: Some(now_unix() + 3600),
+        };
+        assert!(!fresh.expired());
+    }
+
+    #[test]
+    fn a_token_with_no_stated_expiry_never_lapses() {
+        // The configuration Dusk actually wants: the OAuth app set not to
+        // expire tokens, so there is no expiry and nothing to report. This
+        // also covers entries written before Dusk recorded one.
+        let forever = Tokens {
+            access: "gho_x".into(),
+            refresh: None,
+            expires_at: None,
+        };
+        assert!(!forever.expired());
+
+        // But a stated expiry in the past counts, refresh token or not --
+        // there is no renewing it, so the only honest answer is to say so.
+        let lapsed = Tokens {
+            access: "gho_x".into(),
+            refresh: None,
+            expires_at: Some(now_unix().saturating_sub(10_000)),
+        };
+        assert!(lapsed.expired());
     }
 
     #[test]

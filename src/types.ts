@@ -212,6 +212,11 @@ export interface AccountView {
   machines: { name: string; thisMachine: boolean }[];
   /** False when the sign-in is only held for this run (no OS keystore). */
   persistent: boolean;
+  /**
+   * Set when GitHub has stopped accepting the stored sign-in. Shown loudly:
+   * the only other symptom is your own machines appearing not to be yours.
+   */
+  expired: string | null;
 }
 
 export interface SignInCode {

@@ -55,11 +55,18 @@ struct Stored {
     machine: String,
     key: String,
     list: Option<String>,
+    /// Both default, so an entry written before Dusk kept these still
+    /// loads. Such a sign-in simply cannot be renewed, and behaves as it
+    /// always did until the person signs in once more.
+    #[serde(default)]
+    refresh: Option<String>,
+    #[serde(default)]
+    expires_at: Option<u64>,
 }
 
 #[derive(Clone)]
 struct Account {
-    token: String,
+    tokens: github::Tokens,
     user: User,
     key: MachineKey,
     list: Option<String>,
@@ -68,18 +75,24 @@ struct Account {
 impl Account {
     fn to_stored(&self) -> Stored {
         Stored {
-            token: self.token.clone(),
+            token: self.tokens.access.clone(),
             user: self.user.clone(),
             machine: self.key.id.clone(),
             key: self.key.pkcs8_hex(),
             list: self.list.clone(),
+            refresh: self.tokens.refresh.clone(),
+            expires_at: self.tokens.expires_at,
         }
     }
 
     fn from_stored(s: Stored) -> Result<Self, String> {
         Ok(Self {
             key: MachineKey::from_parts(s.machine, &s.key)?,
-            token: s.token,
+            tokens: github::Tokens {
+                access: s.token,
+                refresh: s.refresh,
+                expires_at: s.expires_at,
+            },
             user: s.user,
             list: s.list,
         })
@@ -117,6 +130,10 @@ pub struct AccountView {
     pub user: Option<User>,
     pub machines: Vec<MachineView>,
     pub persistent: bool,
+    /// Set when GitHub has stopped accepting the stored sign-in. The window
+    /// shows this rather than letting the only symptom be other machines
+    /// quietly ceasing to be yours.
+    pub expired: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,6 +211,37 @@ impl AccountState {
         cached.read = true;
     }
 
+    /// The message to show when the sign-in has lapsed, if it has.
+    ///
+    /// Said in full because the alternative is what this cost a day of:
+    /// other machines silently ceasing to be yours, with the app insisting
+    /// it was signed in the whole time.
+    pub async fn expiry_notice(&self) -> Option<String> {
+        let account = self.load().await?;
+        account.tokens.expired().then(|| {
+            "Your GitHub sign-in has expired, so this machine can no longer check which \
+             machines are yours. Sign in again."
+                .to_string()
+        })
+    }
+
+    /// An access token GitHub will still accept, or nothing.
+    ///
+    /// Every use of the token goes through here. Reaching for
+    /// `account.tokens.access` directly is how this breaks again: a lapsed
+    /// token fails in a way that reads as "those are not your machines"
+    /// rather than as "sign in again".
+    async fn access_token(&self, _http: &reqwest::Client) -> Option<String> {
+        let account = self.load().await?;
+        if account.tokens.expired() {
+            // Not renewed here, and cannot be: see `github::Tokens`. The
+            // sign-in is kept rather than cleared, so the Account screen can
+            // still say whose it was and offer to sign in again.
+            return None;
+        }
+        Some(account.tokens.access)
+    }
+
     /// Read the keystore and the machine list once, in the background.
     pub async fn prime(&self, http: &reqwest::Client) {
         if self.load().await.is_some() {
@@ -207,12 +255,27 @@ impl AccountState {
         let Some(account) = self.load().await else {
             return Ok(());
         };
+        // This is the call that quietly stopped working when a token aged
+        // out, and with it the account's whole purpose: an unreadable list
+        // makes every other machine look like somebody else's.
+        let token = match self.access_token(http).await {
+            Some(token) => token,
+            None => {
+                // Said out loud rather than returned as an empty list: an
+                // empty machine list is indistinguishable from "none of
+                // these are yours", which is the confusion to avoid.
+                return Err(self
+                    .expiry_notice()
+                    .await
+                    .unwrap_or_else(|| "Dusk is not signed in to GitHub.".to_string()));
+            }
+        };
         let list = match &account.list {
             Some(id) => Some(id.clone()),
-            None => github::find_list(http, &account.token).await?,
+            None => github::find_list(http, &token).await?,
         };
         let entries = match list {
-            Some(id) => github::read_list(http, &account.token, &id).await?,
+            Some(id) => github::read_list(http, &token, &id).await?,
             None => HashMap::new(),
         };
         let mut cached = self.list.write().await;
@@ -240,11 +303,17 @@ impl AccountState {
                 .cmp(&a.this_machine)
                 .then(a.name.cmp(&b.name))
         });
+        let expired = account.as_ref().filter(|a| a.tokens.expired()).map(|_| {
+            "Your GitHub sign-in has expired, so this machine can no longer check which \
+                 machines are yours. Sign in again."
+                .to_string()
+        });
         AccountView {
             available: github::client_id().is_some(),
             user: account.map(|a| a.user),
             machines,
             persistent: self.cached.read().await.persistent,
+            expired,
         }
     }
 
@@ -346,7 +415,7 @@ pub(crate) async fn wait_for_token(
     http: &reqwest::Client,
     client_id: &str,
     code: &github::DeviceCode,
-) -> Result<String, String> {
+) -> Result<github::Tokens, String> {
     let deadline = Instant::now() + Duration::from_secs(code.expires_in);
     let mut interval = code.interval.max(5);
     while Instant::now() < deadline {
@@ -355,7 +424,7 @@ pub(crate) async fn wait_for_token(
             Poll::Pending => {}
             // GitHub's rule: back off by five seconds each time it asks.
             Poll::SlowDown => interval += 5,
-            Poll::Token(token) => return Ok(token),
+            Poll::Token(tokens) => return Ok(tokens),
             Poll::Failed(err) => return Err(err),
         }
     }
@@ -369,8 +438,9 @@ pub(crate) async fn wait_for_token(
 pub(crate) async fn finish(
     http: &reqwest::Client,
     account: &AccountState,
-    token: String,
+    tokens: github::Tokens,
 ) -> Result<User, String> {
+    let token = tokens.access.clone();
     let user = github::user(http, &token).await?;
     // Keep the machine's key across signing in again as the same person, so
     // its entry in the list is replaced rather than joined by a stale one.
@@ -386,7 +456,7 @@ pub(crate) async fn finish(
     let list = github::publish(http, &token, list.as_deref(), &key.id, &entry).await?;
     account
         .save(Some(Account {
-            token,
+            tokens,
             user: user.clone(),
             key,
             list: Some(list),
@@ -400,13 +470,12 @@ pub(crate) async fn finish(
 /// so the others stop trusting it.
 pub async fn sign_out(state: &AppState) -> Result<(), String> {
     cancel(state).await;
-    if let Some(account) = state.account.load().await {
+    let token = state.account.access_token(&state.http).await;
+    if let (Some(account), Some(token)) = (state.account.load().await, token) {
         if let Some(list) = &account.list {
             // Best effort: a machine signing out offline should still sign
             // out. Its entry stays until it is removed from GitHub by hand.
-            if let Err(err) =
-                github::unpublish(&state.http, &account.token, list, &account.key.id).await
-            {
+            if let Err(err) = github::unpublish(&state.http, &token, list, &account.key.id).await {
                 eprintln!("dusk: could not take this machine off the account's list: {err}");
             }
         }

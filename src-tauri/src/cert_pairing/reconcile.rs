@@ -73,16 +73,34 @@ pub(super) struct Files {
     pub server_cert: PathBuf,
 }
 
-/// Paths as the host is configured, or its defaults when the config cannot
-/// be read: an unset key is simply absent from it.
-pub(super) async fn files(credentials: &Credentials) -> Option<Files> {
+/// What to do when the host's config cannot be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Unread {
+    /// Use the host's default paths.
+    Defaults,
+    /// Give no paths at all.
+    Decline,
+}
+
+/// Paths as the host is configured: an unset key is simply absent from it.
+pub(super) async fn files(credentials: &Credentials, unread: Unread) -> Option<Files> {
     let config = match SunshineApi::new(api::DEFAULT_PORT) {
         Ok(api) => api.get_config(credentials).await.ok(),
         Err(_) => None,
     };
+    located(config.as_ref(), unread)
+}
+
+fn located(
+    config: Option<&serde_json::Map<String, serde_json::Value>>,
+    unread: Unread,
+) -> Option<Files> {
+    if config.is_none() && unread == Unread::Decline {
+        return None;
+    }
     Some(Files {
-        state: state_file::state_path(config.as_ref())?,
-        server_cert: state_file::server_cert_path(config.as_ref())?,
+        state: state_file::state_path(config)?,
+        server_cert: state_file::server_cert_path(config)?,
     })
 }
 
@@ -322,7 +340,11 @@ impl Reconciler {
             http: &state.http,
             credentials: &credentials,
         };
-        let path = async { files(&credentials).await.map(|f| f.state) };
+        // The defaults when the config cannot be read. That fails safe: the
+        // same API restarts the host, so with it down no restart happens
+        // and nothing is forgotten; and a file at the default path the host
+        // does not read gains entries it never loads.
+        let path = async { files(&credentials, Unread::Defaults).await.map(|f| f.state) };
         match self
             .run(
                 &state.store,
@@ -791,6 +813,22 @@ mod tests {
         // Down and never back.
         let gone = Fake::new(&[None], &dir.state());
         assert!(!came_back(&gone, &QUICK).await);
+    }
+
+    #[test]
+    fn a_config_it_cannot_read_gives_no_paths_when_asked_to_decline() {
+        assert!(located(None, Unread::Decline).is_none());
+        let configured = serde_json::json!({
+            "file_state": "/elsewhere/state.json",
+            "cert": "/elsewhere/cacert.pem",
+        });
+        let at = located(configured.as_object(), Unread::Decline).unwrap();
+        assert_eq!(at.state, PathBuf::from("/elsewhere/state.json"));
+        assert_eq!(at.server_cert, PathBuf::from("/elsewhere/cacert.pem"));
+        // A background pass still falls back to where the host keeps them
+        // by default.
+        let defaults = located(None, Unread::Defaults).unwrap();
+        assert_eq!(Some(defaults.state), state_file::state_path(None));
     }
 
     #[test]

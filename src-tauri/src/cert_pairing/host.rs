@@ -16,7 +16,7 @@ use crate::state::AppState;
 use crate::store::AccountPairing;
 use crate::sunshine::state_file::{self, normalise_pem, NamedDevice};
 
-use super::reconcile::{files, ready, Files, Local, Timing};
+use super::reconcile::{files, ready, Files, Local, Timing, Unread};
 
 /// What Dusk's entries in the host's list should be: the pairings to have,
 /// and the uuids to take out.
@@ -165,9 +165,12 @@ async fn answer(
         .load()
         .await
         .ok_or("This machine isn't set up to host yet.")?;
-    let files = files(&credentials)
+    // Never the default paths: a host configured elsewhere would be answered
+    // with a certificate it does not use, and the pairing would never work.
+    // Declined, the other machine asks for the PIN instead.
+    let files = files(&credentials, Unread::Decline)
         .await
-        .ok_or("This machine isn't set up to host yet.")?;
+        .ok_or("This machine couldn't read its own hosting settings.")?;
     let identity = admit(&files, cert, |message| async move {
         state
             .account

@@ -40,6 +40,20 @@
 //!                     {"type":"declined","reason":"..."}
 //! ```
 //!
+//! A signed-in machine can instead pair with no PIN at all, by trading
+//! certificates:
+//!
+//! ```text
+//! connecting → host   {"type":"pair_cert","name":"Mac mini","cert":"-----BEGIN…",
+//!                      "proof":{"account":1,"machine":"…","signature":"…"}}
+//! host → connecting   {"type":"paired","server_cert":"-----BEGIN…","uniqueid":"…",
+//!                      "ready":true,"proof":{"account":1,"machine":"…","signature":"…"}}
+//!                     {"type":"declined","reason":"..."}
+//! ```
+//!
+//! A Dusk too old to know `pair_cert` declines it like any other request it
+//! does not understand.
+//!
 //! A connection refused means no Dusk is listening there, and the
 //! connecting side falls back to showing the PIN.
 //!
@@ -80,7 +94,7 @@ pub const PORT: u16 = 47850;
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// A request line is a few dozen bytes; anything long is not one.
-const MAX_LINE: usize = 1024;
+const MAX_LINE: usize = 16 * 1024;
 
 pub const PAIR_REQUEST_EVENT: &str = "dusk://pair-request";
 pub const PAIR_REQUEST_ENDED_EVENT: &str = "dusk://pair-request-ended";
@@ -95,6 +109,21 @@ pub enum Message {
         /// the PIN, which lets a machine on the same account skip the prompt.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proof: Option<crate::account::Proof>,
+    },
+    /// Pair by certificate, with no PIN: the asking machine's certificate and
+    /// a signature proving it speaks for the account. Only ever sent signed in.
+    PairCert {
+        name: String,
+        cert: String,
+        proof: crate::account::Proof,
+    },
+    /// The host's side of a certificate pairing: its own certificate, the id
+    /// to pair under, whether it is ready to be streamed from, and its proof.
+    Paired {
+        server_cert: String,
+        uniqueid: String,
+        ready: bool,
+        proof: crate::account::Proof,
     },
     Waiting,
     Accepted,
@@ -243,6 +272,10 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
                 }
                 None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
             }
+        }
+        Ok(Message::PairCert { name, cert, proof }) => {
+            let name = clean_name(&name).unwrap_or_else(|| address.clone());
+            crate::cert_pairing::host::handle(&state, &address, name, cert, proof).await
         }
         Ok(Message::Identify) => Message::Identity {
             machine: state.account.machine_id().await,
@@ -791,6 +824,110 @@ mod tests {
         };
         let line = serde_json::to_string(&new).unwrap();
         assert_eq!(serde_json::from_str::<Old>(&line).unwrap(), Old::Display);
+    }
+
+    fn sample_proof() -> crate::account::Proof {
+        crate::account::Proof {
+            account: 1,
+            machine: "ab".repeat(16),
+            signature: "cd".repeat(32),
+        }
+    }
+
+    fn crlf_pem() -> String {
+        let body =
+            "MIIDXTCCAkWgAwIBAgIJAKoK/heBjcOuMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV\r\n".repeat(30);
+        format!("-----BEGIN CERTIFICATE-----\r\n{body}-----END CERTIFICATE-----\r\n")
+    }
+
+    #[test]
+    fn a_pair_cert_line_with_a_crlf_certificate_fits_and_round_trips() {
+        let cert = crlf_pem();
+        assert!(cert.len() >= 2000);
+        let ask = Message::PairCert {
+            name: "Mac mini".into(),
+            cert,
+            proof: sample_proof(),
+        };
+        let line = serde_json::to_string(&ask).unwrap();
+        assert!(line.len() < MAX_LINE);
+        assert_eq!(serde_json::from_str::<Message>(&line).unwrap(), ask);
+
+        let reply = Message::Paired {
+            server_cert: crlf_pem(),
+            uniqueid: "0123456789ABCDEF".into(),
+            ready: true,
+            proof: sample_proof(),
+        };
+        let line = serde_json::to_string(&reply).unwrap();
+        assert!(line.len() < MAX_LINE);
+        assert_eq!(serde_json::from_str::<Message>(&line).unwrap(), reply);
+    }
+
+    #[test]
+    fn an_older_dusk_reads_pair_cert_as_something_it_declines() {
+        // Every message as 0.3.x declared it; `serve` declines whatever
+        // does not parse as one of these.
+        #[derive(Debug, Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum Old {
+            Pair {
+                pin: String,
+                name: String,
+            },
+            Waiting,
+            Accepted,
+            Declined {
+                reason: String,
+            },
+            Display,
+            DisplaySize {
+                width: u32,
+                height: u32,
+            },
+            Identify,
+            Identity {
+                machine: Option<String>,
+                name: String,
+            },
+        }
+        let line = serde_json::to_string(&Message::PairCert {
+            name: "Mac mini".into(),
+            cert: crlf_pem(),
+            proof: sample_proof(),
+        })
+        .unwrap();
+        assert!(serde_json::from_str::<Old>(&line).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_host_too_old_for_pair_cert_declines_over_the_wire() {
+        let port = host_expecting(
+            |m| matches!(m, Message::PairCert { .. }),
+            r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
+        )
+        .await;
+        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (read, mut write) = stream.into_split();
+        send(
+            &mut write,
+            &Message::PairCert {
+                name: "Mac mini".into(),
+                cert: crlf_pem(),
+                proof: sample_proof(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
+        let line = lines.next_line().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Message>(&line).unwrap(),
+            Message::Declined {
+                reason: "Dusk did not understand that request.".into()
+            }
+        );
     }
 
     /// A stand-in host that answers one request with `reply`, checking that

@@ -5,6 +5,7 @@
 
 mod account;
 mod applist;
+mod cert_pairing;
 mod cli;
 mod commands;
 mod discovery;

@@ -3,6 +3,7 @@ name = "dusk"
 version = "0.3.28"
 description = "Your machines, one app: host and stream across them"
 edition = "2021"
+license = "GPL-3.0-or-later"
 rust-version = "1.77"
 
 [lib]

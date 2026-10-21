@@ -295,18 +295,17 @@ have to be granted by hand because no installer can script a TCC prompt. The UI
 flags this rather than promising parity. Streaming *to* a Mac is unaffected and
 first-class.
 
-**moonlight-common-c is GPL-3.0, not LGPL.** The plan recorded here — embed it
-later and keep the shell unencumbered — cannot be done: linking it relicenses
-Dusk. Nor would it save much work, because it is the streaming protocol only.
-`Limelight.h` has no pairing function at all; pairing lives in moonlight-qt's
-`NvPairingManager`, along with the decoders, audio and input.
+**moonlight-common-c is GPL-3.0, not LGPL.** Dusk is GPL-3.0-or-later too, so
+embedding it later would be allowed, but it would not save much work: it is the
+streaming protocol only. `Limelight.h` has no pairing function at all; pairing
+lives in moonlight-qt's `NvPairingManager`, along with the decoders, audio and
+input.
 
 So the client stays a **separate process**, and the in-stream overlay lives in
-a GPL-3.0 fork of moonlight-qt rather than in Dusk. Arm's-length IPC — CLI
-arguments today, a local socket once the overlay reports back — is aggregation
-rather than a derivative work, which is what keeps the boundary real. The line
-to hold is that they stay separate programs: pipes and sockets are fine,
-linking and shared in-memory structures are not.
+a GPL-3.0 fork of moonlight-qt rather than in Dusk. The reasons are
+engineering ones: a crashed stream must not take the window down, and video
+does not belong in the webview. Dusk talks to the client over CLI arguments
+today, and a local socket once the overlay reports back.
 
 Most of that overlay is already built upstream. `overlaymanager.{h,cpp}` keeps
 one `SDL_Surface` per overlay type and **every renderer already composites

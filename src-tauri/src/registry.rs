@@ -10,7 +10,7 @@
 //! `uniqueid` the entry is re-keyed and folded into any existing entry with
 //! the same id.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::{
@@ -133,6 +133,12 @@ pub struct Registry {
 /// up at an address.
 const ACCOUNT_PREFIX: &str = "account:";
 
+/// Names as they can be compared: machines differ on case and spacing far
+/// more often than they differ on identity.
+fn normalised(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
 fn account_id(machine: &str) -> DeviceId {
     format!("{ACCOUNT_PREFIX}{machine}")
 }
@@ -179,6 +185,30 @@ impl Registry {
             .filter_map(|d| d.machine_id.clone())
             .collect();
 
+        // The same question answered by name, for machines that cannot yet
+        // say who they are.
+        //
+        // The id is the right key and a name is not -- this Mac is
+        // `Michaels-Mini` on the account and `Michaels-Mac-mini` over mDNS.
+        // But a machine running a Dusk too old to answer `identify` has no
+        // id to match on, and the alternative is what it did: one card from
+        // the account with no address under "Your machines", and a second
+        // from discovery under "Other machines on this network". The same
+        // machine, listed twice, in two places, neither complete.
+        //
+        // So a name match claims the discovered card instead of adding a
+        // second one. It is a weaker key, deliberately only reached when
+        // there is no better one, and it stops mattering as soon as the
+        // other machine is new enough to be asked.
+        let by_name: HashMap<String, DeviceId> = self
+            .devices
+            .values()
+            .filter(|d| !d.id.starts_with(ACCOUNT_PREFIX) && !d.is_self)
+            .filter(|d| d.machine_id.is_none())
+            .map(|d| (normalised(&d.name), d.id.clone()))
+            .collect();
+
+        let claimed: HashSet<String> = by_name.keys().cloned().collect();
         self.devices.retain(|id, _| {
             let Some(machine) = id.strip_prefix(ACCOUNT_PREFIX) else {
                 return true;
@@ -189,11 +219,26 @@ impl Registry {
             !found.contains(machine)
                 && entries.iter().any(|m| m.id == machine)
                 && Some(machine) != own
+                && !entries
+                    .iter()
+                    .any(|m| m.id == machine && claimed.contains(&normalised(&m.name)))
         });
 
         for entry in entries {
             let machine = &entry.id;
             if found.contains(machine) || Some(machine.as_str()) == own {
+                continue;
+            }
+
+            // Claimed by name: one card, in the right half of the grid,
+            // carrying the address discovery found. Its pairing state is
+            // whatever the probe says, so it reads as yours and unpaired
+            // rather than as a stranger.
+            if let Some(id) = by_name.get(&normalised(&entry.name)) {
+                if let Some(device) = self.devices.get_mut(id) {
+                    device.mine = true;
+                }
+                self.devices.remove(&account_id(machine));
                 continue;
             }
             let id = account_id(machine);
@@ -647,6 +692,47 @@ mod account_tests {
             .find(|d| d.machine_id.as_deref() == Some("aaa"))
             .expect("still listed");
         assert_eq!(venus.addresses, vec!["100.101.8.99".to_string()]);
+    }
+
+    #[test]
+    fn a_machine_too_old_to_identify_is_claimed_by_name_not_duplicated() {
+        // What this looked like: the same machine twice, once from the
+        // account with no address under "Your machines" and once from
+        // discovery under "Other machines on this network". Neither card
+        // complete, and the person's own machine filed as a stranger's.
+        let mut r = registry();
+        let found = r.upsert_mdns("Venus", &["192.168.50.149".into()], 47989);
+        // No identity: a Dusk too old to answer `identify` leaves it unset.
+        r.sync_account(&entries(), Some("ccc"));
+
+        let venus: Vec<Device> = r
+            .devices()
+            .into_iter()
+            .filter(|d| d.name.eq_ignore_ascii_case("venus"))
+            .collect();
+        assert_eq!(venus.len(), 1, "one machine, one card");
+        assert_eq!(venus[0].id, found, "the discovered card is the one kept");
+        assert!(venus[0].mine, "and it is filed as yours");
+        assert!(!venus[0].addresses.is_empty(), "keeping its address");
+    }
+
+    #[test]
+    fn a_name_match_gives_way_to_a_real_identity() {
+        // The name is a fallback. Once the machine can say who it is, the
+        // id decides, and a card claimed by name must not block that.
+        let mut r = registry();
+        let found = r.upsert_mdns("Venus", &["192.168.50.149".into()], 47989);
+        r.sync_account(&entries(), Some("ccc"));
+        r.set_identity(&found, Some("aaa".into()), true);
+        r.sync_account(&entries(), Some("ccc"));
+
+        let venus: Vec<Device> = r
+            .devices()
+            .into_iter()
+            .filter(|d| d.machine_id.as_deref() == Some("aaa") || d.name == "Venus")
+            .collect();
+        assert_eq!(venus.len(), 1);
+        assert_eq!(venus[0].machine_id.as_deref(), Some("aaa"));
     }
 
     #[test]

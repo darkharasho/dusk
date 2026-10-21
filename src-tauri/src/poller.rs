@@ -150,7 +150,9 @@ async fn ask_who_they_are(state: &Arc<AppState>) {
         .await
         .devices()
         .into_iter()
-        .filter(|d| !d.is_self && d.machine_id.is_none() && !d.mine)
+        // Claimed-by-name cards are still asked: the name is a fallback, and
+        // the id is what should replace it the moment it can be had.
+        .filter(|d| !d.is_self && d.machine_id.is_none())
         .filter(|d| matches!(d.reachability, Reachability::Online { .. }))
         .filter_map(|d| d.primary_address.clone().map(|a| (d.id, a)))
         .collect();

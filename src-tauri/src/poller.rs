@@ -54,7 +54,11 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
     // hold up the rest of the grid.
     // Read every tick rather than once at start: pairing here, by PIN or by
     // certificate, is what writes a host's certificate into this list.
-    let known = crate::moonlight::hosts::load(state.moonlight.as_ref());
+    // `None` when there is no client, or its store could not be read.
+    let known = state
+        .moonlight
+        .as_ref()
+        .and_then(|client| crate::moonlight::hosts::read(Some(client)));
 
     let probes = targets.into_iter().map(|(id, addresses, port, tls_port)| {
         let http = state.http.clone();
@@ -81,7 +85,7 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
             let id = registry.apply_probe(&id, outcome);
             // Under the same lock as the probe, so no snapshot taken in
             // between can show a pairing this machine cannot use.
-            let stored = stored_cert(&known, &id);
+            let stored = stored_cert(known.as_deref(), &id);
             if shown_pairing(probed, stored, cert.as_deref()) != probed {
                 registry.withhold_pairing(&id);
             }
@@ -93,7 +97,7 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
 
     ask_who_they_are(state).await;
     hold_the_account_machines(state).await;
-    re_pair_changed_hosts(state, &known, &presented).await;
+    re_pair_changed_hosts(state, known.as_deref(), &presented).await;
 
     emit_snapshot(app, state).await;
     fetch_app_lists(app, state).await;
@@ -209,22 +213,50 @@ async fn ask_who_they_are(state: &Arc<AppState>) {
     }
 }
 
-/// The certificate the client trusts the host behind `id` by, if any.
+/// What the client holds for a host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stored<'a> {
+    /// No telling: the client's store could not be read, it does not list
+    /// this host, or the device has no id to look it up by yet.
+    Unknown,
+    /// The client lists the host and holds no certificate for it.
+    Missing,
+    /// The certificate the client trusts the host by, as PEM.
+    Cert(&'a str),
+}
+
+impl<'a> Stored<'a> {
+    fn cert(self) -> Option<&'a str> {
+        match self {
+            Stored::Cert(pem) => Some(pem),
+            _ => None,
+        }
+    }
+}
+
+/// What the client holds for the host behind `id`. `known` is `None` when
+/// the client's store could not be read.
 ///
 /// Matched without regard to case: the client and the host both write the
 /// id upper case, so this agrees with the registry's exact match on every
 /// id seen so far, and a host that wrote it otherwise must not lose a PIN
 /// pairing over it.
-fn stored_cert<'a>(known: &'a [KnownHost], id: &str) -> Option<&'a str> {
-    let uniqueid = crate::registry::unique_id_of(id)?;
-    known
-        .iter()
-        .find(|host| {
-            host.uuid
-                .as_deref()
-                .is_some_and(|uuid| uuid.eq_ignore_ascii_case(uniqueid))
-        })
-        .and_then(|host| host.server_cert.as_deref())
+fn stored_cert<'a>(known: Option<&'a [KnownHost]>, id: &str) -> Stored<'a> {
+    let (Some(known), Some(uniqueid)) = (known, crate::registry::unique_id_of(id)) else {
+        return Stored::Unknown;
+    };
+    let host = known.iter().find(|host| {
+        host.uuid
+            .as_deref()
+            .is_some_and(|uuid| uuid.eq_ignore_ascii_case(uniqueid))
+    });
+    match host {
+        None => Stored::Unknown,
+        Some(host) => host
+            .server_cert
+            .as_deref()
+            .map_or(Stored::Missing, Stored::Cert),
+    }
 }
 
 /// What the card says about pairing, given what the probe said.
@@ -234,17 +266,23 @@ fn stored_cert<'a>(known: &'a [KnownHost], id: &str) -> Option<&'a str> {
 /// or a host that has since minted a new certificate. Either way a stream
 /// would fail, so the card must not say paired. A PIN pairing always leaves
 /// the client holding the host's certificate, so it reads as it always did.
+///
+/// Only a settled answer demotes: the client listing the host with no
+/// certificate, or a certificate that differs. Anything Dusk cannot tell
+/// leaves the probe's verdict standing.
 fn shown_pairing(
     probed: PairingState,
-    stored: Option<&str>,
+    stored: Stored<'_>,
     presented: Option<&[u8]>,
 ) -> PairingState {
     if probed != PairingState::Paired {
         return probed;
     }
     match (stored, presented) {
-        (None, _) => PairingState::NotPaired,
-        (Some(stored), Some(presented)) if certificate_changed(stored, presented) => {
+        (Stored::Missing, _) => PairingState::NotPaired,
+        // A stored PEM that does not decode counts as unchanged, on purpose:
+        // the conservative answer when there is nothing to compare.
+        (Stored::Cert(stored), Some(presented)) if certificate_changed(stored, presented) => {
             PairingState::NotPaired
         }
         _ => PairingState::Paired,
@@ -296,6 +334,15 @@ impl RePairs {
     }
 }
 
+/// Ends a re-pair when dropped.
+struct Running<'a>(&'a RePairs, &'a str);
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0.end(self.1);
+    }
+}
+
 /// Pair again, without asking, with any machine of yours that has started
 /// presenting a new certificate.
 ///
@@ -308,7 +355,7 @@ impl RePairs {
 /// here to close, and for as long as the host is streaming to someone.
 async fn re_pair_changed_hosts(
     state: &Arc<AppState>,
-    known: &[KnownHost],
+    known: Option<&[KnownHost]>,
     presented: &HashMap<DeviceId, Vec<u8>>,
 ) {
     if presented.is_empty() {
@@ -328,7 +375,11 @@ async fn re_pair_changed_hosts(
             .machine_id
             .as_deref()
             .is_some_and(|machine| account.contains(machine));
-        if !should_re_pair(on_account, stored_cert(known, &device.id), Some(cert)) {
+        if !should_re_pair(
+            on_account,
+            stored_cert(known, &device.id).cert(),
+            Some(cert),
+        ) {
             continue;
         }
         let Some(address) = device.primary_address.clone() else {
@@ -342,6 +393,9 @@ async fn re_pair_changed_hosts(
         let id = device.id.clone();
         let name = device.name.clone();
         tauri::async_runtime::spawn(async move {
+            // Cleared however this ends, panic included, or the machine
+            // could never be paired again without restarting Dusk.
+            let _running = Running(&state.repairs, &id);
             eprintln!("dusk: {name} has a new certificate; pairing again");
             let paired = crate::cert_pairing::client::pair(
                 &state,
@@ -356,7 +410,6 @@ async fn re_pair_changed_hosts(
                 Ok(false) => eprintln!("dusk: {id} did not pair again by certificate"),
                 Err(err) => eprintln!("dusk: could not pair again with {id}: {err}"),
             }
-            state.repairs.end(&id);
         });
     }
 }
@@ -472,24 +525,70 @@ mod tests {
     #[test]
     fn a_host_trusting_us_that_we_cannot_trust_back_is_not_shown_paired() {
         let stored = pem(STORED);
-        // The host answers paired, but the client has no certificate for it.
+        // The client remembers the host but holds no certificate for it.
         assert_eq!(
-            shown_pairing(PairingState::Paired, None, Some(STORED)),
+            shown_pairing(PairingState::Paired, Stored::Missing, Some(STORED)),
             PairingState::NotPaired
         );
         // The client holds a certificate the host no longer presents.
         assert_eq!(
-            shown_pairing(PairingState::Paired, Some(&stored), Some(MINTED)),
+            shown_pairing(PairingState::Paired, Stored::Cert(&stored), Some(MINTED)),
             PairingState::NotPaired
         );
         // A PIN pairing: both halves agree, and nothing changes.
         assert_eq!(
-            shown_pairing(PairingState::Paired, Some(&stored), Some(STORED)),
+            shown_pairing(PairingState::Paired, Stored::Cert(&stored), Some(STORED)),
             PairingState::Paired
         );
         // Anything the probe did not call paired is left as it said.
         for probed in [PairingState::NotPaired, PairingState::Unknown] {
-            assert_eq!(shown_pairing(probed, None, Some(MINTED)), probed);
+            assert_eq!(shown_pairing(probed, Stored::Missing, Some(MINTED)), probed);
         }
+    }
+
+    fn host(uuid: &str, server_cert: Option<&str>) -> KnownHost {
+        KnownHost {
+            name: "venus".into(),
+            addresses: vec!["192.168.50.149".into()],
+            port: crate::model::DEFAULT_HTTP_PORT,
+            uuid: Some(uuid.into()),
+            server_cert: server_cert.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_store_that_could_not_be_read_leaves_paired_standing() {
+        // A failed read says nothing about the host; demoting on it would
+        // unpair every PIN-paired machine on a platform whose read broke.
+        let stored = stored_cert(None, "sunshine:ABC");
+        assert_eq!(stored, Stored::Unknown);
+        assert_eq!(
+            shown_pairing(PairingState::Paired, stored, Some(STORED)),
+            PairingState::Paired
+        );
+    }
+
+    #[test]
+    fn a_host_the_client_does_not_list_leaves_paired_standing() {
+        let known = [host("OTHER", None)];
+        for id in ["sunshine:ABC", "addr:192.168.50.149:47989"] {
+            let stored = stored_cert(Some(&known), id);
+            assert_eq!(stored, Stored::Unknown, "{id}");
+            assert_eq!(
+                shown_pairing(PairingState::Paired, stored, Some(STORED)),
+                PairingState::Paired
+            );
+        }
+    }
+
+    #[test]
+    fn the_stored_certificate_is_found_by_uuid_whatever_its_case() {
+        let stored = pem(STORED);
+        let known = [host("abc-1", Some(&stored)), host("DEF-2", None)];
+        assert_eq!(
+            stored_cert(Some(&known), "sunshine:ABC-1"),
+            Stored::Cert(&stored)
+        );
+        assert_eq!(stored_cert(Some(&known), "sunshine:DEF-2"), Stored::Missing);
     }
 }

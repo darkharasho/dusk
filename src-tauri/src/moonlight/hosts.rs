@@ -68,7 +68,16 @@ fn server_pem(raw: &str) -> Option<String> {
 /// not be installed — so this never errors. The grid simply falls back to
 /// mDNS and the address book.
 pub fn load(client: Option<&crate::moonlight::Moonlight>) -> Vec<KnownHost> {
-    assemble(&platform::fields(client))
+    read(client).unwrap_or_default()
+}
+
+/// The host list, or `None` when the store could not be read at all.
+///
+/// The distinction matters to anything that reads a host's absence as a
+/// fact: an empty list is "the client remembers nothing", `None` is "there
+/// is no telling what the client remembers".
+pub fn read(client: Option<&crate::moonlight::Moonlight>) -> Option<Vec<KnownHost>> {
+    platform::fields(client).map(|fields| assemble(&fields))
 }
 
 /// The per-host fields, flattened to `"<index>.<field>"`.
@@ -156,23 +165,18 @@ mod platform {
     ///
     /// One store per user here, so which client was chosen does not change
     /// the answer.
-    pub fn fields(_client: Option<&crate::moonlight::Moonlight>) -> Fields {
-        let Some(path) = store_path() else {
-            return Fields::new();
-        };
-        let Ok(value) = plist::Value::from_file(path) else {
-            return Fields::new();
-        };
-        let Some(dict) = value.into_dictionary() else {
-            return Fields::new();
-        };
+    pub fn fields(_client: Option<&crate::moonlight::Moonlight>) -> Option<Fields> {
+        let value = plist::Value::from_file(store_path()?).ok()?;
+        let dict = value.into_dictionary()?;
 
-        dict.into_iter()
-            .filter_map(|(key, value)| {
-                let rest = key.strip_prefix("hosts.")?;
-                Some((rest.to_string(), scalar(&value)?))
-            })
-            .collect()
+        Some(
+            dict.into_iter()
+                .filter_map(|(key, value)| {
+                    let rest = key.strip_prefix("hosts.")?;
+                    Some((rest.to_string(), scalar(&value)?))
+                })
+                .collect(),
+        )
     }
 
     /// Ports come back as integers, the server certificate as data, and
@@ -200,14 +204,15 @@ mod platform {
     ///
     /// Among that client's own stores the first to remember a host wins: an
     /// empty `[hosts]` is indistinguishable from an absent one, and both are
-    /// worth skipping.
-    pub fn fields(client: Option<&crate::moonlight::Moonlight>) -> Fields {
-        crate::moonlight::linux_stores_for(client)
+    /// worth skipping. `None` only when not one of them could be read.
+    pub fn fields(client: Option<&crate::moonlight::Moonlight>) -> Option<Fields> {
+        let mut read = crate::moonlight::linux_stores_for(client)
             .into_iter()
             .filter_map(|path| std::fs::read_to_string(path).ok())
             .map(|text| super::ini_host_fields(&text))
-            .find(|fields| !fields.is_empty())
-            .unwrap_or_default()
+            .peekable();
+        read.peek()?;
+        Some(read.find(|fields| !fields.is_empty()).unwrap_or_default())
     }
 }
 
@@ -225,10 +230,8 @@ mod platform {
     ///
     /// One store per user here, so which client was chosen does not change
     /// the answer.
-    pub fn fields(_client: Option<&crate::moonlight::Moonlight>) -> Fields {
-        let Ok(hosts) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(SUBKEY) else {
-            return Fields::new();
-        };
+    pub fn fields(_client: Option<&crate::moonlight::Moonlight>) -> Option<Fields> {
+        let hosts = RegKey::predef(HKEY_CURRENT_USER).open_subkey(SUBKEY).ok()?;
 
         let mut out = Fields::new();
         for index in hosts.enum_keys().flatten() {
@@ -241,7 +244,7 @@ mod platform {
                 }
             }
         }
-        out
+        Some(out)
     }
 
     /// Ports are written as DWORDs and everything else as strings, except
@@ -254,18 +257,31 @@ mod platform {
         if let Ok(n) = key.get_value::<u32, _>(name) {
             return Some(n.to_string());
         }
-        let bytes = key.get_raw_value(name).ok()?.bytes;
-        if let Ok(text) = String::from_utf8(bytes.clone()) {
-            return Some(text.trim_end_matches('\0').to_string());
-        }
-        let wide: Vec<u16> = bytes
+        super::binary_text(&key.get_raw_value(name).ok()?.bytes)
+    }
+}
+
+/// Text out of a registry value written as binary: the UTF-16 a string
+/// would be, or UTF-8 as the identity is.
+///
+/// UTF-16 is tried first, and only on its own shape -- even length, every
+/// high byte zero, as ASCII text such as a PEM always is -- because ASCII in
+/// UTF-16LE is also valid UTF-8, just with a NUL after every character.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn binary_text(bytes: &[u8]) -> Option<String> {
+    let wide = !bytes.is_empty()
+        && bytes.len() % 2 == 0
+        && bytes.iter().skip(1).step_by(2).all(|b| *b == 0);
+    let text = if wide {
+        let units: Vec<u16> = bytes
             .chunks_exact(2)
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect();
-        String::from_utf16(&wide)
-            .ok()
-            .map(|text| text.trim_end_matches('\0').to_string())
-    }
+        String::from_utf16(&units).ok()?
+    } else {
+        String::from_utf8(bytes.to_vec()).ok()?
+    };
+    Some(text.trim_end_matches('\0').to_string())
 }
 
 /// Pull the `[hosts]` group out of a QSettings INI file.
@@ -474,6 +490,18 @@ mod tests {
         // Nothing to compare against says nothing about the host, and must
         // not set off a pairing every ten minutes.
         assert!(!certificate_changed("not a certificate", b"anything"));
+    }
+
+    #[test]
+    fn a_binary_registry_value_reads_as_text_in_either_encoding() {
+        let pem = "-----BEGIN CERTIFICATE-----\nMII=\n-----END CERTIFICATE-----\n";
+        let wide: Vec<u8> = pem
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(binary_text(&wide).as_deref(), Some(pem));
+        assert_eq!(binary_text(pem.as_bytes()).as_deref(), Some(pem));
     }
 
     #[test]

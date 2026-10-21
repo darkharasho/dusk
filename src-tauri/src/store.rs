@@ -140,12 +140,15 @@ impl Store {
         }
     }
 
+    /// Write the settings whole, never half: what this file holds includes
+    /// a note that the host owes a restart, and a crash part way through a
+    /// plain write could lose it along with everything else here.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| e.to_string())
+        write_atomically(path, json.as_bytes()).map_err(|e| e.to_string())
     }
 
     pub fn upsert(&mut self, entry: ManualEntry) {
@@ -163,6 +166,48 @@ impl Store {
         self.manual
             .retain(|e| !(e.address.eq_ignore_ascii_case(address) && e.port == port));
     }
+}
+
+/// Replace the file at `path` with `contents` so that it is only ever the
+/// old file or the new one: written to a sibling temp file, flushed to disk,
+/// renamed over it, and the rename itself flushed by syncing the directory.
+/// The old file's permissions are kept, set before any content lands so a
+/// private file is never briefly readable under the default mode.
+pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".dusk-tmp");
+    let tmp = PathBuf::from(tmp);
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.write_all(contents)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    })();
+    if let Err(e) = result {
+        // Not a directory in the way: that is not ours to remove.
+        if tmp.is_file() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return Err(e);
+    }
+    // The rename only survives a crash once the directory holding it is on
+    // disk. Windows has no handle to sync a directory through, and its
+    // rename is already written through by the filesystem. Only logged:
+    // the file has been replaced by now, and a caller told otherwise would
+    // act as though it still held the old contents.
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        if let Err(err) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+            eprintln!("dusk: wrote {path:?} but could not flush its directory: {err}");
+        }
+    }
+    Ok(())
 }
 
 pub fn store_path(config_dir: &Path) -> PathBuf {
@@ -346,6 +391,30 @@ mod tests {
         std::fs::write(&path, "{ not json").unwrap();
         assert!(Store::load(&path).manual.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_save_replaces_the_file_whole_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("dusk-store-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.json");
+        let mut store = Store {
+            restart_owed: true,
+            ..Default::default()
+        };
+        store.save(&path).unwrap();
+        assert!(Store::load(&path).restart_owed);
+        assert!(!dir.join("devices.json.dusk-tmp").exists());
+
+        // A write that cannot be made leaves the file as it was, rather
+        // than half-written over.
+        let before = std::fs::read_to_string(&path).unwrap();
+        std::fs::create_dir(dir.join("devices.json.dusk-tmp")).unwrap();
+        store.restart_owed = false;
+        assert!(store.save(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

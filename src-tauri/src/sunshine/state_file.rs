@@ -6,7 +6,6 @@
 //! `named_devices` entries whose `uuid` Dusk was told about; every other
 //! entry and every field it does not understand is left as it was found.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
@@ -152,30 +151,13 @@ pub fn read(path: &Path) -> Result<Value, StateFileError> {
     serde_json::from_str(&text).map_err(|e| StateFileError::Unreadable(e.to_string()))
 }
 
-/// Write the whole file to a sibling temp file, then rename it into place, so
-/// Sunshine never reads half a file.
+/// Write the whole file to a sibling temp file, flush it, then rename it into
+/// place, so Sunshine never reads half a file and a crash never leaves one.
 pub fn write_atomic(path: &Path, state: &Value) -> Result<(), StateFileError> {
     let text = serde_json::to_string_pretty(state)
         .map_err(|e| StateFileError::Unwritable(e.to_string()))?;
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".dusk-tmp");
-    let tmp = PathBuf::from(tmp);
-    let result = (|| {
-        // The mode is copied before any content lands, so a private file is
-        // never briefly readable under the default mode.
-        let mut file = std::fs::File::create(&tmp)?;
-        if let Ok(meta) = std::fs::metadata(path) {
-            file.set_permissions(meta.permissions())?;
-        }
-        file.write_all(text.as_bytes())?;
-        drop(file);
-        std::fs::rename(&tmp, path)
-    })();
-    if let Err(e) = result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(StateFileError::Unwritable(e.to_string()));
-    }
-    Ok(())
+    crate::store::write_atomically(path, text.as_bytes())
+        .map_err(|e| StateFileError::Unwritable(e.to_string()))
 }
 
 #[cfg(test)]

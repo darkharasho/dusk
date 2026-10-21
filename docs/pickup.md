@@ -6,8 +6,23 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.17 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. `peer::PIN_WINDOW` is now derived —
+**v0.3.18 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. The grid is grouped by account membership: `mine`
+first under "Your machines", everything else under "Other machines on this
+network". The join is `Device::machine_id`, answered by `peer::identify`
+(`Message::Identify`/`Identity`) on the poll tick and checked against
+`AccountState::knows_machine`. **It has to be the id, not the name** — this
+Mac is `Michaels-Mini` on the account and `Michaels-Mac-mini.local.` over
+mDNS. Three distinct answers, and the distinction is load-bearing: an id
+(check the list), no id (signed out — a settled "not yours"), or a decline
+(too old/not a Dusk — cannot be claimed). `App.tsx` falls back to one
+ungrouped list when nothing is identified, so a signed-out Dusk behaves as
+it always did. **The other half is not done**: a machine on your account
+that is not advertising is still absent from the grid, because the registry
+is still seeded only by discovery. Seeding it from the account's machine
+list via `Registry::insert_prebuilt` is the next piece, and it is what makes
+a host that is off still appear as yours. v0.3.17 derived `peer::PIN_WINDOW`
+from the client's own timeout. `peer::PIN_WINDOW` is now derived —
 `moonlight::cli::PAIR_TIMEOUT - 10s`, so 110s — rather than a number of its
 own. v0.3.16 had raised it from 5s to 30s and that was still short: measured
 on a real pair of machines, a *cold* client took about three minutes to
@@ -169,7 +184,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.17>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.18>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -205,7 +220,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

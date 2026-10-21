@@ -1,5 +1,28 @@
 # Release Notes
 
+Version v0.3.18 — October 21, 2026
+
+The grid says which machines are actually yours.
+
+## Changes
+
+- **"Your machines" now means your machines.** The grid listed everything
+  on the network that can host, under a heading that claimed they were all
+  yours — so someone else's computer looked exactly like one of your own.
+  Machines signed in to your account now come first, and anything else
+  that can host here is listed below as "Other machines on this network".
+  Nothing is hidden: a machine missing entirely would just look like Dusk
+  failing to find it. Pairing with one of those still asks for a PIN, as
+  it always did.
+
+When you are not signed in, Dusk cannot tell whose machines are whose, so
+it shows one list exactly as before.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.17 — October 21, 2026
 
 Pairing works the first time, not the second.

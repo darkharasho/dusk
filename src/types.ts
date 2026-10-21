@@ -59,6 +59,10 @@ export interface Device {
   httpPort: number;
   httpsPort: number;
   source: DeviceSource;
+  /** Its id on its owner's account, when it told us. */
+  machineId?: string;
+  /** True when this machine is on *your* account's list. */
+  mine: boolean;
   /** True when this Dusk is streaming from the machine right now. */
   streamingHere: boolean;
   isSelf: boolean;

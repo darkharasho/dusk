@@ -211,6 +211,26 @@ impl AccountState {
         cached.read = true;
     }
 
+    /// This machine's id on the account, if it is signed in.
+    ///
+    /// The public half of the key this names is already on the account's
+    /// machine list, so this is not a secret — it is the join key another
+    /// Dusk needs to tell whether this machine is one of the same person's.
+    pub async fn machine_id(&self) -> Option<String> {
+        self.load().await.map(|a| a.key.id.clone())
+    }
+
+    /// Is this machine id on your account's list?
+    ///
+    /// False when signed out: with no list to check against, no machine can
+    /// be claimed as yours, which is the right answer rather than a guess.
+    pub async fn knows_machine(&self, machine: &str) -> bool {
+        if self.load().await.is_none() {
+            return false;
+        }
+        self.list.read().await.entries.contains_key(machine)
+    }
+
     /// The message to show when the sign-in has lapsed, if it has.
     ///
     /// Said in full because the alternative is what this cost a day of:

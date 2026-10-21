@@ -12,6 +12,7 @@ use futures_util::future::join_all;
 use tauri::AppHandle;
 
 use crate::applist;
+use crate::model::{DeviceId, Reachability};
 use crate::registry::ProbeOutcome;
 use crate::serverinfo;
 use crate::state::{emit_snapshot, AppState};
@@ -65,6 +66,8 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
         }
     }
 
+    ask_who_they_are(state).await;
+
     emit_snapshot(app, state).await;
     fetch_app_lists(app, state).await;
 }
@@ -101,6 +104,56 @@ async fn fetch_app_lists(app: &AppHandle, state: &Arc<AppState>) {
 
     if changed {
         emit_snapshot(app, state).await;
+    }
+}
+
+/// Ask every reachable machine which one it is, and mark the ones that are
+/// yours.
+///
+/// This is what lets the grid be "your machines" rather than "whatever is
+/// advertising here": the account's machine list is keyed by machine id and
+/// carries no addresses, so the id has to come from the machine itself. A
+/// name cannot stand in for it — this Mac calls itself `Michaels-Mini` on
+/// the account and `Michaels-Mac-mini` over mDNS.
+///
+/// Only machines that answered a probe are asked, and only those Dusk has
+/// not already placed. A machine that never answers is never asked again on
+/// every tick for nothing.
+async fn ask_who_they_are(state: &Arc<AppState>) {
+    let unknown: Vec<(DeviceId, String)> = state
+        .registry
+        .read()
+        .await
+        .devices()
+        .into_iter()
+        .filter(|d| !d.is_self && d.machine_id.is_none() && !d.mine)
+        .filter(|d| matches!(d.reachability, Reachability::Online { .. }))
+        .filter_map(|d| d.primary_address.clone().map(|a| (d.id, a)))
+        .collect();
+    if unknown.is_empty() {
+        return;
+    }
+
+    let asked = join_all(unknown.into_iter().map(|(id, address)| async move {
+        let host = crate::peer::host_part(&address).to_string();
+        let answer = crate::peer::identify(&host).await;
+        (id, answer)
+    }))
+    .await;
+
+    for (id, answer) in asked {
+        let Some((machine, _name)) = answer else {
+            continue;
+        };
+        let mine = match &machine {
+            Some(m) => state.account.knows_machine(m).await,
+            None => false,
+        };
+        state
+            .registry
+            .write()
+            .await
+            .set_identity(&id, machine, mine);
     }
 }
 

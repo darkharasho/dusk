@@ -85,6 +85,19 @@ pub struct Device {
     pub http_port: u16,
     pub https_port: u16,
     pub source: DeviceSource,
+    /// The machine's id on its owner's account, as it told us over the peer
+    /// port. `None` when it is not a Dusk, is signed out, or is too old to
+    /// answer — all of which mean the same thing to the grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    /// Whether this machine is on *your* account's list.
+    ///
+    /// The grid's organising idea: your machines are the ones you signed in,
+    /// not whatever happens to be advertising on this network. Matched on
+    /// [`Device::machine_id`] rather than on a name, because names differ --
+    /// this Mac is `Michaels-Mini` on the account and `Michaels-Mac-mini`
+    /// over mDNS.
+    pub mine: bool,
     pub is_self: bool,
     pub reachability: Reachability,
     pub pairing: PairingState,
@@ -119,6 +132,8 @@ impl Device {
             http_port: DEFAULT_HTTP_PORT,
             https_port: DEFAULT_HTTPS_PORT,
             source: DeviceSource::default(),
+            machine_id: None,
+            mine: false,
             is_self: false,
             reachability: Reachability::Unknown,
             pairing: PairingState::Unknown,

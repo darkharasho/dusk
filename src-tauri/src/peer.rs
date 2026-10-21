@@ -112,6 +112,25 @@ pub enum Message {
         width: u32,
         height: u32,
     },
+    /// Which machine is this?
+    ///
+    /// Asked so the grid can be the machines on your account rather than
+    /// whatever is advertising on the network. The account's machine list is
+    /// keyed by machine id and carries no addresses, so something has to
+    /// join the two, and a name will not do it: this Mac is `Michaels-Mini`
+    /// on the account and advertises itself over mDNS as
+    /// `Michaels-Mac-mini.local.`. The id is the key the list is already
+    /// built on.
+    Identify,
+    /// Nothing secret. The id's public half is already published to the
+    /// account's machine list, and the name is what the machine calls itself
+    /// on the network. A machine that is signed out has no id and says so,
+    /// which reads as "not one of yours" rather than as an error.
+    Identity {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +244,10 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
                 None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
             }
         }
+        Ok(Message::Identify) => Message::Identity {
+            machine: state.account.machine_id().await,
+            name: host_name(),
+        },
         Ok(Message::Display { screen }) => match display_answer(&app, &state, screen).await {
             Some((width, height)) => Message::DisplaySize { width, height },
             None => Message::Declined {
@@ -530,6 +553,36 @@ async fn display_size_at(
     }
 }
 
+/// Who is the Dusk at `address`?
+///
+/// `None` when nothing answers, or when a Dusk too old to know the question
+/// does. That is not a failure: a machine Dusk cannot identify is simply one
+/// the grid cannot claim as yours, which is the honest answer rather than a
+/// guess from its name.
+pub async fn identify(address: &str) -> Option<(Option<String>, String)> {
+    identify_at(address, PORT).await
+}
+
+async fn identify_at(address: &str, port: u16) -> Option<(Option<String>, String)> {
+    // Asked on the poll tick for every machine, so it must never be the slow
+    // part of one. A machine that does not answer in two seconds is one the
+    // grid shows as it did before.
+    let budget = Duration::from_secs(2);
+    let connect = TcpStream::connect((address, port));
+    let stream = tokio::time::timeout(budget, connect).await.ok()?.ok()?;
+    let (read, mut write) = stream.into_split();
+    send(&mut write, &Message::Identify).await.ok()?;
+    let mut lines = BufReader::new(read.take(MAX_LINE as u64)).lines();
+    let line = tokio::time::timeout(budget, lines.next_line())
+        .await
+        .ok()?
+        .ok()??;
+    match serde_json::from_str::<Message>(&line).ok()? {
+        Message::Identity { machine, name } => Some((machine, name)),
+        _ => None,
+    }
+}
+
 // ------------------------------------------------------------------ helpers
 
 /// The host part of an address as the grid stores it, which may carry
@@ -737,8 +790,9 @@ mod tests {
         assert_eq!(serde_json::from_str::<Old>(&line).unwrap(), Old::Display);
     }
 
-    /// A stand-in host that answers one request with `reply`.
-    async fn host_answering(reply: &'static str) -> u16 {
+    /// A stand-in host that answers one request with `reply`, checking that
+    /// what it was asked matches `expect`.
+    async fn host_expecting(expect: fn(&Message) -> bool, reply: &'static str) -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -746,14 +800,22 @@ mod tests {
             let (read, mut write) = stream.into_split();
             let mut lines = BufReader::new(read).lines();
             let line = lines.next_line().await.unwrap().unwrap();
-            assert!(matches!(
-                serde_json::from_str::<Message>(&line).unwrap(),
-                Message::Display { .. }
-            ));
+            let asked = serde_json::from_str::<Message>(&line).unwrap();
+            assert!(expect(&asked), "host was asked {asked:?}");
             write.write_all(reply.as_bytes()).await.unwrap();
             write.write_all(b"\n").await.unwrap();
         });
         port
+    }
+
+    /// A stand-in host for the display question.
+    async fn host_answering(reply: &'static str) -> u16 {
+        host_expecting(|m| matches!(m, Message::Display { .. }), reply).await
+    }
+
+    /// A stand-in host for the identity question.
+    async fn host_identifying(reply: &'static str) -> u16 {
+        host_expecting(|m| matches!(m, Message::Identify), reply).await
     }
 
     #[tokio::test]
@@ -763,6 +825,46 @@ mod tests {
             display_size_at("127.0.0.1", port, Some((3440, 1440))).await,
             Some((3440, 1440))
         );
+    }
+
+    #[tokio::test]
+    async fn a_machine_says_which_one_it_is() {
+        // The join key for "is this one of mine": the account's machine list
+        // is keyed by this id and carries no addresses, so the grid cannot
+        // match a discovered host to it any other way.
+        let port = host_identifying(
+            r#"{"type":"identity","machine":"8717645a43edf635","name":"Michaels-Mini"}"#,
+        )
+        .await;
+        assert_eq!(
+            identify_at("127.0.0.1", port).await,
+            Some((Some("8717645a43edf635".into()), "Michaels-Mini".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_machine_identifies_without_claiming_an_account() {
+        // Answering with no id is the honest "not one of yours", and has to
+        // stay distinguishable from no answer at all.
+        let port = host_identifying(r#"{"type":"identity","name":"someone-elses-pc"}"#).await;
+        assert_eq!(
+            identify_at("127.0.0.1", port).await,
+            Some((None, "someone-elses-pc".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dusk_too_old_to_know_the_question_is_not_an_error() {
+        // It declines, as it does for any message it does not recognise.
+        // That must read as "cannot be claimed as yours", never as a fault:
+        // the name is all such a machine can offer and names do not match
+        // (this Mac is Michaels-Mini on the account, Michaels-Mac-mini on
+        // the network).
+        let port = host_identifying(
+            r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
+        )
+        .await;
+        assert_eq!(identify_at("127.0.0.1", port).await, None);
     }
 
     #[tokio::test]

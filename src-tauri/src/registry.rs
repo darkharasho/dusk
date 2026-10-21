@@ -149,6 +149,18 @@ impl Registry {
         self.devices.values().cloned().collect()
     }
 
+    /// Record what a machine answered when asked which one it is.
+    ///
+    /// Kept even when it says it has no account: "asked and has none" is a
+    /// different state from "never answered", and only the first is a
+    /// settled answer about whether the machine is yours.
+    pub fn set_identity(&mut self, id: &str, machine_id: Option<String>, mine: bool) {
+        if let Some(device) = self.devices.get_mut(id) {
+            device.machine_id = machine_id;
+            device.mine = mine;
+        }
+    }
+
     /// Everything that should be polled: all remote devices with an address,
     /// as `(id, addresses, http port, tls port)`.
     pub fn probe_targets(&self) -> Vec<(DeviceId, Vec<String>, u16, u16)> {

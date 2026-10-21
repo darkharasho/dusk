@@ -18,6 +18,7 @@
 
 pub mod github;
 pub mod keys;
+pub mod sealed;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::state::AppState;
 use github::{Entry, Poll, User};
 use keys::MachineKey;
+use sealed::BoxKey;
 
 pub const ACCOUNT_EVENT: &str = "dusk://account";
 
@@ -71,6 +73,10 @@ struct Stored {
     refresh: Option<String>,
     #[serde(default)]
     expires_at: Option<u64>,
+    /// Defaulted, so an entry written before sealing loads and simply mints
+    /// a key the next time this machine publishes.
+    #[serde(default)]
+    box_key: Option<String>,
 }
 
 #[derive(Clone)]
@@ -78,6 +84,10 @@ struct Account {
     tokens: github::Tokens,
     user: User,
     key: MachineKey,
+    /// For receiving sealed addresses. Minted alongside the signing key, and
+    /// kept with it: losing one without the other leaves a machine that can
+    /// prove who it is but cannot be told anything.
+    box_key: sealed::BoxKey,
     list: Option<String>,
 }
 
@@ -91,12 +101,20 @@ impl Account {
             list: self.list.clone(),
             refresh: self.tokens.refresh.clone(),
             expires_at: self.tokens.expires_at,
+            box_key: Some(self.box_key.to_hex()),
         }
     }
 
     fn from_stored(s: Stored) -> Result<Self, String> {
         Ok(Self {
             key: MachineKey::from_parts(s.machine, &s.key)?,
+            // A machine signed in before sealing has none; minting one here
+            // costs nothing and is published the next time it publishes.
+            box_key: s
+                .box_key
+                .as_deref()
+                .and_then(sealed::BoxKey::from_hex)
+                .map_or_else(sealed::BoxKey::generate, Ok)?,
             tokens: github::Tokens {
                 access: s.token,
                 refresh: s.refresh,
@@ -245,24 +263,69 @@ impl AccountState {
         if here.is_empty() {
             return;
         }
-        // Compared against what the list already says, which is why this
-        // runs after the list has been read rather than at sign-in only.
-        let published = self
-            .list
-            .read()
-            .await
-            .entries
-            .get(&account.key.id)
-            .map(|e| e.addresses.clone())
-            .unwrap_or_default();
-        if published == here {
+
+        // Everyone on the account that published a key to receive with,
+        // ourselves included: this machine reads its own entry back like any
+        // other, and a machine that cannot receive is skipped rather than
+        // holding up the rest.
+        let recipients: Vec<(String, String)> = {
+            let list = self.list.read().await;
+            let mut r: Vec<(String, String)> = list
+                .entries
+                .iter()
+                .filter_map(|(id, e)| e.box_key.clone().map(|k| (id.clone(), k)))
+                .collect();
+            if !r.iter().any(|(id, _)| id == &account.key.id) {
+                r.push((account.key.id.clone(), account.box_key.public_hex()));
+            }
+            r
+        };
+
+        // Republished when the addresses change, or when someone new joined
+        // the account and has no box of ours yet. Never on a timer: that
+        // would be a heartbeat, and a heartbeat is a rendezvous service with
+        // extra steps.
+        let (published, addressed): (Vec<String>, usize) = {
+            let list = self.list.read().await;
+            match list.entries.get(&account.key.id) {
+                Some(e) => (
+                    e.sealed
+                        .as_ref()
+                        .and_then(|env| sealed::open(env, &account.box_key, &account.key.id))
+                        .and_then(|raw| serde_json::from_slice::<Vec<String>>(&raw).ok())
+                        .unwrap_or_default(),
+                    e.sealed.as_ref().map_or(0, |env| env.to.len()),
+                ),
+                None => (Vec::new(), 0),
+            }
+        };
+        if published == here && addressed == recipients.len() {
             return;
         }
+
+        let payload = match serde_json::to_vec(&here) {
+            Ok(payload) => payload,
+            Err(err) => {
+                eprintln!("dusk: could not prepare this machine's addresses: {err}");
+                return;
+            }
+        };
+        let envelope = match sealed::seal(&payload, &recipients) {
+            Ok(envelope) => envelope,
+            Err(err) => {
+                eprintln!("dusk: could not seal this machine's addresses: {err}");
+                return;
+            }
+        };
 
         let entry = Entry {
             name: crate::peer::host_name(),
             key: account.key.public_hex(),
-            addresses: here,
+            // Never written in the clear again; only read, for entries
+            // published before sealing existed.
+            addresses: Vec::new(),
+            box_key: Some(account.box_key.public_hex()),
+            sealed: Some(envelope),
             updated: Some(github::now_unix()),
         };
         match github::publish(
@@ -285,12 +348,32 @@ impl AccountState {
         }
     }
 
+    /// What a machine said about where it answers, read back.
+    ///
+    /// Sealed first; the plaintext field is only ever read, for entries
+    /// published before sealing existed. Signed out, or with no box for this
+    /// machine, there is nothing to read and the grid falls back to whatever
+    /// discovery found — which is what it did before any of this.
+    fn addresses_from(&self, entry: &Entry, account: Option<&Account>) -> Vec<String> {
+        if let Some(account) = account {
+            if let Some(envelope) = &entry.sealed {
+                if let Some(raw) = sealed::open(envelope, &account.box_key, &account.key.id) {
+                    if let Ok(addresses) = serde_json::from_slice::<Vec<String>>(&raw) {
+                        return addresses;
+                    }
+                }
+            }
+        }
+        entry.addresses.clone()
+    }
+
     /// Every machine on the account's list, as `(id, name)`.
     ///
     /// The grid's source of truth for "yours". Empty when signed out or
     /// before the list has been read, which the caller must treat as "not
     /// known yet" rather than as "you own nothing".
     pub async fn machines_on_account(&self) -> Vec<AccountMachine> {
+        let account = self.load().await;
         self.list
             .read()
             .await
@@ -299,7 +382,7 @@ impl AccountState {
             .map(|(id, entry)| AccountMachine {
                 id: id.clone(),
                 name: entry.name.clone(),
-                addresses: entry.addresses.clone(),
+                addresses: self.addresses_from(entry, account.as_ref()),
             })
             .collect()
     }
@@ -553,10 +636,19 @@ pub(crate) async fn finish(
         _ => MachineKey::generate()?,
     };
     let list = github::find_list(http, &token).await?;
+    // Carried across a re-sign-in with the signing key, for the same
+    // reason: a new one would make every box already addressed to this
+    // machine unreadable.
+    let box_key = match account.load().await {
+        Some(old) if old.user.id == user.id => old.box_key,
+        _ => BoxKey::generate()?,
+    };
     let entry = Entry {
         name: crate::peer::host_name(),
         key: key.public_hex(),
-        addresses: crate::reachable_addresses(),
+        addresses: Vec::new(),
+        box_key: Some(box_key.public_hex()),
+        sealed: None,
         updated: Some(github::now_unix()),
     };
     let list = github::publish(http, &token, list.as_deref(), &key.id, &entry).await?;
@@ -565,6 +657,7 @@ pub(crate) async fn finish(
             tokens,
             user: user.clone(),
             key,
+            box_key,
             list: Some(list),
         }))
         .await;
@@ -630,6 +723,8 @@ mod tests {
                 name: "Desk".into(),
                 key: key.public_hex(),
                 addresses: Vec::new(),
+                box_key: None,
+                sealed: None,
                 updated: None,
             },
         )])

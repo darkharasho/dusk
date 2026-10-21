@@ -36,6 +36,11 @@ getrandom = "0.2"
 # rustls.
 ring = "0.17"
 if-addrs = "0.13"
+# Sealing the addresses a machine publishes to its account, so a secret gist
+# holds ciphertext rather than a map of someone's network. ring's X25519 is
+# ephemeral-only by design and a recipient's key has to outlive the message,
+# which is the one thing it will not do.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 # The Sunshine web-UI password belongs in the OS keystore, not a JSON file.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 # Opening at sign-in: a launch agent, a Run key or an autostart file, each

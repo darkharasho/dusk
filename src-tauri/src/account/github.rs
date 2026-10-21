@@ -74,8 +74,19 @@ pub struct Entry {
     ///
     /// Defaulted so an entry written before this still loads; such a machine
     /// is simply one with no published addresses.
+    /// Only ever read, never written, since v0.3.21: entries published
+    /// before sealing existed put the addresses here in the clear.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub addresses: Vec<String>,
+    /// This machine's public key for receiving sealed messages, hex. Absent
+    /// on a machine that has not signed in since sealing arrived; such a
+    /// machine cannot be sent addresses and is skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_key: Option<String>,
+    /// The addresses, sealed to every machine on the account that published
+    /// a box key. See [`crate::account::sealed`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<crate::account::sealed::Envelope>,
     /// Unix seconds, so a reader can prefer the freshest of two answers.
     /// Written when the addresses change, never on a timer: a heartbeat
     /// would be a rendezvous service with extra steps.
@@ -492,6 +503,8 @@ mod tests {
                 name: "Desk".into(),
                 key: "00ff".into(),
                 addresses: Vec::new(),
+                box_key: None,
+                sealed: None,
                 updated: None,
             }
         );

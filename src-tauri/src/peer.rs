@@ -230,7 +230,7 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
             // A dropped connection means the asking side gave up; the
             // prompt should go with it.
             let gone = async { while let Ok(Some(_)) = lines.next_line().await {} };
-            match pair_for_account(&state, &pin, &name, proof.as_ref()).await {
+            match pair_for_account(&state, &address, &pin, &name, proof.as_ref()).await {
                 Some(reply) => reply,
                 // A host that is not set up yet gets past this, so that
                 // `handle_pair` can say that instead, which is the real reason.
@@ -301,6 +301,7 @@ fn host_display(app: &AppHandle) -> Option<(u32, u32)> {
 /// answered when both were signed in. `None` means ask as usual.
 async fn pair_for_account(
     state: &Arc<AppState>,
+    address: &str,
     pin: &str,
     name: &str,
     proof: Option<&crate::account::Proof>,
@@ -311,7 +312,7 @@ async fn pair_for_account(
         return None;
     }
     eprintln!("dusk: {name} is on this account; pairing without asking");
-    Some(match enter_pin(&credentials, pin, name).await {
+    Some(match enter_pin(&credentials, address, pin, name).await {
         Ok(()) => Message::Accepted,
         Err(err) => Message::Declined {
             reason: err.to_string(),
@@ -368,7 +369,7 @@ async fn handle_pair(
         };
     }
 
-    match enter_pin(&credentials, pin, name).await {
+    match enter_pin(&credentials, address, pin, name).await {
         Ok(()) => Message::Accepted,
         Err(err) => Message::Declined {
             reason: err.to_string(),
@@ -430,6 +431,7 @@ const PIN_WINDOW: Duration =
 /// cost every pairing on a machine whose client is slow to start.
 async fn enter_pin(
     credentials: &sunshine::Credentials,
+    address: &str,
     pin: &str,
     name: &str,
 ) -> Result<(), sunshine::ApiError> {
@@ -437,7 +439,7 @@ async fn enter_pin(
     let deadline = tokio::time::Instant::now() + PIN_WINDOW;
     let mut last = None;
     while tokio::time::Instant::now() < deadline {
-        match api.submit_pin(credentials, pin, name).await {
+        match api.submit_pin(credentials, pin, name, Some(address)).await {
             Ok(()) => return Ok(()),
             Err(sunshine::ApiError::Unauthorized) => return Err(sunshine::ApiError::Unauthorized),
             Err(err) => last = Some(err),

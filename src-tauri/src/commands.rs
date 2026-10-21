@@ -605,7 +605,9 @@ pub async fn accept_pin(
 
     SunshineApi::new(sunshine::api::DEFAULT_PORT)
         .map_err(|e| e.to_string())?
-        .submit_pin(&credentials, &pin, &name)
+        // No address to go on: this PIN was typed in by hand, not carried by
+        // a peer request, so every waiting pairing is offered it.
+        .submit_pin(&credentials, &pin, &name, None)
         .await
         .map_err(|e| e.to_string())?;
 

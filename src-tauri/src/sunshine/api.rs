@@ -15,6 +15,11 @@
 //!   whether or not your credentials are right. Anything probing this
 //!   endpoint has to set the header or it will misread a content-type
 //!   complaint as a working, unauthenticated endpoint.
+//! - A 2026 host holds each pairing request under an id, lists them at
+//!   `GET /api/pin`, and **refuses a POST that does not name one**. An
+//!   older host has no such list. This is the one call here that has
+//!   actually changed shape under us, so it reads the host's answer to
+//!   decide which contract it is talking to rather than assuming either.
 
 use std::time::Duration;
 
@@ -61,6 +66,68 @@ struct ApiReply {
     error: Option<String>,
 }
 
+/// A pairing request the host is holding, as `GET /api/pin` lists it.
+///
+/// The id is minted per request and is not stable across attempts — the same
+/// client asking twice is two different ids — so it has to be read
+/// immediately before it is used rather than remembered.
+#[derive(Debug, Deserialize)]
+struct Pending {
+    id: String,
+    #[serde(default)]
+    address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PendingReply {
+    pairings: Option<Vec<Pending>>,
+}
+
+/// Which pairing requests the host is holding, or `None` if this host does
+/// not name them — a Sunshine from before the endpoint existed.
+fn pending_from(status: reqwest::StatusCode, body: &str) -> Option<Vec<Pending>> {
+    if !status.is_success() {
+        return None;
+    }
+    serde_json::from_str::<PendingReply>(body)
+        .ok()
+        .and_then(|reply| reply.pairings)
+}
+
+/// What a PIN submission sends. `pairing_id` is left out rather than sent
+/// empty: an older Sunshine has no field for it.
+fn pin_body(pin: &str, device_name: &str, pairing_id: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({ "pin": pin, "name": device_name });
+    if let (Some(id), Some(map)) = (pairing_id, body.as_object_mut()) {
+        map.insert("pairing_id".into(), id.into());
+    }
+    body
+}
+
+/// The requests worth offering the PIN to, nearest guess first.
+///
+/// `from` is the address the asking machine reached this one on, which the
+/// host reports for each waiting request. It is a hint and not a filter: the
+/// two are chosen independently — a machine with several addresses may
+/// appear under one here and another there — so when nothing matches, every
+/// waiting request is tried. The PIN is what actually decides; a request
+/// that is not the right one answers `status: false` and costs one call.
+fn candidates(pairings: &[Pending], from: Option<&str>) -> Vec<String> {
+    let matching: Vec<String> = from
+        .map(|from| {
+            pairings
+                .iter()
+                .filter(|p| p.address == from)
+                .map(|p| p.id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !matching.is_empty() {
+        return matching;
+    }
+    pairings.iter().map(|p| p.id.clone()).collect()
+}
+
 impl SunshineApi {
     /// `danger_accept_invalid_certs` is unavoidable: Sunshine generates its
     /// own certificate and there is no authority to check it against. The
@@ -85,13 +152,85 @@ impl SunshineApi {
     /// This is the half of pairing that is Sunshine's web page today. Doing
     /// it here is what makes hosting and connecting stop feeling like two
     /// programs.
+    ///
+    /// Sunshine grew a second step here. A host from 2026 holds each pairing
+    /// request under an id, lists them at `GET /api/pin`, and **refuses a
+    /// POST that does not name one** — `400 pairing_id must contain exactly
+    /// 32 hexadecimal characters`, whatever the PIN. So the id is read first
+    /// and the PIN offered against it. Measured on 2026.914.233613; an older
+    /// host does not list them and is posted to as before, which is why
+    /// `pending_pairings` answers `None` rather than failing.
+    ///
+    /// `from` is the address the machine asking to pair was reached from,
+    /// used to pick between several waiting requests. `None` when nobody
+    /// knows, as when the PIN was typed in by hand.
     pub async fn submit_pin(
         &self,
         credentials: &Credentials,
         pin: &str,
         device_name: &str,
+        from: Option<&str>,
     ) -> Result<(), ApiError> {
-        let body = serde_json::json!({ "pin": pin, "name": device_name });
+        let Some(pairings) = self.pending_pairings(credentials).await? else {
+            return self.post_pin(credentials, pin, device_name, None).await;
+        };
+
+        // Nobody is waiting yet. The client is a Qt application that takes
+        // its time, so this is the ordinary case on the first attempts and
+        // the caller retries; see `peer::enter_pin`.
+        if pairings.is_empty() {
+            return Err(ApiError::Failed(
+                "No device is waiting to pair with this machine yet.".into(),
+            ));
+        }
+
+        let mut last = None;
+        for id in candidates(&pairings, from) {
+            match self
+                .post_pin(credentials, pin, device_name, Some(&id))
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(ApiError::Unauthorized) => return Err(ApiError::Unauthorized),
+                Err(err) => last = Some(err),
+            }
+        }
+        Err(last.unwrap_or(ApiError::Failed(
+            "That PIN was not accepted. It may have expired.".into(),
+        )))
+    }
+
+    /// The pairing requests the host is holding. `None` means this host does
+    /// not name them, so a PIN can be posted without one.
+    async fn pending_pairings(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<Option<Vec<Pending>>, ApiError> {
+        let response = self
+            .client
+            .get(self.url("/api/pin"))
+            .basic_auth(&credentials.username, Some(&credentials.password))
+            .timeout(TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized);
+        }
+        let text = response.text().await.unwrap_or_default();
+        Ok(pending_from(status, &text))
+    }
+
+    async fn post_pin(
+        &self,
+        credentials: &Credentials,
+        pin: &str,
+        device_name: &str,
+        pairing_id: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let body = pin_body(pin, device_name, pairing_id);
 
         let response = self
             .client
@@ -402,6 +541,77 @@ mod tests {
         assert_eq!(config.len(), 2);
         assert!(config.contains_key("sunshine_name"));
         assert!(config.contains_key("qp"));
+    }
+
+    #[test]
+    fn a_host_that_lists_pairings_is_told_apart_from_one_that_does_not() {
+        // Exactly what 2026.914.233613 answers to `GET /api/pin`.
+        let listed = pending_from(
+            reqwest::StatusCode::OK,
+            r#"{"pairings":[{"address":"192.168.50.34",
+                "id":"e36bd7f43066d08106f41ae394dc9eaf","name":"roth"}]}"#,
+        )
+        .expect("a host that names its pairings");
+        assert_eq!(listed[0].id, "e36bd7f43066d08106f41ae394dc9eaf");
+        assert_eq!(listed[0].address, "192.168.50.34");
+
+        // Nobody waiting is still an answer, and a different one from "this
+        // host does not name them": the first is retried, the second is
+        // posted to the old way.
+        assert_eq!(
+            pending_from(reqwest::StatusCode::OK, r#"{"pairings":[]}"#)
+                .expect("an answer")
+                .len(),
+            0
+        );
+
+        // An older Sunshine: no such endpoint, or some other shape.
+        assert!(pending_from(
+            reqwest::StatusCode::NOT_FOUND,
+            r#"{"error":"Not Found","status_code":404}"#
+        )
+        .is_none());
+        assert!(pending_from(reqwest::StatusCode::OK, r#"{"status":true}"#).is_none());
+        assert!(pending_from(reqwest::StatusCode::OK, "not json at all").is_none());
+    }
+
+    #[test]
+    fn the_address_narrows_the_pairings_but_never_rules_them_all_out() {
+        let pairings = vec![
+            Pending {
+                id: "a".repeat(32),
+                address: "192.168.50.34".into(),
+            },
+            Pending {
+                id: "b".repeat(32),
+                address: "192.168.50.146".into(),
+            },
+        ];
+
+        assert_eq!(
+            candidates(&pairings, Some("192.168.50.34")),
+            vec!["a".repeat(32)]
+        );
+
+        // The address the peer request came from and the one the host saw
+        // the client on are chosen independently — a machine with two
+        // addresses can show up under either. Matching nothing must not mean
+        // pairing nothing; the PIN decides instead.
+        assert_eq!(candidates(&pairings, Some("10.0.0.1")).len(), 2);
+        assert_eq!(candidates(&pairings, None).len(), 2);
+    }
+
+    #[test]
+    fn a_pairing_id_is_sent_only_when_there_is_one() {
+        // A host that lists pairings refuses a POST without an id — 400,
+        // whatever the PIN — and an older one has no field for it.
+        let with = pin_body("1234", "Michaels-Mini", Some(&"e".repeat(32)));
+        assert_eq!(with["pairing_id"], serde_json::json!("e".repeat(32)));
+        assert_eq!(with["pin"], serde_json::json!("1234"));
+        assert_eq!(with["name"], serde_json::json!("Michaels-Mini"));
+
+        let without = pin_body("1234", "Michaels-Mini", None);
+        assert!(without.get("pairing_id").is_none());
     }
 
     #[test]

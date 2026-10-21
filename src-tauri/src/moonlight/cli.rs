@@ -1114,21 +1114,30 @@ mod tests {
 
     /// An executable script at a fresh path in the temp directory.
     ///
-    /// Written under another name and renamed into place, so the path that
-    /// is run was never open for writing: executing a file that still is
-    /// fails with "text file busy".
+    /// Copied into place by a child process, so this process never holds the
+    /// file open for writing. Writing it here, even under another name and
+    /// renamed, lost a race: another test forking while the write was open
+    /// hands its child a copy of that descriptor, and until the child execs,
+    /// running the script fails with "text file busy". A rename keeps the
+    /// same file, so it does not help; a copy made elsewhere does.
     #[cfg(unix)]
     fn a_script(name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir();
         let path = dir.join(format!("dusk-fake-client-{name}-{}", std::process::id()));
-        let staging = dir.join(format!(
-            "dusk-fake-client-{name}-{}.partial",
+        let source = dir.join(format!(
+            "dusk-fake-client-{name}-{}.source",
             std::process::id()
         ));
-        std::fs::write(&staging, body).unwrap();
-        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::rename(&staging, &path).unwrap();
+        std::fs::write(&source, body).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let installed = std::process::Command::new("install")
+            .args(["-m", "0755"])
+            .arg(&source)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(installed.success(), "could not install {}", path.display());
+        let _ = std::fs::remove_file(&source);
         path
     }
 

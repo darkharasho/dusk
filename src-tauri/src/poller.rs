@@ -216,10 +216,11 @@ async fn ask_who_they_are(state: &Arc<AppState>) {
 /// What the client holds for a host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stored<'a> {
-    /// No telling: the client's store could not be read, it does not list
-    /// this host, or the device has no id to look it up by yet.
+    /// No telling: the client's store could not be read or came back
+    /// empty, or the device has no id to look it up by yet.
     Unknown,
-    /// The client lists the host and holds no certificate for it.
+    /// The client holds no certificate for the host: it lists the host
+    /// without one, or lists other hosts and not this one.
     Missing,
     /// The certificate the client trusts the host by, as PEM.
     Cert(&'a str),
@@ -237,6 +238,12 @@ impl<'a> Stored<'a> {
 /// What the client holds for the host behind `id`. `known` is `None` when
 /// the client's store could not be read.
 ///
+/// A host the list leaves out counts as missing only when the list has
+/// other hosts in it. A PIN pairing always writes the host into this list,
+/// so a list that was found and holds hosts, just not this one, is a
+/// pairing the client never finished. An empty list may be the wrong file
+/// or a read that silently came back with nothing, so it settles nothing.
+///
 /// Matched without regard to case: the client and the host both write the
 /// id upper case, so this agrees with the registry's exact match on every
 /// id seen so far, and a host that wrote it otherwise must not lose a PIN
@@ -245,13 +252,16 @@ fn stored_cert<'a>(known: Option<&'a [KnownHost]>, id: &str) -> Stored<'a> {
     let (Some(known), Some(uniqueid)) = (known, crate::registry::unique_id_of(id)) else {
         return Stored::Unknown;
     };
+    if known.is_empty() {
+        return Stored::Unknown;
+    }
     let host = known.iter().find(|host| {
         host.uuid
             .as_deref()
             .is_some_and(|uuid| uuid.eq_ignore_ascii_case(uniqueid))
     });
     match host {
-        None => Stored::Unknown,
+        None => Stored::Missing,
         Some(host) => host
             .server_cert
             .as_deref()
@@ -267,8 +277,8 @@ fn stored_cert<'a>(known: Option<&'a [KnownHost]>, id: &str) -> Stored<'a> {
 /// would fail, so the card must not say paired. A PIN pairing always leaves
 /// the client holding the host's certificate, so it reads as it always did.
 ///
-/// Only a settled answer demotes: the client listing the host with no
-/// certificate, or a certificate that differs. Anything Dusk cannot tell
+/// Only a settled answer demotes: the client holding no certificate for
+/// the host, or one that differs. Anything Dusk cannot tell
 /// leaves the probe's verdict standing.
 fn shown_pairing(
     probed: PairingState,
@@ -569,16 +579,39 @@ mod tests {
     }
 
     #[test]
-    fn a_host_the_client_does_not_list_leaves_paired_standing() {
+    fn a_host_missing_from_the_clients_list_is_not_shown_paired() {
+        // A PIN pairing always writes the host into the client's list, so a
+        // list that has hosts but not this one is the client half missing.
         let known = [host("OTHER", None)];
-        for id in ["sunshine:ABC", "addr:192.168.50.149:47989"] {
-            let stored = stored_cert(Some(&known), id);
-            assert_eq!(stored, Stored::Unknown, "{id}");
-            assert_eq!(
-                shown_pairing(PairingState::Paired, stored, Some(STORED)),
-                PairingState::Paired
-            );
-        }
+        let stored = stored_cert(Some(&known), "sunshine:ABC");
+        assert_eq!(stored, Stored::Missing);
+        assert_eq!(
+            shown_pairing(PairingState::Paired, stored, Some(STORED)),
+            PairingState::NotPaired
+        );
+    }
+
+    #[test]
+    fn an_empty_list_leaves_paired_standing() {
+        // Empty may be the wrong file, or a platform read that came back
+        // with nothing; neither says anything about this host.
+        let stored = stored_cert(Some(&[]), "sunshine:ABC");
+        assert_eq!(stored, Stored::Unknown);
+        assert_eq!(
+            shown_pairing(PairingState::Paired, stored, Some(STORED)),
+            PairingState::Paired
+        );
+    }
+
+    #[test]
+    fn a_device_without_its_id_yet_leaves_paired_standing() {
+        let known = [host("OTHER", None)];
+        let stored = stored_cert(Some(&known), "addr:192.168.50.149:47989");
+        assert_eq!(stored, Stored::Unknown);
+        assert_eq!(
+            shown_pairing(PairingState::Paired, stored, Some(STORED)),
+            PairingState::Paired
+        );
     }
 
     #[test]

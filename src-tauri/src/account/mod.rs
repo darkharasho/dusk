@@ -87,6 +87,16 @@ pub struct AccountMachine {
     pub addresses: Vec<String>,
 }
 
+/// What this machine knows of the account's machine list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Membership {
+    /// Signed in, but no list has been fetched yet.
+    Unknown,
+    SignedOut,
+    /// The ids of the machines the account lists.
+    Machines(std::collections::HashSet<String>),
+}
+
 /// What a signed pairing request carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proof {
@@ -632,17 +642,30 @@ impl AccountState {
 
     /// Sign this pairing request, if this machine is signed in.
     pub async fn proof(&self, pin: &str) -> Option<Proof> {
+        self.sign(&keys::pair_message(pin)).await
+    }
+
+    /// Sign `message` as this machine, if it is signed in.
+    #[allow(dead_code)] // Task 6 onward signs certificate pairings with it.
+    pub async fn sign(&self, message: &[u8]) -> Option<Proof> {
         let account = self.load().await?;
         Some(Proof {
             account: account.user.id,
             machine: account.key.id.clone(),
-            signature: account.key.sign_pair(pin),
+            signature: account.key.sign(message),
         })
     }
 
     /// Whether `proof` shows the request comes from another machine on this
     /// machine's own account.
     pub async fn vouches(&self, http: &reqwest::Client, proof: &Proof, pin: &str) -> bool {
+        self.vouches_for(http, proof, &keys::pair_message(pin))
+            .await
+    }
+
+    /// [`Self::vouches`] over any signed message, not only a PIN.
+    #[allow(dead_code)] // Task 6 onward checks certificate pairings with it.
+    pub async fn vouches_for(&self, http: &reqwest::Client, proof: &Proof, message: &[u8]) -> bool {
         let Some(account) = self.load().await else {
             return false;
         };
@@ -661,16 +684,35 @@ impl AccountState {
                 eprintln!("dusk: could not read the account's machine list: {err}");
             }
         }
-        vouch(account.user.id, &self.list.read().await.entries, proof, pin)
+        vouch(
+            account.user.id,
+            &self.list.read().await.entries,
+            proof,
+            message,
+        )
+    }
+
+    /// Which machines the account lists, as last fetched. A list that was
+    /// never fetched is `Unknown`, not empty: the two must not be confused.
+    #[allow(dead_code)] // Task 6 onward asks it before trusting a pairing.
+    pub async fn membership(&self) -> Membership {
+        if self.load().await.is_none() {
+            return Membership::SignedOut;
+        }
+        let list = self.list.read().await;
+        if list.fetched.is_none() {
+            return Membership::Unknown;
+        }
+        Membership::Machines(list.entries.keys().cloned().collect())
     }
 }
 
 /// The check itself, with nothing to fetch.
-fn vouch(own_account: u64, list: &HashMap<String, Entry>, proof: &Proof, pin: &str) -> bool {
+fn vouch(own_account: u64, list: &HashMap<String, Entry>, proof: &Proof, message: &[u8]) -> bool {
     proof.account == own_account
         && list
             .get(&proof.machine)
-            .is_some_and(|entry| keys::verify_pair(&entry.key, pin, &proof.signature))
+            .is_some_and(|entry| keys::verify(&entry.key, message, &proof.signature))
 }
 
 /// Start signing in. Returns the code to show; the rest happens in the
@@ -870,6 +912,17 @@ mod identity_tests {
         }
     }
 
+    fn entry() -> Entry {
+        Entry {
+            name: "Desk".into(),
+            key: String::new(),
+            addresses: Vec::new(),
+            box_key: None,
+            sealed: None,
+            updated: None,
+        }
+    }
+
     #[test]
     fn signing_in_again_as_yourself_keeps_this_machine() {
         assert!(carries_its_key(Some(42), 42));
@@ -1051,6 +1104,41 @@ mod identity_tests {
     }
 
     #[tokio::test]
+    async fn membership_is_unknown_until_a_list_has_been_fetched() {
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        assert_eq!(state.membership().await, Membership::Unknown);
+
+        let signed_out = with_keystore(|| Ok(None));
+        assert_eq!(signed_out.membership().await, Membership::SignedOut);
+    }
+
+    #[tokio::test]
+    async fn membership_lists_the_machines_once_fetched() {
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        {
+            let mut list = state.list.write().await;
+            list.entries.insert("aa".into(), entry());
+            // Any age counts: an old list still says who was on the account.
+            list.fetched = Some(Instant::now());
+        }
+        assert_eq!(
+            state.membership().await,
+            Membership::Machines(std::collections::HashSet::from(["aa".to_string()]))
+        );
+    }
+
+    #[tokio::test]
+    async fn signing_a_message_is_what_a_pin_proof_signs() {
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        let by_pin = state.proof("1234").await.unwrap();
+        let by_message = state.sign(&keys::pair_message("1234")).await.unwrap();
+        assert_eq!(by_pin, by_message);
+    }
+
+    #[tokio::test]
     async fn load_still_flattens_for_callers_that_degrade() {
         // `load` is deliberately lossy and that is fine for a grid showing
         // signed-out or a pairing falling back to a PIN. The point is that
@@ -1089,13 +1177,23 @@ mod tests {
     #[test]
     fn a_listed_machine_on_the_same_account_is_vouched_for() {
         let key = MachineKey::generate().unwrap();
-        assert!(vouch(7, &listed(&key), &proof(&key, 7, "1234"), "1234"));
+        assert!(vouch(
+            7,
+            &listed(&key),
+            &proof(&key, 7, "1234"),
+            &keys::pair_message("1234")
+        ));
     }
 
     #[test]
     fn another_account_is_not_vouched_for_even_with_a_good_signature() {
         let key = MachineKey::generate().unwrap();
-        assert!(!vouch(7, &listed(&key), &proof(&key, 8, "1234"), "1234"));
+        assert!(!vouch(
+            7,
+            &listed(&key),
+            &proof(&key, 8, "1234"),
+            &keys::pair_message("1234")
+        ));
     }
 
     #[test]
@@ -1106,9 +1204,14 @@ mod tests {
             7,
             &listed(&key),
             &proof(&stranger, 7, "1234"),
-            "1234"
+            &keys::pair_message("1234")
         ));
         // A signature lifted from one pairing does not cover another PIN.
-        assert!(!vouch(7, &listed(&key), &proof(&key, 7, "1234"), "9999"));
+        assert!(!vouch(
+            7,
+            &listed(&key),
+            &proof(&key, 7, "1234"),
+            &keys::pair_message("9999")
+        ));
     }
 }

@@ -8,12 +8,47 @@
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
 
+use sha2::{Digest, Sha256};
+
 use crate::install::download::hex;
+use crate::sunshine::state_file::normalise_pem;
 
 /// What a pairing proof signs. Versioned and prefixed so a signature made
 /// for this can never be mistaken for one made for anything else.
-fn pair_message(pin: &str) -> Vec<u8> {
+pub(crate) fn pair_message(pin: &str) -> Vec<u8> {
     format!("dusk-pair-v1\n{pin}").into_bytes()
+}
+
+fn sha256_hex(pem: &str) -> String {
+    hex(Sha256::digest(normalise_pem(pem).as_bytes()).as_ref())
+}
+
+/// What the client signs to ask a host to trust its certificate. Names the
+/// host so the request cannot be replayed to another, and uses its own prefix
+/// so it can never pass as a reply.
+#[allow(dead_code)] // Task 6 onward builds the pairing messages with it.
+pub fn cert_request_message(client_cert_pem: &str, host_uniqueid: &str) -> Vec<u8> {
+    format!(
+        "dusk-pair-cert-v1\n{host_uniqueid}\n{}",
+        sha256_hex(client_cert_pem)
+    )
+    .into_bytes()
+}
+
+/// What the host signs to say it paired that client, and which certificate
+/// it will stream under.
+#[allow(dead_code)] // Task 6 onward builds the pairing messages with it.
+pub fn cert_reply_message(
+    client_cert_pem: &str,
+    host_uniqueid: &str,
+    server_cert_pem: &str,
+) -> Vec<u8> {
+    format!(
+        "dusk-paired-v1\n{host_uniqueid}\n{}\n{}",
+        sha256_hex(client_cert_pem),
+        sha256_hex(server_cert_pem)
+    )
+    .into_bytes()
 }
 
 #[derive(Clone)]
@@ -63,19 +98,30 @@ impl MachineKey {
         hex(self.pair().public_key().as_ref())
     }
 
+    pub fn sign(&self, message: &[u8]) -> String {
+        hex(self.pair().sign(message).as_ref())
+    }
+
+    #[allow(dead_code)] // Only tests sign a bare PIN now; callers go through `sign`.
     pub fn sign_pair(&self, pin: &str) -> String {
-        hex(self.pair().sign(&pair_message(pin)).as_ref())
+        self.sign(&pair_message(pin))
     }
 }
 
-/// Whether `signature` is `public`'s signature over a pairing with `pin`.
-pub fn verify_pair(public_hex: &str, pin: &str, signature_hex: &str) -> bool {
+/// Whether `signature` is `public`'s signature over `message`.
+pub fn verify(public_hex: &str, message: &[u8], signature_hex: &str) -> bool {
     let (Some(public), Some(signature)) = (unhex(public_hex), unhex(signature_hex)) else {
         return false;
     };
     UnparsedPublicKey::new(&ED25519, public)
-        .verify(&pair_message(pin), &signature)
+        .verify(message, &signature)
         .is_ok()
+}
+
+/// Whether `signature` is `public`'s signature over a pairing with `pin`.
+#[allow(dead_code)] // Only tests verify a bare PIN now; callers go through `verify`.
+pub fn verify_pair(public_hex: &str, pin: &str, signature_hex: &str) -> bool {
+    verify(public_hex, &pair_message(pin), signature_hex)
 }
 
 fn unhex(s: &str) -> Option<Vec<u8>> {
@@ -101,6 +147,56 @@ mod tests {
 
         let other = MachineKey::generate().unwrap();
         assert!(!verify_pair(&other.public_hex(), "1234", &sig));
+    }
+
+    const CERT: &str = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----";
+
+    #[test]
+    fn a_pin_signature_still_verifies_exactly_as_before() {
+        let key = MachineKey::generate().unwrap();
+        let sig = key.sign_pair("1234");
+        assert!(verify_pair(&key.public_hex(), "1234", &sig));
+        assert!(verify(&key.public_hex(), &pair_message("1234"), &sig));
+    }
+
+    #[test]
+    fn a_request_signature_does_not_verify_for_another_host() {
+        let key = MachineKey::generate().unwrap();
+        let sig = key.sign(&cert_request_message(CERT, "H1"));
+        assert!(verify(
+            &key.public_hex(),
+            &cert_request_message(CERT, "H1"),
+            &sig
+        ));
+        assert!(!verify(
+            &key.public_hex(),
+            &cert_request_message(CERT, "H2"),
+            &sig
+        ));
+    }
+
+    #[test]
+    fn a_request_signature_cannot_pass_as_a_reply() {
+        let key = MachineKey::generate().unwrap();
+        let sig = key.sign(&cert_request_message(CERT, "H1"));
+        assert!(!verify(
+            &key.public_hex(),
+            &cert_reply_message(CERT, "H1", CERT),
+            &sig
+        ));
+    }
+
+    #[test]
+    fn crlf_and_lf_copies_of_a_certificate_sign_the_same() {
+        let crlf = CERT.replace('\n', "\r\n") + "\r\n";
+        assert_eq!(
+            cert_request_message(CERT, "H1"),
+            cert_request_message(&crlf, "H1")
+        );
+        assert_eq!(
+            cert_reply_message(CERT, "H1", CERT),
+            cert_reply_message(&crlf, "H1", &crlf)
+        );
     }
 
     #[test]

@@ -1,5 +1,29 @@
 # Release Notes
 
+Version v0.3.20 — October 21, 2026
+
+Your machines are there when you are somewhere else.
+
+## Changes
+
+- **Machines reached over a VPN no longer have to be typed in.** Dusk finds
+  machines by listening to the local network, and that does not reach
+  across a VPN — so away from home your own machines were present in the
+  grid but unreachable, unless you had added their address by hand on every
+  machine you wanted to reach them from. Each machine now tells your
+  account where it answers, and the others try that when the local network
+  turns up nothing.
+
+This uses a VPN you already run — Tailscale, ZeroTier or similar. Dusk
+does not run a server of its own and still cannot reach a machine that is
+not on one. Addresses are shared through the same private list that
+already holds your machines, visible only to your account.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.19 — October 21, 2026
 
 Your machines stay in the grid when they are switched off.

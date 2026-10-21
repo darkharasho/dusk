@@ -6,8 +6,21 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.19 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. The account's machine list now seeds the registry
+**v0.3.20 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It implements step one of `docs/addresses.md`:
+machines publish `addresses`/`updated` into their `github::Entry`, and
+`Registry::sync_account` gives an unfound machine those addresses so it
+reaches `probe_targets` — without that the card is decorative. Read that
+doc before extending this; the two decisions it argues are **encryption**
+(step two, not done — a second X25519 key beside the signing one, because
+Ed25519 signs rather than encrypts) and **staleness** (`updated` is a
+timestamp, written only on change — a timer would be a heartbeat and a
+heartbeat is a rendezvous service with extra steps). `reachable_addresses`
+in `lib.rs` is deliberately *not* `local_addresses`: the latter answers "is
+this me?" and includes loopback, which must never be published. Link-local
+and ULA are dropped too, the latter being what the client already discards
+(`Ignoring ULA:`). LAN and overlay addresses are not told apart on purpose.
+v0.3.19 made the account's list seed the registry. The account's machine list now seeds the registry
 (`Registry::sync_account`, called from the poll tick), so the grid is your
 machines rather than what is advertising: a machine that is off keeps its
 card with `Reachability::Unknown` — deliberately *not* `Offline`, which is
@@ -195,7 +208,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.19>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.20>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -231,7 +244,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

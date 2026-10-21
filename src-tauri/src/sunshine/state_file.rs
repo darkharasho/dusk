@@ -301,7 +301,8 @@ mod tests {
         let path = dir.join("sunshine_state.json");
         write_atomic(&path, &state()).unwrap();
         assert_eq!(read(&path).unwrap(), state());
-        assert!(!dir.join("sunshine_state.json.dusk-tmp").exists());
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1, "no temp file left behind");
         assert!(matches!(
             read(&dir.join("nope.json")),
             Err(StateFileError::Missing)

@@ -33,13 +33,17 @@ its own half:
   sent. Then serverinfo is asked every 250 ms, for up to 20 s, and the host has
   to stop answering at least once and then answer again. Until both happen the
   restart stays owed, removals stay in the settings, and the reply says
-  `ready: false`. The next pass asks again. An answer before the host has gone
-  down is the old process and counts for nothing.
-- **When the host's settings cannot be read**, a `pair_cert` request is
-  declined, so the other machine uses the PIN. It never falls back to the
-  default paths there, which could reply with a certificate the host does not
-  use. Background passes do fall back. That is safe: the same API restarts
-  the host, so nothing gets forgotten while it is down.
+  `ready: false`. The next pass asks again. After 3 unconfirmed restarts in a
+  row, Dusk waits between tries: 60 s at first, doubling each time, up to
+  1 h. The count lives in memory only and resets when a restart is confirmed
+  or the file gets something new. The back-off only limits how often the host
+  is asked; the restart stays owed and removals stay kept. An answer before
+  the host has gone down is the old process and counts for nothing.
+- **When the host's settings cannot be read**, Dusk never falls back to the
+  default paths. A `pair_cert` request is declined, so the other machine uses
+  the PIN; the defaults could reply with a certificate the host does not use.
+  A background pass writes nothing, forgets nothing, and leaves any restart
+  owed; the defaults could change a file the host does not read.
 - **Retired certificates.** When a machine's certificate is replaced, the old
   one's sha256 (of the normalised PEM) is kept per machine in Dusk's settings
   (`retired_certs`). A request to pair it again is an old one played back. It is

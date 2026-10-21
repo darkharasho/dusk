@@ -17,7 +17,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -73,31 +73,20 @@ pub(super) struct Files {
     pub server_cert: PathBuf,
 }
 
-/// What to do when the host's config cannot be read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Unread {
-    /// Use the host's default paths.
-    Defaults,
-    /// Give no paths at all.
-    Decline,
-}
-
-/// Paths as the host is configured: an unset key is simply absent from it.
-pub(super) async fn files(credentials: &Credentials, unread: Unread) -> Option<Files> {
+/// Paths as the host is configured: an unset key is simply absent from it,
+/// and means the default. `None` when the config cannot be read, never the
+/// defaults: a host configured elsewhere would be answered with a
+/// certificate it does not use, or have a file it does not read changed.
+pub(super) async fn files(credentials: &Credentials) -> Option<Files> {
     let config = match SunshineApi::new(api::DEFAULT_PORT) {
         Ok(api) => api.get_config(credentials).await.ok(),
         Err(_) => None,
     };
-    located(config.as_ref(), unread)
+    located(config.as_ref())
 }
 
-fn located(
-    config: Option<&serde_json::Map<String, serde_json::Value>>,
-    unread: Unread,
-) -> Option<Files> {
-    if config.is_none() && unread == Unread::Decline {
-        return None;
-    }
+fn located(config: Option<&serde_json::Map<String, serde_json::Value>>) -> Option<Files> {
+    let config = Some(config?);
     Some(Files {
         state: state_file::state_path(config)?,
         server_cert: state_file::server_cert_path(config)?,
@@ -148,8 +137,51 @@ pub struct Pass {
     pub restarted: bool,
 }
 
+/// Restarts in a row that were not seen to happen before Dusk stops asking
+/// on every pass and starts waiting between tries.
+const UNCONFIRMED_LIMIT: u32 = 3;
+
+/// The longest wait between tries at a restart that keeps not happening.
+const BACK_OFF_CAP: Duration = Duration::from_secs(60 * 60);
+
+/// Restarts asked for in a row that were not seen to happen, and when the
+/// next may be asked for. Held in memory only: it limits how often a host
+/// is asked, and nothing else. The restart stays owed, and nothing waiting
+/// on it is forgotten, however long this waits.
+#[derive(Debug, Default)]
+pub(super) struct Unconfirmed {
+    count: u32,
+    not_before: Option<Instant>,
+}
+
+impl Unconfirmed {
+    fn allows(&self, now: Instant) -> bool {
+        self.count < UNCONFIRMED_LIMIT || self.not_before.map_or(true, |at| now >= at)
+    }
+
+    /// One more that did not happen. From the limit on, the wait starts at
+    /// the tick and doubles with each, up to [`BACK_OFF_CAP`].
+    fn missed(&mut self, now: Instant, timing: &Timing) {
+        self.count = self.count.saturating_add(1);
+        if self.count >= UNCONFIRMED_LIMIT {
+            let doublings = (self.count - UNCONFIRMED_LIMIT).min(16);
+            let wait = timing.tick.saturating_mul(1 << doublings).min(BACK_OFF_CAP);
+            self.not_before = Some(now + wait);
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn lock(misses: &std::sync::Mutex<Unconfirmed>) -> std::sync::MutexGuard<'_, Unconfirmed> {
+    misses.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Bring the file in line with `add` and `remove`, and restart the host if
-/// it is owed one and nothing is streaming. The restart is only counted
+/// it is owed one and nothing is streaming, and it has not just failed to
+/// restart too often (see [`Unconfirmed`]). The restart is only counted
 /// once it has been seen to happen, and only then is it no longer owed.
 async fn pass(
     owed: &dyn Owed,
@@ -158,6 +190,7 @@ async fn pass(
     remove: &[String],
     host: &dyn Host,
     timing: &Timing,
+    misses: &std::sync::Mutex<Unconfirmed>,
 ) -> Result<Pass, StateFileError> {
     let mut pending = owed.get().await;
     if let Some(merged) = state_file::merge(&state_file::read(path)?, add, remove)? {
@@ -175,12 +208,17 @@ async fn pass(
             return Err(err);
         }
         pending = true;
+        // Something new for the host to load: worth asking again at once.
+        lock(misses).reset();
     }
     let waiting = Pass {
         pending,
         restarted: false,
     };
-    if !pending || host.hosting().await != Some(false) {
+    if !pending || !lock(misses).allows(Instant::now()) {
+        return Ok(waiting);
+    }
+    if host.hosting().await != Some(false) {
         return Ok(waiting);
     }
     // Once more, from disk: the host may have rewritten the file while it
@@ -190,11 +228,15 @@ async fn pass(
     }
     if let Err(err) = host.restart().await {
         eprintln!("dusk: could not restart hosting to load paired machines: {err}");
+        lock(misses).missed(Instant::now(), timing);
         return Ok(waiting);
     }
     if !came_back(host, timing).await {
-        // Still owed, so the next pass asks again. A host that did restart
-        // and was only slow to come back costs one restart more, no more.
+        lock(misses).missed(Instant::now(), timing);
+        // Still owed, so a later pass asks again: the next one, until a few
+        // in a row have gone this way, and then less and less often. A host
+        // that did restart and was only slow to come back costs one restart
+        // more, no more.
         eprintln!(
             "dusk: hosting took the restart but was not seen to go down and come back \
              within {:?}; it is still owed",
@@ -202,6 +244,7 @@ async fn pass(
         );
         return Ok(waiting);
     }
+    lock(misses).reset();
     // Forgetting to clear it costs one needless restart, no more.
     if let Err(err) = owed.set(false).await {
         eprintln!("dusk: could not note that hosting has restarted: {err}");
@@ -290,6 +333,7 @@ pub struct Reconciler {
     /// One pass at a time. Two read, merge, write cycles interleaving could
     /// each write a file missing the other's entry.
     running: Mutex<()>,
+    unconfirmed: std::sync::Mutex<Unconfirmed>,
 }
 
 impl Reconciler {
@@ -298,6 +342,7 @@ impl Reconciler {
         Self {
             nudged,
             running: Mutex::new(()),
+            unconfirmed: Default::default(),
         }
     }
 
@@ -340,11 +385,12 @@ impl Reconciler {
             http: &state.http,
             credentials: &credentials,
         };
-        // The defaults when the config cannot be read. That fails safe: the
-        // same API restarts the host, so with it down no restart happens
-        // and nothing is forgotten; and a file at the default path the host
-        // does not read gains entries it never loads.
-        let path = async { files(&credentials, Unread::Defaults).await.map(|f| f.state) };
+        // Nothing at all when the config cannot be read, never the default
+        // paths: a host configured elsewhere would have a file it does not
+        // read changed, and a removal written there and then forgotten here
+        // would stay in the one it does. With no path the pass writes
+        // nothing, forgets nothing, and whatever restart is owed stays owed.
+        let path = async { files(&credentials).await.map(|f| f.state) };
         match self
             .run(
                 &state.store,
@@ -395,7 +441,16 @@ impl Reconciler {
             store,
             path: store_path,
         };
-        let outcome = pass(&settings, &path, &add, &remove, host, timing).await?;
+        let outcome = pass(
+            &settings,
+            &path,
+            &add,
+            &remove,
+            host,
+            timing,
+            &self.unconfirmed,
+        )
+        .await?;
         // Not while a restart is owed, which includes one asked for but not
         // seen to happen: the running host still has them, and its next
         // rewrite would put them back in the file with nothing left here to
@@ -450,23 +505,47 @@ mod tests {
         let (add, remove) = plan(&[pairing("aa", "D1")], &on_account(&["aa"]));
         let owed = Flag::default();
         for round in 1..=3 {
-            let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
-                .await
-                .unwrap();
+            let out = pass(
+                &owed,
+                &dir.state(),
+                &add,
+                &remove,
+                &host,
+                &QUICK,
+                &Default::default(),
+            )
+            .await
+            .unwrap();
             assert!(out.pending && !out.restarted, "round {round}");
             assert!(host.restarts().is_empty());
         }
-        let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
-            .await
-            .unwrap();
+        let out = pass(
+            &owed,
+            &dir.state(),
+            &add,
+            &remove,
+            &host,
+            &QUICK,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert!(out.restarted && !out.pending);
         assert_eq!(host.restarts().len(), 1);
         assert_eq!(host.restarts()[0].0, 4);
 
         // Once loaded, a pass with nothing to change restarts nothing.
-        let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
-            .await
-            .unwrap();
+        let out = pass(
+            &owed,
+            &dir.state(),
+            &add,
+            &remove,
+            &host,
+            &QUICK,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert!(!out.pending && !out.restarted);
         assert_eq!(host.restarts().len(), 1);
     }
@@ -479,9 +558,17 @@ mod tests {
         let owed = Flag::default();
 
         let busy = Fake::new(&[Some(true)], &path);
-        pass(&owed, &path, &add, &remove, &busy, &QUICK)
-            .await
-            .unwrap();
+        pass(
+            &owed,
+            &path,
+            &add,
+            &remove,
+            &busy,
+            &QUICK,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(uuids(&path), ["U1", "D1"]);
 
         // The host rewrites the file from what it holds in memory, which
@@ -492,9 +579,17 @@ mod tests {
             on_poll: Some(Box::new(move || std::fs::write(&rewrite, STATE).unwrap())),
             ..Fake::new(&[Some(false)], &path)
         };
-        let out = pass(&owed, &path, &add, &remove, &idle, &QUICK)
-            .await
-            .unwrap();
+        let out = pass(
+            &owed,
+            &path,
+            &add,
+            &remove,
+            &idle,
+            &QUICK,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert!(out.restarted);
         assert_eq!(idle.restarts()[0].1, ["U1", "D1"]);
     }
@@ -507,25 +602,49 @@ mod tests {
         let owed = Flag::default();
         let (add, remove) = plan(&paired, &on_account(&["aa"]));
         let idle = Fake::new(&[Some(false)], &path);
-        pass(&owed, &path, &add, &remove, &idle, &QUICK)
-            .await
-            .unwrap();
+        pass(
+            &owed,
+            &path,
+            &add,
+            &remove,
+            &idle,
+            &QUICK,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(idle.restarts().len(), 1);
 
         let (add, remove) = plan(&paired, &on_account(&[]));
         let host = Fake::new(&[Some(true), Some(true), Some(false)], &path);
         for _ in 0..2 {
-            let out = pass(&owed, &path, &add, &remove, &host, &QUICK)
-                .await
-                .unwrap();
+            let out = pass(
+                &owed,
+                &path,
+                &add,
+                &remove,
+                &host,
+                &QUICK,
+                &Default::default(),
+            )
+            .await
+            .unwrap();
             assert!(out.pending && !out.restarted);
         }
         // Out of the file at once; out of the running host only when idle.
         assert_eq!(uuids(&path), ["U1"]);
         assert!(host.restarts().is_empty());
-        pass(&owed, &path, &add, &remove, &host, &QUICK)
-            .await
-            .unwrap();
+        pass(
+            &owed,
+            &path,
+            &add,
+            &remove,
+            &host,
+            &QUICK,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(host.restarts(), [(3, vec!["U1".to_string()])]);
     }
 
@@ -536,9 +655,17 @@ mod tests {
         let (add, remove) = plan(&[pairing("aa", "D1")], &on_account(&["aa"]));
         let owed = Flag::default();
         for _ in 0..3 {
-            let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
-                .await
-                .unwrap();
+            let out = pass(
+                &owed,
+                &dir.state(),
+                &add,
+                &remove,
+                &host,
+                &QUICK,
+                &Default::default(),
+            )
+            .await
+            .unwrap();
             assert!(out.pending && !out.restarted);
         }
         assert!(host.restarts().is_empty());
@@ -641,6 +768,121 @@ mod tests {
         assert!(Store::load(&dir.store()).restart_owed);
         assert_eq!(store.lock().await.account_pairings.len(), 1);
         assert!(!ready(out));
+    }
+
+    #[tokio::test]
+    async fn a_host_that_never_goes_down_is_restarted_three_times_then_less_often() {
+        let dir = Dir::new("reconcile-backoff");
+        let path = dir.state();
+        let store = stored(&[pairing("aa", "D1")]);
+        let reconciler = Reconciler::new(Arc::default());
+        let at = || async { Some(dir.state()) };
+        let timing = Timing {
+            tick: Duration::from_millis(300),
+            ..QUICK
+        };
+        let paired = Fake::new(&[Some(false)], &path);
+        reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&["aa"]),
+                at(),
+                &paired,
+                &timing,
+            )
+            .await
+            .unwrap();
+        let unmoved = Fake {
+            stays_up: true,
+            ..Fake::new(&[Some(false)], &path)
+        };
+        for _ in 0..6 {
+            let out = reconciler
+                .run(
+                    &store,
+                    &dir.store(),
+                    &on_account(&[]),
+                    at(),
+                    &unmoved,
+                    &timing,
+                )
+                .await
+                .unwrap();
+            assert!(out.pending && !out.restarted);
+        }
+        assert_eq!(unmoved.restarts().len(), 3);
+        // Still owed, and the revoked pairing still kept, the whole time.
+        assert!(store.lock().await.restart_owed);
+        assert_eq!(store.lock().await.account_pairings.len(), 1);
+
+        // Once the back-off has passed, one more try, and then a longer wait.
+        tokio::time::sleep(timing.tick).await;
+        for _ in 0..3 {
+            reconciler
+                .run(
+                    &store,
+                    &dir.store(),
+                    &on_account(&[]),
+                    at(),
+                    &unmoved,
+                    &timing,
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(unmoved.restarts().len(), 4);
+        tokio::time::sleep(timing.tick).await;
+        reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&[]),
+                at(),
+                &unmoved,
+                &timing,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unmoved.restarts().len(),
+            4,
+            "the second wait is twice the first"
+        );
+
+        // A host that does restart puts it right: confirmed, pruned, and the
+        // count starts again.
+        let idle = Fake::new(&[Some(false)], &path);
+        tokio::time::sleep(timing.tick).await;
+        let out = reconciler
+            .run(&store, &dir.store(), &on_account(&[]), at(), &idle, &timing)
+            .await
+            .unwrap();
+        assert!(out.restarted);
+        assert!(!store.lock().await.restart_owed);
+        assert!(store.lock().await.account_pairings.is_empty());
+    }
+
+    #[test]
+    fn the_back_off_doubles_up_to_an_hour() {
+        let mut misses = Unconfirmed::default();
+        let now = Instant::now();
+        let timing = Timing::REAL;
+        for _ in 0..UNCONFIRMED_LIMIT {
+            assert!(misses.allows(now));
+            misses.missed(now, &timing);
+        }
+        assert!(!misses.allows(now));
+        assert!(misses.allows(now + Duration::from_secs(60)));
+        misses.missed(now, &timing);
+        assert!(!misses.allows(now + Duration::from_secs(119)));
+        assert!(misses.allows(now + Duration::from_secs(120)));
+        for _ in 0..20 {
+            misses.missed(now, &timing);
+        }
+        assert!(misses.allows(now + Duration::from_secs(3600)));
+        misses.reset();
+        assert!(misses.allows(now));
     }
 
     #[tokio::test]
@@ -756,6 +998,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pass_that_cannot_find_the_file_writes_and_forgets_nothing() {
+        let dir = Dir::new("reconcile-no-paths");
+        let path = dir.state();
+        let store = stored(&[pairing("aa", "D1")]);
+        store.lock().await.restart_owed = true;
+        let reconciler = Reconciler::new(Arc::default());
+        let host = Fake::new(&[Some(false)], &path);
+        let out = reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&[]),
+                async { None },
+                &host,
+                &QUICK,
+            )
+            .await;
+        assert!(matches!(out, Err(StateFileError::Missing)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), STATE);
+        assert!(store.lock().await.restart_owed);
+        assert_eq!(store.lock().await.account_pairings.len(), 1);
+        assert!(host.restarts().is_empty());
+    }
+
+    #[tokio::test]
     async fn nothing_stored_and_nothing_owed_does_not_look_for_the_file() {
         let reconciler = Reconciler::new(Arc::default());
         let store = Mutex::new(Store::default());
@@ -816,19 +1083,22 @@ mod tests {
     }
 
     #[test]
-    fn a_config_it_cannot_read_gives_no_paths_when_asked_to_decline() {
-        assert!(located(None, Unread::Decline).is_none());
+    fn a_config_it_cannot_read_gives_no_paths() {
+        assert!(located(None).is_none());
         let configured = serde_json::json!({
             "file_state": "/elsewhere/state.json",
             "cert": "/elsewhere/cacert.pem",
         });
-        let at = located(configured.as_object(), Unread::Decline).unwrap();
+        let at = located(configured.as_object()).unwrap();
         assert_eq!(at.state, PathBuf::from("/elsewhere/state.json"));
         assert_eq!(at.server_cert, PathBuf::from("/elsewhere/cacert.pem"));
-        // A background pass still falls back to where the host keeps them
-        // by default.
-        let defaults = located(None, Unread::Defaults).unwrap();
-        assert_eq!(Some(defaults.state), state_file::state_path(None));
+        // A config that was read but leaves them unset means the defaults.
+        let unset = serde_json::Map::new();
+        let defaults = located(Some(&unset)).unwrap();
+        assert_eq!(
+            defaults.state,
+            state_file::state_path(Some(&unset)).unwrap()
+        );
     }
 
     #[test]

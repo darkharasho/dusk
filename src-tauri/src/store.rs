@@ -176,11 +176,13 @@ impl Store {
 pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".dusk-tmp");
-    let tmp = PathBuf::from(tmp);
+    let tmp = temp_beside(path);
     let result = (|| {
-        let mut file = std::fs::File::create(&tmp)?;
+        // Never an existing file, should a name ever come round twice.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
         if let Ok(meta) = std::fs::metadata(path) {
             file.set_permissions(meta.permissions())?;
         }
@@ -190,10 +192,7 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<
         std::fs::rename(&tmp, path)
     })();
     if let Err(e) = result {
-        // Not a directory in the way: that is not ours to remove.
-        if tmp.is_file() {
-            let _ = std::fs::remove_file(&tmp);
-        }
+        let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
     // The rename only survives a crash once the directory holding it is on
@@ -208,6 +207,20 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<
         }
     }
     Ok(())
+}
+
+/// A temp file name beside `path`, in the same directory so the rename that
+/// replaces `path` stays atomic, and random, so two processes writing the
+/// same file (the `dusk` command and the window) never share one.
+fn temp_beside(path: &Path) -> PathBuf {
+    let mut nonce = [0u8; 8];
+    getrandom::getrandom(&mut nonce).expect("the system would not supply randomness");
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(
+        ".{}.dusk-tmp",
+        crate::install::download::hex(&nonce)
+    ));
+    PathBuf::from(tmp)
 }
 
 pub fn store_path(config_dir: &Path) -> PathBuf {
@@ -405,16 +418,41 @@ mod tests {
         };
         store.save(&path).unwrap();
         assert!(Store::load(&path).restart_owed);
-        assert!(!dir.join("devices.json.dusk-tmp").exists());
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1, "no temp file left behind");
 
         // A write that cannot be made leaves the file as it was, rather
         // than half-written over.
-        let before = std::fs::read_to_string(&path).unwrap();
-        std::fs::create_dir(dir.join("devices.json.dusk-tmp")).unwrap();
-        store.restart_owed = false;
-        assert!(store.save(&path).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let before = std::fs::read_to_string(&path).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            store.restart_owed = false;
+            let saved = store.save(&path);
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(saved.is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn each_write_gets_a_temp_file_of_its_own_beside_the_target() {
+        // The `dusk` command and the window are separate processes writing
+        // the same settings: a shared temp name would let one rename the
+        // other's half-written file into place.
+        let path = Path::new("/some/dir/devices.json");
+        let one = temp_beside(path);
+        let two = temp_beside(path);
+        assert_ne!(one, two);
+        assert_eq!(one.parent(), path.parent());
+        assert_eq!(two.parent(), path.parent());
+        let name = one.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("devices.json.") && name.ends_with(".dusk-tmp"),
+            "{name}"
+        );
     }
 
     #[test]

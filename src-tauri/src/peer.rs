@@ -381,10 +381,20 @@ fn not_on_this_account(signed_in: bool) -> String {
 /// client it was waiting for*. A pairing that would have worked was aborted
 /// by the machine that was supposed to be completing it.
 ///
-/// Thirty seconds covers a slow start with room to spare while staying
-/// inside the client's budget even when someone took most of
-/// [`ANSWER_TIMEOUT`] to press Allow first.
-const PIN_WINDOW: Duration = Duration::from_secs(30);
+/// Thirty seconds was the first attempt at this and was still too short.
+/// Measured on a machine with several virtual interfaces, a cold client
+/// spends minutes before it pairs: it wakes the host on every address it can
+/// think of — around fifty packets across ZeroTier, Tailscale, two LAN
+/// addresses and IPv6 multicast — then browses mDNS, then asks for
+/// `serverinfo`. Only then does it pair. The tell was that the *second*
+/// attempt always worked, because by then it was warm.
+///
+/// So this is not a number of its own any more. The host waits as long as
+/// the client is allowed to take, less a moment to report the failure
+/// before the client gives up on its own. Any value picked independently is
+/// a value that can drift back under the client's.
+const PIN_WINDOW: Duration =
+    Duration::from_secs(crate::moonlight::cli::PAIR_TIMEOUT.as_secs() - 10);
 
 /// Enter the PIN into Sunshine, giving the client's own pairing request time
 /// to arrive: Sunshine refuses a PIN nobody is waiting on, and the two
@@ -573,9 +583,12 @@ mod budget_tests {
         // the host aborted pairings that were still getting under way.
         // Whatever these numbers become, the host must not be the first to
         // give up.
+        // Measured: a cold client on a machine with several virtual
+        // interfaces took minutes to get as far as pairing, and only the
+        // second attempt ever worked because it was warm by then.
         assert!(
-            PIN_WINDOW >= Duration::from_secs(30),
-            "a Qt client can take many seconds just to start"
+            PIN_WINDOW >= Duration::from_secs(60),
+            "a cold client spends a long time discovering before it pairs"
         );
         assert!(
             PIN_WINDOW < crate::moonlight::cli::PAIR_TIMEOUT,

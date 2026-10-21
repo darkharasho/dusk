@@ -6,8 +6,24 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.16 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It fixes Dusk-to-Dusk pairing, which failed with
+**v0.3.17 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. `peer::PIN_WINDOW` is now derived —
+`moonlight::cli::PAIR_TIMEOUT - 10s`, so 110s — rather than a number of its
+own. v0.3.16 had raised it from 5s to 30s and that was still short: measured
+on a real pair of machines, a *cold* client took about three minutes to
+reach the point of pairing and only the **second** attempt ever worked,
+because by then it was warm. A cold moonlight-qt sends ~50 WoL packets
+across every interface it can see (ZeroTier, Tailscale, two LAN addresses,
+IPv6 multicast), browses mDNS, fetches `serverinfo`, and only then pairs.
+Any independently chosen host timeout can drift back under the client's, so
+it is computed from it. Diagnostic notes from that hunt, all of which cost
+time: `serverinfo` on **47984 returns RemoteHostClosedError for an unpaired
+client and that is normal** — 47984 wants a client certificate, and
+Sunshine logs `SSL Verification error :: ok` for every certless probe; do
+not read either as a fault. The ~108 `CLOSE_WAIT` sockets on 47984 are a
+real leak from Dusk's 5s poll but are a *consequence*, not a cause.
+v0.3.16 fixed Dusk-to-Dusk pairing, which failed with
+"That PIN was not accepted" on a correctly configured pair of machines. It fixes Dusk-to-Dusk pairing, which failed with
 "That PIN was not accepted" on a correctly configured pair of machines.
 `peer::enter_pin` retried five times at one-second intervals; the client it
 was waiting for is a Qt app that `moonlight::cli::PAIR_TIMEOUT` allows 120s
@@ -153,7 +169,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.16>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.17>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -189,7 +205,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

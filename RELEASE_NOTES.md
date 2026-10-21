@@ -1,5 +1,24 @@
 # Release Notes
 
+Version v0.3.17 — October 21, 2026
+
+Pairing works the first time, not the second.
+
+## Changes
+
+- **First-time pairing no longer needs a second go.** The machine being
+  connected to waited thirty seconds and then gave up — but a streaming
+  client that has just started spends longer than that looking for the
+  machine before it can pair at all, especially on a computer with several
+  network connections. The second attempt always worked because by then it
+  had warmed up. The host now waits as long as the client is allowed to
+  take, so the first attempt is the one that works.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.16 — October 21, 2026
 
 Pairing your own machines works again.

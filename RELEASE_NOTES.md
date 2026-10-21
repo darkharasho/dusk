@@ -1,5 +1,23 @@
 # Release Notes
 
+Version v0.3.26 — October 21, 2026
+
+Pairing works again with an up-to-date host.
+
+## Changes
+
+- **Connecting to a machine running a recent host no longer hangs on
+  pairing.** Newer hosting software asks which pairing request is being
+  approved, and Dusk was not saying — so the request sat waiting, timed
+  out, and reported itself as a PIN that had been turned down. Dusk now
+  looks the request up and approves it. Hosts that do not ask are
+  unaffected, and nothing about how you connect has changed.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.25 — October 21, 2026
 
 Signing in somewhere else now reaches a window that is already open.

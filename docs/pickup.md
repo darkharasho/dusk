@@ -6,8 +6,51 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.24 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. Two fixes found by running it. (1) Duplicate cards:
+**v0.3.26 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It fixes pairing against a 2026 Sunshine, which had
+looked like every pairing layer at once and was none of them. **Sunshine
+grew a second step in `/api/pin`**: a host from 2026 holds each pairing
+request under an id, lists them at `GET /api/pin`, and **refuses a POST that
+does not name one** — `400 pairing_id must contain exactly 32 hexadecimal
+characters`, *whatever the PIN*. Measured on `2026.914.233613`; bazzite
+paired throughout because its Sunshine is older. Dusk sent only the PIN and
+the name, so the host spent the whole `PIN_WINDOW` posting a body that was
+rejected before the PIN was looked at, then reported it as a PIN that was
+not accepted. `submit_pin` now reads the list first and posts an id; a host
+that does not list them gets the old body, so an older Sunshine is
+untouched, and **an empty list is kept apart from "this host does not name
+them"** — the first is retried (the ordinary case while a cold client is
+still starting), the second is not. Two things measured and worth not
+re-deriving: the id is minted **per request, not per client** (two attempts
+gave two ids), so it must be read immediately before use and never
+remembered; and a well-formed but unknown id gets `200 status:false`, not a
+400. Choosing among several waiting requests uses the asking machine's
+address as a **hint, not a filter** — Sunshine's view of the client's
+address and the peer connection's source address are picked independently,
+and this Mac has two — so matching nothing offers the PIN to all of them.
+**Still unverified:** whether a rejected PIN cancels a pending request on
+the host. If it does, that loop could disturb a third machine's concurrent
+pairing.
+
+How it was found, since the method generalises: every layer the handoff
+suspected was already working, and the thing that localised it was
+**reading the host's own answer rather than Dusk's report of it**. Venus's
+log said `is on this account; pairing without asking`, so the account,
+proof, sealed-address and peer paths were all fine; `GET /api/pin` then
+showed the client's request *pending*, which meant the client side was fine
+too and only the approval was failing. Reproducing it by hand — `GET
+/api/pin`, then POST the same PIN with the id — returned `{"status":true}`
+and moved `named_certs` from `[]` to the paired machine, which both proved
+the contract and finished the pairing. Two further notes. Sunshine logs
+nothing at all for a pin submission, so its log's **silence is not
+evidence**, and the `SSL Verification error :: Client certificate identity
+is not paired` flood is just Dusk's own certless 5s poll on 47984 (the same
+non-fault v0.3.17 recorded, in its newer wording). To read a TPM-sealed
+secret for a test, `systemd-creds decrypt` **needs `--name=`** or it refuses
+on the filename it just read: `systemd-creds decrypt
+--name=sunshine-local-api ~/.local/share/dusk/sealed/sunshine-local-api.cred -`.
+v0.3.25 made an open window notice a sign-in that
+had changed underneath it. v0.3.24 fixed two things found by running it. (1) Duplicate cards:
 a placeholder only withdrew on a matching `machine_id`, which only arrives
 from `identify`, which a Dusk older than v0.3.19 never answers — so every
 not-yet-updated machine showed twice, account copy (no address, "Your
@@ -265,7 +308,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.24>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.26>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -301,7 +344,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 
@@ -636,6 +679,12 @@ had a `CFBundleDisplayName` further down.
 **A push filter naming only tags turns the workflow off for branches.**
 Adding `tags-ignore` to the fork's `build.yml` silently stopped CI on every
 ordinary push until `branches: ['**']` was added beside it.
+
+**`security find-generic-password -w` answers in hex** when the value holds a
+newline, with nothing to say it has done so. Decode it before building an
+auth header from it, or the 401 that follows is a phantom of your own
+making. On Linux the equivalent is that `systemd-creds decrypt` refuses
+unless `--name=` matches the embedded credential name.
 
 **`gh` needs a repo.** A job that does not check out has no git remote to
 infer one from; set `GH_REPO` rather than adding a pointless checkout.

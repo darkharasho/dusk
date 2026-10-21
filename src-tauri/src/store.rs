@@ -41,6 +41,24 @@ pub struct Store {
     /// old name so an existing settings file still reads. See
     /// [`crate::host::virtual_screen`].
     pub virtual_screen: bool,
+    /// Your own machines this one has paired by certificate, without a PIN.
+    /// Dusk only ever touches the host's paired-machine entries named here.
+    pub account_pairings: Vec<AccountPairing>,
+    /// Entries Dusk added that a newer certificate has replaced, still to be
+    /// taken out of the host's list.
+    pub retired_pairings: Vec<String>,
+}
+
+/// One of your machines, paired with this one by its certificate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountPairing {
+    /// Its id on the account.
+    pub machine: String,
+    pub name: String,
+    pub cert: String,
+    /// The id of its entry in the host's list. Minted by Dusk, so an entry
+    /// it did not make is never one it takes out.
+    pub uuid: String,
 }
 
 /// The lowest and highest bitrates the client accepts, in Kbps.

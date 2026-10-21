@@ -6,9 +6,6 @@
 //! `named_devices` entries whose `uuid` Dusk was told about; every other
 //! entry and every field it does not understand is left as it was found.
 
-// Nothing calls this yet; the pairing tasks that follow wire it in.
-#![allow(dead_code)]
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 

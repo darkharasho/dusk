@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::state::AppState;
 use github::{Entry, Poll, User};
@@ -203,6 +203,9 @@ pub struct AccountState {
     signing_in: Mutex<Option<tokio::task::AbortHandle>>,
     reader: Reader,
     writer: Writer,
+    /// Told whenever the machine list is read afresh, so whatever depends
+    /// on who is on the account can catch up.
+    changed: Arc<Notify>,
 }
 
 impl Default for AccountState {
@@ -216,6 +219,7 @@ impl Default for AccountState {
                 Some(s) => write_keystore(s),
                 None => clear_keystore(),
             }),
+            changed: Arc::default(),
         }
     }
 }
@@ -259,6 +263,15 @@ pub struct AccountEvent {
 }
 
 impl AccountState {
+    /// An account state that tells `changed` each time the machine list is
+    /// read afresh.
+    pub fn nudging(changed: Arc<Notify>) -> Self {
+        Self {
+            changed,
+            ..Default::default()
+        }
+    }
+
     /// Best-effort: `None` covers both "nothing stored" and "could not tell".
     ///
     /// Fine for anything that degrades — a grid that shows signed-out, a
@@ -561,7 +574,7 @@ impl AccountState {
     }
 
     async fn refresh_list(&self, http: &reqwest::Client) -> Result<(), String> {
-        match self.fetch_list(http).await {
+        let fetched = match self.fetch_list(http).await {
             // Not a retry for its own sake: the token being refused is
             // exactly the case where the keystore may already hold a better
             // one. Once only, so a genuinely dead sign-in still ends as an
@@ -571,7 +584,13 @@ impl AccountState {
                 self.fetch_list(http).await
             }
             other => other,
+        };
+        // Only a list that was actually read: a failed fetch leaves the old
+        // one in place, and nothing should act as though it changed.
+        if fetched.is_ok() {
+            self.changed.notify_one();
         }
+        fetched
     }
 
     async fn fetch_list(&self, http: &reqwest::Client) -> Result<(), String> {
@@ -646,7 +665,6 @@ impl AccountState {
     }
 
     /// Sign `message` as this machine, if it is signed in.
-    #[allow(dead_code)] // Task 6 onward signs certificate pairings with it.
     pub async fn sign(&self, message: &[u8]) -> Option<Proof> {
         let account = self.load().await?;
         Some(Proof {
@@ -664,7 +682,6 @@ impl AccountState {
     }
 
     /// [`Self::vouches`] over any signed message, not only a PIN.
-    #[allow(dead_code)] // Task 6 onward checks certificate pairings with it.
     pub async fn vouches_for(&self, http: &reqwest::Client, proof: &Proof, message: &[u8]) -> bool {
         let Some(account) = self.load().await else {
             return false;
@@ -694,7 +711,6 @@ impl AccountState {
 
     /// Which machines the account lists, as last fetched. A list that was
     /// never fetched is `Unknown`, not empty: the two must not be confused.
-    #[allow(dead_code)] // Task 6 onward asks it before trusting a pairing.
     pub async fn membership(&self) -> Membership {
         // Only a keystore that answers "nothing stored" means signed out. One
         // that will not answer is unknown, or a locked keyring would read as
@@ -845,6 +861,11 @@ pub async fn sign_out(state: &AppState) -> Result<(), String> {
     }
     state.account.save(None).await;
     *state.account.list.write().await = MachineList::default();
+    // After the sign-in is cleared, never before: the reconciler asks for
+    // the membership, which only reads as signed out once the stored
+    // account is gone. Nudged earlier, it could still see the old list and
+    // keep every pairing until the next tick.
+    state.reconciler.nudge();
     Ok(())
 }
 

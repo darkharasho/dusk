@@ -26,7 +26,6 @@ fn sha256_hex(pem: &str) -> String {
 /// What the client signs to ask a host to trust its certificate. Names the
 /// host so the request cannot be replayed to another, and uses its own prefix
 /// so it can never pass as a reply.
-#[allow(dead_code)] // Task 6 onward builds the pairing messages with it.
 pub fn cert_request_message(client_cert_pem: &str, host_uniqueid: &str) -> Vec<u8> {
     format!(
         "dusk-pair-cert-v1\n{host_uniqueid}\n{}",
@@ -37,7 +36,6 @@ pub fn cert_request_message(client_cert_pem: &str, host_uniqueid: &str) -> Vec<u
 
 /// What the host signs to say it paired that client, and which certificate
 /// it will stream under.
-#[allow(dead_code)] // Task 6 onward builds the pairing messages with it.
 pub fn cert_reply_message(
     client_cert_pem: &str,
     host_uniqueid: &str,

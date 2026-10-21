@@ -40,6 +40,8 @@ pub struct AppState {
     /// The GitHub sign-in that lets this machine's own other machines pair
     /// without being asked.
     pub account: crate::account::AccountState,
+    /// Keeps the host's list of paired machines in line with the account.
+    pub reconciler: crate::cert_pairing::host::Reconciler,
     /// Devices this Dusk currently has a Moonlight session open with.
     ///
     /// The host cannot tell us this: Sunshine reports that *a* session
@@ -200,6 +202,9 @@ impl AppState {
         tls: Option<reqwest::Client>,
         moonlight: Option<Moonlight>,
     ) -> Self {
+        // Shared, so a change to the account wakes the reconciler without
+        // the account knowing anything about it.
+        let account_changed = Arc::new(Notify::new());
         Self {
             registry: RwLock::new(registry),
             host,
@@ -210,7 +215,8 @@ impl AppState {
             moonlight,
             credentials: CredentialStore::default(),
             peer: Default::default(),
-            account: Default::default(),
+            account: crate::account::AccountState::nudging(account_changed.clone()),
+            reconciler: crate::cert_pairing::host::Reconciler::new(account_changed),
             sessions: RwLock::new(HashMap::new()),
             browsing: AtomicBool::new(false),
             discovering: AtomicBool::new(false),

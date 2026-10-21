@@ -349,6 +349,28 @@ mod tests {
     const TEST_SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTb0lWQlh5OGovdWwrRTd2bUZqYU9HNUxXRGkzei92bGdHU0ZXbTZqcVJUclI4SERGWE10clYyRW56RUhwOHI4bjRHdmVSSi9ha2NGL0UvN3RlZUEyeXcwWWl5ZkF0NkFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNjEwNjc2CWZpbGU6Zml4dHVyZS5iaW4KamFEdFJRSjB5Skl2SEhhenFHRGE2ZmoxblFyWURjeHRYUkl2UHRHQ1pLNHl1SmZPMERvVC94K2dFNVptZHh5TklCZU1RZTl6VTVwVUVrcm1HTnNSQmc9PQo=";
     const SIGNED: &[u8] = b"a dusk package\n";
 
+    /// Check a real release artifact against the key this build carries.
+    ///
+    /// Ignored because it needs files that are not in the repository. Run it
+    /// on a release's `.deb` and the `.deb.sig` beside it to prove the whole
+    /// chain — CI's signing step, the key in `tauri.conf.json`, and this
+    /// verifier — agree. Everything else here uses a throwaway key, so
+    /// without this nothing confirms the *published* artifact is one Dusk
+    /// would accept, and the failure would be silent and total.
+    ///
+    ///     DUSK_TEST_DEB=/path/Dusk_x_amd64.deb \
+    ///     cargo test --lib the_released_deb -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn the_released_deb_verifies_against_this_builds_key() {
+        let path = std::env::var("DUSK_TEST_DEB").expect("set DUSK_TEST_DEB to a released .deb");
+        let bytes = std::fs::read(&path).expect("the .deb is readable");
+        let signature =
+            std::fs::read_to_string(format!("{path}.sig")).expect("a .sig beside the .deb");
+        verify(&bytes, &signature).expect("the released .deb verifies");
+        println!("verified {} ({} bytes)", path, bytes.len());
+    }
+
     #[test]
     fn a_genuine_signature_is_accepted() {
         // The half that matters. A verifier that only ever refuses passes

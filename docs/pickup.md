@@ -6,8 +6,23 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.21 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It is step two of `docs/addresses.md`: published
+**v0.3.22 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It fixes machines minting new identities: observed
+twice in one day, this Mac `8717645a`→`f8e28caa` and the Linux box
+`d2335d8d`→`ecd36ea7`, each orphaning an entry (the duplicate `bazzite`).
+`finish` chose carry-vs-mint from `account.load()`, and **`load` returns
+`None` both for "nothing stored" and for "the keystore would not say"** —
+the second being a locked keyring or a dismissed keychain prompt, i.e. most
+of what went wrong today. `AccountState::stored()` keeps them apart and
+`finish` now refuses on `Err` rather than minting; `load()` remains for
+callers that legitimately degrade. Signing key and box key are carried or
+minted **together** — one without the other is a machine that can prove who
+it is and cannot be told anything. The same conflation is called out in
+`credentials.rs` ("a read that fails is not an answer"), which got it right;
+this is the place that did not. Note `account/mod.rs` has no injectable
+reader the way `credentials.rs` does, so the decision is tested through the
+pure `carries_its_key` and the Result-vs-Option distinction rather than
+end-to-end. v0.3.21 sealed published addresses. It is step two of `docs/addresses.md`: published
 addresses are sealed (`account/sealed.rs`). Each machine holds a second
 X25519 keypair beside its Ed25519 signing one — Ed25519 does not encrypt,
 converting it needs the private scalar `ring` will not expose, and **`ring`
@@ -226,7 +241,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.21>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.22>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -262,7 +277,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

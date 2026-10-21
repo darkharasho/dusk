@@ -1,5 +1,28 @@
 # Release Notes
 
+Version v0.3.22 — October 21, 2026
+
+Signing in again keeps the machine you already had.
+
+## Changes
+
+- **A machine no longer becomes a different machine when the keystore is
+  briefly unavailable.** Signing in again checks whether this machine is
+  already signed in, and could not tell the difference between "it is not"
+  and "the keystore would not say" — so a locked keyring or a dismissed
+  password prompt gave the machine a brand new identity, left its old one
+  stranded on your account as a duplicate, and cut it off from the
+  addresses your other machines share. It now stops and says so instead of
+  guessing.
+
+If you have a machine listed twice on your account, the older entry can be
+removed; it was this.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.21 — October 21, 2026
 
 Only your own machines can read where your machines are.

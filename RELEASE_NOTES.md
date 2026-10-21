@@ -1,5 +1,26 @@
 # Release Notes
 
+Version v0.3.28 — October 21, 2026
+
+Dusk installed from a `.deb` can now update itself.
+
+## Changes
+
+- **A Dusk installed from the `.deb` updates like every other one.** It
+  finds the new version on its own, fetches it in the background, and
+  offers **Restart to update** — asking once for permission to install,
+  because the package manager needs it. Until now this was the one way of
+  installing Dusk that meant downloading a file and typing a command, on
+  the machines least likely to have anyone sitting at them.
+  - Installing this release is the last manual one. A copy has to be
+    carrying this change before it can use it, so update to v0.3.28 by
+    hand and the ones after it look after themselves.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.27 — October 21, 2026
 
 Streams from a Linux machine fit the screen watching them.

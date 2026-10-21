@@ -6,8 +6,32 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.27 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It gives a **Linux host** the screen-sizing that was
+**v0.3.28 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It lets a **`.deb` install update itself**, which was
+the one format that could not. The plugin handles the other four and cannot
+handle this one — the files belong to dpkg, and writing over them leaves the
+package database describing a version that is no longer there — so
+`updates/deb.rs` reads the same manifest, checks the same minisign
+signature, and hands the file to `apt-get install` behind one `pkexec`
+prompt. Three things to know before touching it. The manifest's **`deb` key
+sits beside `platforms`, not in it**, and that placement is load-bearing:
+the plugin reads `platforms`, so a `.deb` listed there would be handed to it
+and written over dpkg's files as though it were an AppImage;
+`linux-x86_64` stays the AppImage. The **key and endpoint come from
+`tauri.conf.json` through `build.rs`** rather than a second copy, with a
+test pinning the baked values to the configured ones, because a drifted key
+rejects every update and only on the format nobody develops on. And the
+verification test that matters is that a **genuine signature is accepted**:
+a verifier that refuses everything passes every "rejects a bad signature"
+test there is while leaving every Debian install unable to update. The
+fixture is a real `tauri signer sign` signature from a throwaway key. Note
+that **editing a minisign key's comment does not make a different key** —
+the material is on the second line — which made the wrong-key case pass for
+the wrong reason until it was given a separately generated keypair.
+Bootstrapping is the same as the updater's own: a copy must already carry
+this to use it, so v0.3.28 is the **last manual `.deb` install**.
+
+**v0.3.27** gives a **Linux host** the screen-sizing that was
 Windows-only, and fixes a grid bug that had nothing to do with it.
 
 The Linux mechanism is `host/screen_mode.rs` and it is not the Windows one.
@@ -376,7 +400,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.27>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.28>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -412,7 +436,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

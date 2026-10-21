@@ -158,16 +158,20 @@ pub const PAIR_PROGRESS_EVENT: &str = "dusk://pair-progress";
 pub struct PairProgress {
     pub device_id: String,
     /// `waitingForApproval` once the other machine's Dusk is asking someone;
-    /// `manual` when no Dusk answered and the PIN has to be typed there.
+    /// `manual` when no Dusk answered and the PIN has to be typed there;
+    /// `waitingForHost` when the other machine paired this one but is
+    /// streaming, and finishes once that stream ends.
     pub stage: &'static str,
 }
 
 /// Pair with a host.
 ///
-/// Moonlight starts pairing with `pin` and waits. Meanwhile the Dusk on the
-/// host, if there is one, is asked to enter the PIN itself once someone
-/// there allows it — see `peer.rs`. If no Dusk answers, the person types
-/// the PIN on the host, as before.
+/// A host on your own account is paired first by trading certificates, with
+/// no PIN at all — see `cert_pairing::client`. Otherwise Moonlight starts
+/// pairing with `pin` and waits. Meanwhile the Dusk on the host, if there is
+/// one, is asked to enter the PIN itself once someone there allows it — see
+/// `peer.rs`. If no Dusk answers, the person types the PIN on the host, as
+/// before.
 #[tauri::command]
 pub async fn pair_device(
     app: AppHandle,
@@ -178,9 +182,6 @@ pub async fn pair_device(
     let inner = state.inner().clone();
     let (address, _) = target_of(&inner, &id).await?;
 
-    let pairing = moonlight(&inner)?.pair(&address, &pin);
-    tokio::pin!(pairing);
-
     let progress = |stage| {
         let _ = app.emit(
             PAIR_PROGRESS_EVENT,
@@ -190,6 +191,17 @@ pub async fn pair_device(
             },
         );
     };
+    let by_cert =
+        crate::cert_pairing::client::pair(&inner, &address, &id, || progress("waitingForHost"));
+    if by_cert.await? {
+        inner.reload_identity();
+        inner.request_refresh();
+        emit_snapshot(&app, &inner).await;
+        return Ok(());
+    }
+
+    let pairing = moonlight(&inner)?.pair(&address, &pin);
+    tokio::pin!(pairing);
     let proof = inner.account.proof(&pin).await;
     let asking = crate::peer::ask(crate::peer::host_part(&address), &pin, proof, || {
         progress("waitingForApproval")

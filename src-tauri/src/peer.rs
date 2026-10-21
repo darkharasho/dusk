@@ -93,6 +93,12 @@ pub const PORT: u16 = 47850;
 /// timeout, so the client is still waiting when the answer comes.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How long the connecting side waits on an answer: the host's own wait,
+/// and time on top for whatever it does once allowed. A pairing by
+/// certificate needs the room too, since the host may restart before it
+/// replies.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(ANSWER_TIMEOUT.as_secs() + 30);
+
 /// A request line is a few dozen bytes; anything long is not one.
 const MAX_LINE: usize = 16 * 1024;
 
@@ -531,8 +537,7 @@ async fn ask_at(
     let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
     let mut on_waiting = Some(on_waiting);
     loop {
-        let next =
-            tokio::time::timeout(ANSWER_TIMEOUT + Duration::from_secs(30), lines.next_line());
+        let next = tokio::time::timeout(REPLY_TIMEOUT, lines.next_line());
         let line = match next.await {
             Ok(Ok(Some(line))) => line,
             // Something answered on the port and then went away without a
@@ -551,6 +556,64 @@ async fn ask_at(
             _ if on_waiting.is_some() => return Outcome::NoPeer,
             _ => return Outcome::Declined("The other machine answered something odd.".into()),
         }
+    }
+}
+
+/// How asking another Dusk to pair by certificate went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CertOutcome {
+    /// No Dusk there, or one that could not take the request. Fall back to
+    /// the PIN.
+    NoPeer,
+    /// The host trusts this machine's certificate now. `ready` is false
+    /// while it waits for a stream to end before it can stream to us.
+    Paired {
+        server_cert: String,
+        uniqueid: String,
+        ready: bool,
+        proof: crate::account::Proof,
+    },
+    Declined(String),
+}
+
+/// Ask the Dusk at `address` to pair by certificate, with `request` a
+/// [`Message::PairCert`].
+///
+/// Only a refusal the host put into words is `Declined`. Everything else is
+/// `NoPeer`: a Dusk too old to know the request reads only part of a line
+/// this long and may reset the connection before it says anything.
+pub async fn ask_cert(address: &str, request: Message) -> CertOutcome {
+    ask_cert_at(address, PORT, request).await
+}
+
+async fn ask_cert_at(address: &str, port: u16, request: Message) -> CertOutcome {
+    let connect = TcpStream::connect((address, port));
+    let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), connect).await else {
+        return CertOutcome::NoPeer;
+    };
+    let (read, mut write) = stream.into_split();
+    if send(&mut write, &request).await.is_err() {
+        return CertOutcome::NoPeer;
+    }
+
+    let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
+    let Ok(Ok(Some(line))) = tokio::time::timeout(REPLY_TIMEOUT, lines.next_line()).await else {
+        return CertOutcome::NoPeer;
+    };
+    match serde_json::from_str::<Message>(&line) {
+        Ok(Message::Paired {
+            server_cert,
+            uniqueid,
+            ready,
+            proof,
+        }) => CertOutcome::Paired {
+            server_cert,
+            uniqueid,
+            ready,
+            proof,
+        },
+        Ok(Message::Declined { reason }) => CertOutcome::Declined(reason),
+        _ => CertOutcome::NoPeer,
     }
 }
 
@@ -1071,5 +1134,88 @@ mod tests {
         let outcome = ask_at("127.0.0.1", port, "1234", None, || waited = true).await;
         assert_eq!(outcome, Outcome::Accepted);
         assert!(waited);
+    }
+
+    fn pair_cert_request() -> Message {
+        Message::PairCert {
+            name: "Mac mini".into(),
+            cert: crlf_pem(),
+            proof: sample_proof(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_paired_reply_travels_back_over_the_wire() {
+        let port = host_expecting(
+            |m| matches!(m, Message::PairCert { .. }),
+            r#"{"type":"paired","server_cert":"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n","uniqueid":"HOST-ID","ready":false,"proof":{"account":1,"machine":"abab","signature":"cdcd"}}"#,
+        )
+        .await;
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::Paired {
+                server_cert: "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+                    .into(),
+                uniqueid: "HOST-ID".into(),
+                ready: false,
+                proof: crate::account::Proof {
+                    account: 1,
+                    machine: "abab".into(),
+                    signature: "cdcd".into(),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_declined_and_anything_else_is_no_peer() {
+        let port = host_expecting(
+            |m| matches!(m, Message::PairCert { .. }),
+            r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
+        )
+        .await;
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::Declined("Dusk did not understand that request.".into())
+        );
+
+        let port = host_expecting(|m| matches!(m, Message::PairCert { .. }), "garbage").await;
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::NoPeer
+        );
+    }
+
+    #[tokio::test]
+    async fn a_host_that_hangs_up_on_a_long_line_is_no_peer() {
+        // An older Dusk reads only so much of a request and closes, which
+        // may reset the connection before any answer.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut first = [0u8; 64];
+            let _ = stream.read(&mut first).await;
+            drop(stream);
+        });
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::NoPeer
+        );
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::NoPeer
+        );
+    }
+
+    #[test]
+    fn the_client_waits_out_a_host_that_restarts_before_answering() {
+        // The host may restart itself before it replies, which takes up to
+        // about forty seconds.
+        assert!(REPLY_TIMEOUT >= Duration::from_secs(45));
     }
 }

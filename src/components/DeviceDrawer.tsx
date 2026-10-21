@@ -278,6 +278,18 @@ function PairPanel({
     );
   }
 
+  if (stage === "waitingForHost") {
+    return (
+      <div className="axi-stack">
+        <p>{name} is in use. Pairing will finish when it&rsquo;s free.</p>
+        <p className="axi-ink-dim">
+          {name} has already said yes. It just can&rsquo;t take a new machine
+          while it&rsquo;s streaming.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="axi-stack">
       <p>

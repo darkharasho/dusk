@@ -34,8 +34,10 @@ export interface PairProgress {
   /**
    * `waitingForApproval`: the other machine's Dusk is asking someone there.
    * `manual`: no Dusk answered, so the PIN has to be typed on that machine.
+   * `waitingForHost`: that machine has paired this one but is streaming, so
+   *   pairing finishes once its stream ends.
    */
-  stage: "waitingForApproval" | "manual";
+  stage: "waitingForApproval" | "manual" | "waitingForHost";
 }
 
 /** A stream that died on its own, after the launch call had already returned. */

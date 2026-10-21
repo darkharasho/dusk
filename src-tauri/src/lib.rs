@@ -313,7 +313,7 @@ pub fn run() {
             if !mock_mode() {
                 discovery::spawn(handle.clone(), state.clone());
                 peer::spawn(handle.clone(), state.clone());
-                cert_pairing::host::Reconciler::spawn(state.clone());
+                cert_pairing::reconcile::Reconciler::spawn(state.clone());
                 poller::spawn(handle, state);
             }
 

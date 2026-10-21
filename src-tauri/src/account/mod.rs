@@ -709,6 +709,26 @@ impl AccountState {
         )
     }
 
+    /// [`Self::membership`] from what this run already knows, never reading
+    /// the keystore: for background work, which must not be what puts a
+    /// keystore prompt on screen. Nothing known yet is `Unknown`.
+    pub async fn known_membership(&self) -> Membership {
+        {
+            let cached = self.cached.read().await;
+            if !cached.read {
+                return Membership::Unknown;
+            }
+            if cached.account.is_none() {
+                return Membership::SignedOut;
+            }
+        }
+        let list = self.list.read().await;
+        if list.fetched.is_none() {
+            return Membership::Unknown;
+        }
+        Membership::Machines(list.entries.keys().cloned().collect())
+    }
+
     /// Which machines the account lists, as last fetched. A list that was
     /// never fetched is `Unknown`, not empty: the two must not be confused.
     pub async fn membership(&self) -> Membership {
@@ -1137,6 +1157,32 @@ mod identity_tests {
 
         let signed_out = with_keystore(|| Ok(None));
         assert_eq!(signed_out.membership().await, Membership::SignedOut);
+    }
+
+    #[tokio::test]
+    async fn known_membership_never_reads_the_keystore() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let stored = an_account(42);
+        let state = with_keystore(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(stored.clone()))
+        });
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+
+        // Once read, it answers as the full one does, still without a read.
+        assert_eq!(state.membership().await, Membership::Unknown);
+        state.list.write().await.fetched = Some(Instant::now());
+        assert_eq!(
+            state.known_membership().await,
+            Membership::Machines(Default::default())
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+
+        let failing = with_keystore(|| Err("keyring is locked".into()));
+        assert_eq!(failing.membership().await, Membership::Unknown);
+        assert_eq!(failing.known_membership().await, Membership::Unknown);
     }
 
     #[tokio::test]

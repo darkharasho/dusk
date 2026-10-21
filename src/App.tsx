@@ -102,6 +102,15 @@ function Body() {
 
   const self = snapshot.devices.find((d) => d.isSelf);
   const remote = sortDevices(snapshot.devices.filter((d) => !d.isSelf));
+  // Your machines are the ones on your account, not whatever is advertising
+  // on this network. Falling back to one list when none are identified is
+  // deliberate: signed out, or before any machine has answered, Dusk cannot
+  // tell whose is whose, and a "Your machines" heading over an empty list
+  // with your machines sitting below it would be a lie.
+  const mine = remote.filter((d) => d.mine);
+  const others = remote.filter((d) => !d.mine);
+  const grouped = mine.length > 0;
+  const listed = grouped ? mine : remote;
   const open = openId ? snapshot.devices.find((d) => d.id === openId) : undefined;
 
   function openSettings(next: SettingsSection) {
@@ -160,7 +169,7 @@ function Body() {
             <div className="dusk-section__head">
               <h2 className="axi-eyebrow">
                 Your machines
-                {remote.length > 0 && <span className="dusk-count">{remote.length}</span>}
+                {listed.length > 0 && <span className="dusk-count">{listed.length}</span>}
               </h2>
               {snapshot.discovering && (
                 <span className="axi-row dusk-looking">
@@ -190,7 +199,7 @@ function Body() {
                 </button>
               </div>
             </div>
-            {remote.length === 0 ? (
+            {listed.length === 0 ? (
               <div className="axi-panel dusk-empty axi-stack">
                 <strong>No other machines yet</strong>
                 <p className="axi-ink-dim dusk-empty__body">
@@ -204,7 +213,7 @@ function Body() {
               </div>
             ) : (
               <div className="axi-grid" style={{ "--axi-grid-min": "260px" } as React.CSSProperties}>
-                {remote.map((device) => (
+                {listed.map((device) => (
                   <DeviceCard
                     key={device.id}
                     device={device}
@@ -214,6 +223,30 @@ function Body() {
               </div>
             )}
           </section>
+
+          {/* Everything else that can host here. Shown second and plainly,
+              because it is the answer to "why is that not in my grid" --
+              hiding it would make a housemate's PC look like a bug in
+              discovery. Pairing with one still asks for a PIN. */}
+          {grouped && others.length > 0 && (
+            <section className="dusk-section">
+              <div className="dusk-section__head">
+                <h2 className="axi-eyebrow">
+                  Other machines on this network
+                  <span className="dusk-count">{others.length}</span>
+                </h2>
+              </div>
+              <div className="axi-grid" style={{ "--axi-grid-min": "260px" } as React.CSSProperties}>
+                {others.map((device) => (
+                  <DeviceCard
+                    key={device.id}
+                    device={device}
+                    onOpen={() => setOpenId(device.id)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
         </main>
       )}
 

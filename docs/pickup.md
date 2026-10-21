@@ -28,6 +28,22 @@ its own half:
   rewrites the file from memory whenever it PIN-pairs anyone and drops entries
   it never loaded (the spike reproduced this). A pairing leaves the settings
   only after the host has loaded the file without it.
+- **A restart counts only once it is seen** (`reconcile.rs`, `came_back`). The
+  restart request counts only on a 2xx or a connection that dies after it was
+  sent. Then serverinfo is asked every 250 ms, for up to 20 s, and the host has
+  to stop answering at least once and then answer again. Until both happen the
+  restart stays owed, removals stay in the settings, and the reply says
+  `ready: false`. The next pass asks again. An answer before the host has gone
+  down is the old process and counts for nothing.
+- **When the host's settings cannot be read**, a `pair_cert` request is
+  declined, so the other machine uses the PIN. It never falls back to the
+  default paths there, which could reply with a certificate the host does not
+  use. Background passes do fall back. That is safe: the same API restarts
+  the host, so nothing gets forgotten while it is down.
+- **Retired certificates.** When a machine's certificate is replaced, the old
+  one's sha256 (of the normalised PEM) is kept per machine in Dusk's settings
+  (`retired_certs`). A request to pair it again is an old one played back. It is
+  declined in the same words as any request that does not check out.
 - **The client half** (`cert_pairing/client.rs`) shells out to the fork's
   `add-host` action, which records the host's certificate and address. It takes
   a lock file and **exits 2 while another client is open**, so Dusk waits
@@ -39,11 +55,22 @@ its own half:
   the host matches by uuid.
 - **No half pairings on a card** (`poller.rs`, `shown_pairing`). A host that
   trusts us while the client has no certificate for it (or a different one)
-  shows not paired, since a stream would fail. Paired **stands** whenever Dusk
-  cannot tell: the client's host list could not be read, is empty, or the host
-  has no `uniqueid` yet. An empty or unreadable list is never evidence.
-- Probing pairing over HTTPS must send `?uniqueid=`, or even a trusted
-  certificate reads `PairStatus 0`.
+  shows not paired, since a stream would fail. Only two answers demote it: the
+  client holds no certificate for the host, or holds one that differs from the
+  one the host presents. Paired **stands** in every other case:
+  - the client's host list could not be read;
+  - the list is empty;
+  - the host has no `uniqueid` yet;
+  - the host presented no certificate to compare;
+  - the client's stored PEM does not decode.
+
+  An empty or unreadable list is never evidence.
+- Probing pairing over HTTPS must send a non-empty `uniqueid` (Dusk sends
+  `uniqueid=0`), or even a trusted certificate reads `PairStatus 0`.
+- **Membership is unknown, never empty, when in doubt.** It is unknown if the
+  keystore is locked, the stored sign-in will not load, no list has been
+  fetched, or the list does not name this machine. Unknown keeps every
+  pairing.
 
 *Fork and release.* The `add-host` action lives on the local fork branch
 `dusk-add-host` at commit `4a59931`. It is **not merged, pushed, tagged or

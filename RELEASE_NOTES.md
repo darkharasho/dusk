@@ -1,5 +1,23 @@
 # Release Notes
 
+Version v0.3.25 — October 21, 2026
+
+Signing in somewhere else now reaches a window that is already open.
+
+## Changes
+
+- **A window no longer keeps using a sign-in that has been replaced.** Dusk
+  reads your sign-in when it starts and keeps it for as long as it runs. If
+  you signed in again from somewhere else — a terminal, or another copy of
+  Dusk — the open window never noticed, kept using the old one, and refused
+  your own machines as belonging to a different account. It now checks again
+  when GitHub turns the old one down.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.24 — October 21, 2026
 
 One machine, one card.

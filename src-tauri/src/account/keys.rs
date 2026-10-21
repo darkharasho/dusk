@@ -19,7 +19,9 @@ pub(crate) fn pair_message(pin: &str) -> Vec<u8> {
     format!("dusk-pair-v1\n{pin}").into_bytes()
 }
 
-fn sha256_hex(pem: &str) -> String {
+/// A certificate's sha256, taken over its normalised PEM so line endings
+/// never make the same certificate look like another.
+pub(crate) fn sha256_hex(pem: &str) -> String {
     hex(Sha256::digest(normalise_pem(pem).as_bytes()).as_ref())
 }
 

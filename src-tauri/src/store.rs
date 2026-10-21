@@ -47,6 +47,11 @@ pub struct Store {
     /// Entries Dusk added that a newer certificate has replaced, still to be
     /// taken out of the host's list.
     pub retired_pairings: Vec<String>,
+    /// For each of your machines, the sha256 of every certificate a newer
+    /// one has replaced. A request to pair one of these again is an old
+    /// request played back, and is turned down.
+    #[serde(default)]
+    pub retired_certs: std::collections::HashMap<String, Vec<String>>,
     /// The host's list of paired machines was changed and the host has not
     /// restarted to load it yet. Kept on disk, so a Dusk that quits before
     /// the restart still owes it next time.

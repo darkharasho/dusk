@@ -5,10 +5,11 @@
 //! the host's list of paired machines, and replies with this host's own
 //! certificate, so the two can stream with no PIN.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::account::keys::{cert_reply_message, cert_request_message};
+use crate::account::keys::{cert_reply_message, cert_request_message, sha256_hex};
 use crate::account::{Membership, Proof};
 use crate::peer::Message;
 use crate::state::AppState;
@@ -46,26 +47,44 @@ pub fn plan(
 /// Record `machine`'s certificate. A changed certificate gets a fresh uuid,
 /// since the host matches entries by uuid and would keep the old one; the
 /// uuid it replaced is returned so it can be taken out.
+///
+/// The certificate it replaced is remembered in `retired`, by machine, and
+/// never taken back: a request for it can only be an old one played back,
+/// and pairing it would swap the machine's current certificate for one it
+/// has stopped using. Declined in the words a request that does not check
+/// out gets.
 fn upsert(
     pairings: &mut Vec<AccountPairing>,
+    retired: &mut HashMap<String, Vec<String>>,
     machine: &str,
     name: &str,
     cert: &str,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     let fresh = AccountPairing {
         machine: machine.to_string(),
         name: name.to_string(),
         cert: cert.to_string(),
         uuid: mint_uuid(),
     };
-    match pairings.iter_mut().find(|p| p.machine == machine) {
+    let hash = sha256_hex(cert);
+    if retired.get(machine).is_some_and(|old| old.contains(&hash)) {
+        return Err(NOT_CONFIRMED.into());
+    }
+    Ok(match pairings.iter_mut().find(|p| p.machine == machine) {
         Some(p) if normalise_pem(&p.cert) == normalise_pem(cert) => None,
-        Some(p) => Some(std::mem::replace(p, fresh).uuid),
+        Some(p) => {
+            let old = std::mem::replace(p, fresh);
+            retired
+                .entry(machine.to_string())
+                .or_default()
+                .push(sha256_hex(&old.cert));
+            Some(old.uuid)
+        }
         None => {
             pairings.push(fresh);
             None
         }
-    }
+    })
 }
 
 /// A random (version 4) uuid, upper case like the host's own.
@@ -93,6 +112,7 @@ struct Identity {
 }
 
 const UNREADABLE: &str = "This machine couldn't read its own list of paired machines.";
+const NOT_CONFIRMED: &str = "This machine couldn't confirm you're on the same account.";
 
 /// Read this host's identity and check the request was signed for it by one
 /// of your machines. `vouches` is asked about the exact message expected.
@@ -110,7 +130,7 @@ where
     let server_cert = std::fs::read_to_string(&files.server_cert)
         .map_err(|_| "This machine couldn't find its own certificate.".to_string())?;
     if !vouches(cert_request_message(cert, &uniqueid)).await {
-        return Err("This machine couldn't confirm you're on the same account.".into());
+        return Err(NOT_CONFIRMED.into());
     }
     Ok(Identity {
         uniqueid,
@@ -159,7 +179,17 @@ async fn answer(
 
     {
         let mut store = state.store.lock().await;
-        let retired = upsert(&mut store.account_pairings, &proof.machine, name, cert);
+        let store = &mut *store;
+        let retired = upsert(
+            &mut store.account_pairings,
+            &mut store.retired_certs,
+            &proof.machine,
+            name,
+            cert,
+        )
+        .inspect_err(|_| {
+            eprintln!("dusk: {name} asked to pair a certificate it has since replaced; declined")
+        })?;
         store.retired_pairings.extend(retired);
         store.save(&state.store_path).map_err(|err| {
             eprintln!("dusk: could not save the pairing with {name}: {err}");
@@ -250,21 +280,57 @@ mod tests {
     #[test]
     fn a_new_certificate_gets_a_new_uuid_and_retires_the_old() {
         let mut pairings = Vec::new();
-        assert_eq!(upsert(&mut pairings, "aa", "Desk", CLIENT_CERT), None);
-        let first = pairings[0].uuid.clone();
-        assert_eq!(first.len(), 36);
-        assert_eq!(first, first.to_uppercase());
-
+        let mut certs = HashMap::new();
+        let mut upsert = |cert: &str| upsert(&mut pairings, &mut certs, "aa", "Desk", cert);
+        assert_eq!(upsert(CLIENT_CERT), Ok(None));
         // The same certificate, however its lines end, is the same pairing.
         let crlf = CLIENT_CERT.replace('\n', "\r\n");
-        assert_eq!(upsert(&mut pairings, "aa", "Desk", &crlf), None);
-        assert_eq!(pairings[0].uuid, first);
+        assert_eq!(upsert(&crlf), Ok(None));
+        let retired = upsert(SERVER_CERT).unwrap();
 
-        let retired = upsert(&mut pairings, "aa", "Desk", SERVER_CERT);
-        assert_eq!(retired, Some(first.clone()));
+        let first = retired.expect("the old entry is taken out");
+        assert_eq!(first.len(), 36);
+        assert_eq!(first, first.to_uppercase());
         assert_eq!(pairings.len(), 1);
         assert_ne!(pairings[0].uuid, first);
         assert_eq!(pairings[0].cert, SERVER_CERT);
+    }
+
+    #[test]
+    fn a_certificate_a_machine_has_replaced_is_never_taken_back() {
+        let mut pairings = Vec::new();
+        let mut certs = HashMap::new();
+        upsert(&mut pairings, &mut certs, "aa", "Desk", CLIENT_CERT).unwrap();
+        upsert(&mut pairings, &mut certs, "aa", "Desk", SERVER_CERT).unwrap();
+        let current = pairings.clone();
+
+        // An older request played back, in whatever line endings.
+        let crlf = CLIENT_CERT.replace('\n', "\r\n");
+        let declined = upsert(&mut pairings, &mut certs, "aa", "Desk", &crlf).unwrap_err();
+        assert!(!declined.contains("Sunshine") && !declined.contains("Moonlight"));
+        assert_eq!(pairings, current);
+
+        // Kept across launches.
+        let stored = crate::store::Store {
+            retired_certs: certs.clone(),
+            ..Default::default()
+        };
+        let reread: crate::store::Store =
+            serde_json::from_str(&serde_json::to_string(&stored).unwrap()).unwrap();
+        assert_eq!(reread.retired_certs, certs);
+        let before: crate::store::Store = serde_json::from_str(r#"{"manual":[]}"#).unwrap();
+        assert!(before.retired_certs.is_empty());
+
+        // It was only retired for that machine.
+        assert_eq!(
+            upsert(&mut pairings, &mut certs, "bb", "Laptop", CLIENT_CERT),
+            Ok(None)
+        );
+        // And the current one still stands.
+        assert_eq!(
+            upsert(&mut pairings, &mut certs, "aa", "Desk", SERVER_CERT),
+            Ok(None)
+        );
     }
 
     fn signed_by(key: &MachineKey, host: &str) -> Proof {

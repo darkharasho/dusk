@@ -14,6 +14,12 @@
 # from: a per-machine MSI install updated by the per-user setup would end up
 # as two copies of Dusk. The plain windows-x86_64 key is the setup, for an
 # updater that asks without saying how it was installed.
+#
+# The .deb sits *beside* platforms, not in it, and that placement is the
+# whole trick: the updater plugin reads `platforms` and would try to install
+# a .deb as though it were an AppImage, writing over files dpkg owns. Dusk
+# installs that one itself, through the package manager, and reads it from
+# this key. linux-x86_64 therefore stays the AppImage.
 set -euo pipefail
 
 dir="${1:?artifacts directory}"
@@ -46,6 +52,7 @@ mac="$(find_one '*.app.tar.gz')"
 nsis="$(find_one '*-setup.exe')"
 msi="$(find_one '*.msi')"
 appimage="$(find_one '*.AppImage')"
+deb="$(find_one '*.deb')"
 
 jq -n \
   --arg version "$version" \
@@ -55,6 +62,7 @@ jq -n \
   --argjson nsis "$(entry "$nsis")" \
   --argjson msi "$(entry "$msi")" \
   --argjson appimage "$(entry "$appimage")" \
+  --argjson deb "$(entry "$deb")" \
   '{
     version: $version,
     notes: $notes,
@@ -67,7 +75,8 @@ jq -n \
       "windows-x86_64-msi": $msi,
       "linux-x86_64": $appimage,
       "linux-x86_64-appimage": $appimage
-    }
+    },
+    deb: $deb
   }' >"$out"
 
 cat "$out"

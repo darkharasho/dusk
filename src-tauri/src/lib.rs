@@ -350,7 +350,10 @@ pub fn run() {
             commands::get_startup,
             commands::set_open_at_login,
             commands::set_startup_prefs,
-            updates::updates_supported,
+            updates::update_channel,
+            updates::check_deb_update,
+            updates::download_deb_update,
+            updates::install_deb_update,
             updates::ensure_self_executable,
         ])
         .build(tauri::generate_context!())

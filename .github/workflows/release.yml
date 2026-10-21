@@ -413,6 +413,20 @@ jobs:
       - name: Build
         run: npm run tauri build -- --bundles deb,appimage
 
+      # The bundler signs the AppImage and not the .deb, because its updater
+      # cannot install a .deb. Dusk's own can, and checks the same signature
+      # before handing the file to a root process, so the .deb needs one too.
+      - name: Sign the .deb
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          deb="$(find src-tauri/target/release/bundle -maxdepth 2 -name '*.deb')"
+          [[ -n "$deb" && "$(wc -l <<<"$deb")" -eq 1 ]] \
+            || { echo "::error::expected exactly one .deb, found: ${deb:-none}" >&2; exit 1; }
+          npx tauri signer sign "$deb"
+          test -f "$deb.sig" || { echo "::error::no signature written beside $deb" >&2; exit 1; }
+
       - name: Collect artifacts
         run: |
           set -euo pipefail
@@ -421,7 +435,8 @@ jobs:
           # Dusk carries is copied into target/ as a resource, and a wider
           # search shipped it as a release asset of its own.
           find src-tauri/target/release/bundle -maxdepth 2 \
-            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.AppImage.sig' \) \
+            \( -name '*.deb' -o -name '*.deb.sig' \
+               -o -name '*.AppImage' -o -name '*.AppImage.sig' \) \
             -exec cp {} artifacts/ \;
           ls -la artifacts
           test -n "$(ls -A artifacts)" || { echo "::error::no package produced"; exit 1; }
@@ -506,7 +521,11 @@ jobs:
           # Three platforms, so a missing one has to be caught here: each
           # build job fails on its own empty output, but a release with the
           # macOS .dmg and nothing else would otherwise publish quietly.
-          for want in '\.dmg$' '\.msi$' '\.exe$' '\.deb$' '\.AppImage$' \
+          # The .deb's signature is named because Dusk checks it before
+          # handing the package to a root process: a release that shipped
+          # the .deb without it would leave every Debian install unable to
+          # update, and quietly.
+          for want in '\.dmg$' '\.msi$' '\.exe$' '\.deb$' '\.deb\.sig$' '\.AppImage$' \
                       '\.app\.tar\.gz$' '\.sig$' '/latest\.json$'; do
             printf '%s\n' "${files[@]}" | grep -qE "$want" \
               || { echo "::error::no artifact matching $want"; exit 1; }

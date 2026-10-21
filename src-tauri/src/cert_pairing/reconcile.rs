@@ -88,7 +88,8 @@ pub(super) async fn files(credentials: &Credentials) -> Option<Files> {
 #[async_trait]
 trait Owed: Send + Sync {
     async fn get(&self) -> bool;
-    async fn set(&self, owed: bool);
+    /// An error means the note was not kept, and nothing changed.
+    async fn set(&self, owed: bool) -> Result<(), String>;
 }
 
 /// Kept in Dusk's settings file, so it outlives this run.
@@ -103,15 +104,18 @@ impl Owed for Settings<'_> {
         self.store.lock().await.restart_owed
     }
 
-    async fn set(&self, owed: bool) {
+    async fn set(&self, owed: bool) -> Result<(), String> {
         let mut store = self.store.lock().await;
         if store.restart_owed == owed {
-            return;
+            return Ok(());
         }
         store.restart_owed = owed;
         if let Err(err) = store.save(self.path) {
-            eprintln!("dusk: could not note whether hosting needs a restart: {err}");
+            // Put back, so memory never claims what the disk does not.
+            store.restart_owed = !owed;
+            return Err(err);
         }
+        Ok(())
     }
 }
 
@@ -136,10 +140,16 @@ async fn pass(
     let mut pending = owed.get().await;
     if let Some(merged) = state_file::merge(&state_file::read(path)?, add, remove)? {
         // Noted before the write rather than after, so no moment exists
-        // where the file is changed and nothing says so.
-        owed.set(true).await;
+        // where the file is changed and nothing says so. A note that cannot
+        // be kept stops the write: a restart owed and forgotten would leave
+        // an addition unloaded, or a removal pruned while the host holds it.
+        owed.set(true).await.map_err(|err| {
+            StateFileError::Unwritable(format!("could not note the restart it needs: {err}"))
+        })?;
         if let Err(err) = state_file::write_atomic(path, &merged) {
-            owed.set(pending).await;
+            if let Err(undo) = owed.set(pending).await {
+                eprintln!("dusk: could not note whether hosting needs a restart: {undo}");
+            }
             return Err(err);
         }
         pending = true;
@@ -158,7 +168,10 @@ async fn pass(
     }
     match host.restart().await {
         Ok(()) => {
-            owed.set(false).await;
+            // Forgetting to clear it costs one needless restart, no more.
+            if let Err(err) = owed.set(false).await {
+                eprintln!("dusk: could not note that hosting has restarted: {err}");
+            }
             Ok(Pass {
                 pending: false,
                 restarted: true,
@@ -366,8 +379,9 @@ mod tests {
         async fn get(&self) -> bool {
             self.0.load(Ordering::SeqCst)
         }
-        async fn set(&self, owed: bool) {
-            self.0.store(owed, Ordering::SeqCst)
+        async fn set(&self, owed: bool) -> Result<(), String> {
+            self.0.store(owed, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -563,6 +577,59 @@ mod tests {
         assert!(out.restarted);
         assert_eq!(idle.restarts()[0].1, ["U1", "D1"]);
         assert!(!Store::load(&dir.store()).restart_owed);
+    }
+
+    #[tokio::test]
+    async fn a_restart_it_cannot_note_leaves_the_file_and_the_pairings_alone() {
+        let dir = Dir::new("reconcile-unsaved");
+        let path = dir.state();
+        // Under a regular file, so no settings can be saved there.
+        let unsaveable = path.join("devices.json");
+        let reconciler = Reconciler::new(Arc::default());
+        let idle = Fake::new(&[Some(false)], &path);
+
+        // An addition is not written.
+        let store = stored(&[pairing("aa", "D1")]);
+        let added = reconciler
+            .run(
+                &store,
+                &unsaveable,
+                &on_account(&["aa"]),
+                async { Some(path.clone()) },
+                &idle,
+            )
+            .await;
+        assert!(added.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), STATE);
+        assert!(!store.lock().await.restart_owed);
+
+        // A removal is not written, and the pairing is not forgotten.
+        reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&["aa"]),
+                async { Some(path.clone()) },
+                &idle,
+            )
+            .await
+            .unwrap();
+        let with_d1 = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(uuids(&path), ["U1", "D1"]);
+        let removed = reconciler
+            .run(
+                &store,
+                &unsaveable,
+                &on_account(&[]),
+                async { Some(path.clone()) },
+                &idle,
+            )
+            .await;
+        assert!(removed.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), with_d1);
+        assert_eq!(store.lock().await.account_pairings.len(), 1);
+        assert!(!store.lock().await.restart_owed);
+        assert_eq!(idle.restarts().len(), 1);
     }
 
     #[tokio::test]

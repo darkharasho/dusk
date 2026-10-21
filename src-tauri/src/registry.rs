@@ -309,6 +309,15 @@ impl Registry {
         }
     }
 
+    /// Show a device as unpaired whatever its probe said, and drop the app
+    /// list that belonged to the pairing, as a probe saying so would.
+    pub fn withhold_pairing(&mut self, id: &str) {
+        if let Some(device) = self.devices.get_mut(id) {
+            device.pairing = PairingState::NotPaired;
+            device.apps.clear();
+        }
+    }
+
     /// Everything that should be polled: all remote devices with an address,
     /// as `(id, addresses, http port, tls port)`.
     pub fn probe_targets(&self) -> Vec<(DeviceId, Vec<String>, u16, u16)> {
@@ -837,6 +846,7 @@ mod tests {
             rtt_ms: 7,
             authenticated: false,
             status_code: crate::serverinfo::STATUS_OK,
+            server_cert: None,
         }
     }
 
@@ -958,6 +968,7 @@ mod tests {
             addresses: vec![address.into()],
             port: DEFAULT_HTTP_PORT,
             uuid: uuid.map(str::to_string),
+            server_cert: None,
         }
     }
 

@@ -30,6 +30,36 @@ pub struct KnownHost {
     pub port: u16,
     /// Sunshine's `uniqueid`. Present for anything Moonlight has reached.
     pub uuid: Option<String>,
+    /// The certificate the client trusts this host by, as PEM. Only a
+    /// paired host has one: it is what the client pins every stream to.
+    pub server_cert: Option<String>,
+}
+
+/// Has the host started presenting a certificate other than the one the
+/// client trusts it by?
+///
+/// A stored certificate that does not decode is not a change: there is
+/// nothing to compare against, and treating it as one would pair again
+/// every few minutes for as long as the store stays unreadable.
+pub fn certificate_changed(stored_pem: &str, presented_der: &[u8]) -> bool {
+    match rustls_pemfile::certs(&mut stored_pem.as_bytes()).next() {
+        Some(Ok(stored)) => stored.as_ref() != presented_der,
+        _ => false,
+    }
+}
+
+/// The PEM inside a stored `srvcert`.
+///
+/// QSettings wraps a byte array as `@ByteArray(...)` in a string-valued
+/// backend and escapes it in the INI one; a backend that stores bytes as
+/// bytes gives the PEM bare. All three come out the same here.
+fn server_pem(raw: &str) -> Option<String> {
+    let payload = raw
+        .strip_prefix("@ByteArray(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or(raw);
+    let pem = String::from_utf8(crate::moonlight::identity::unescape(payload)).ok()?;
+    pem.contains("-----BEGIN CERTIFICATE-----").then_some(pem)
 }
 
 /// Read the host list, or an empty list where there is nothing to read.
@@ -103,6 +133,7 @@ fn assemble(fields: &Fields) -> Vec<KnownHost> {
                 addresses,
                 port,
                 uuid: get("uuid").map(str::to_string),
+                server_cert: get("srvcert").and_then(server_pem),
             })
         })
         .collect()
@@ -144,11 +175,13 @@ mod platform {
             .collect()
     }
 
-    /// Ports come back as integers and everything else as strings.
+    /// Ports come back as integers, the server certificate as data, and
+    /// everything else as strings.
     fn scalar(value: &plist::Value) -> Option<String> {
         match value {
             plist::Value::String(s) => Some(s.clone()),
             plist::Value::Integer(i) => Some(i.to_string()),
+            plist::Value::Data(bytes) => String::from_utf8(bytes.clone()).ok(),
             _ => None,
         }
     }
@@ -211,12 +244,27 @@ mod platform {
         out
     }
 
-    /// Ports are written as DWORDs and everything else as strings.
+    /// Ports are written as DWORDs and everything else as strings, except
+    /// that a byte array such as the server certificate may be written as
+    /// binary: UTF-8 as the identity is, or the UTF-16 a string would be.
     fn scalar(key: &RegKey, name: &str) -> Option<String> {
         if let Ok(text) = key.get_value::<String, _>(name) {
             return Some(text);
         }
-        key.get_value::<u32, _>(name).ok().map(|n| n.to_string())
+        if let Ok(n) = key.get_value::<u32, _>(name) {
+            return Some(n.to_string());
+        }
+        let bytes = key.get_raw_value(name).ok()?.bytes;
+        if let Ok(text) = String::from_utf8(bytes.clone()) {
+            return Some(text.trim_end_matches('\0').to_string());
+        }
+        let wide: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16(&wide)
+            .ok()
+            .map(|text| text.trim_end_matches('\0').to_string())
     }
 }
 
@@ -278,6 +326,7 @@ mod tests {
                 addresses: vec!["192.168.50.146".into()],
                 port: 47989,
                 uuid: Some("4F870966-1A5C-DF0E-1A0A-B711ED48CD13".into()),
+                server_cert: None,
             }]
         );
     }
@@ -379,6 +428,52 @@ mod tests {
         let hosts = assemble(&ini_host_fields(ini));
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].name, "bazzite");
+    }
+
+    /// A PEM whose body is `der`, which is all `certificate_changed` reads.
+    fn pem(der: &[u8]) -> String {
+        use base64::Engine;
+        let body = base64::engine::general_purpose::STANDARD.encode(der);
+        format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n")
+    }
+
+    #[test]
+    fn the_stored_server_certificate_is_read_with_the_host() {
+        // What moonlight-qt writes: a quoted, escaped `@ByteArray`, because
+        // the base64 padding makes QSettings quote it.
+        let stored = pem(b"the host's certificate!");
+        let escaped = stored.replace('\n', "\\n");
+        let ini = format!(
+            "[hosts]\n1\\hostname=bazzite\n1\\localaddress=192.168.50.146\n\
+             1\\uuid=4F870966-1A5C-DF0E-1A0A-B711ED48CD13\n\
+             1\\srvcert=\"@ByteArray({escaped})\"\n\
+             2\\hostname=unpaired\n2\\localaddress=192.168.50.69\nsize=2\n"
+        );
+        let hosts = assemble(&ini_host_fields(&ini));
+        assert_eq!(hosts[0].server_cert.as_deref(), Some(stored.as_str()));
+        // A host found but never paired has no certificate to trust.
+        assert_eq!(hosts[1].server_cert, None);
+    }
+
+    #[test]
+    fn the_same_certificate_is_not_a_change() {
+        let der = b"the host's certificate";
+        assert!(!certificate_changed(&pem(der), der));
+    }
+
+    #[test]
+    fn a_different_certificate_is_a_change() {
+        assert!(certificate_changed(
+            &pem(b"the host's certificate"),
+            b"a certificate minted since"
+        ));
+    }
+
+    #[test]
+    fn a_stored_certificate_that_cannot_be_read_is_not_a_change() {
+        // Nothing to compare against says nothing about the host, and must
+        // not set off a pairing every ten minutes.
+        assert!(!certificate_changed("not a certificate", b"anything"));
     }
 
     #[test]

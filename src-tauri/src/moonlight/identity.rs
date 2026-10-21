@@ -176,8 +176,8 @@ fn ini_value(text: &str, key: &str) -> Option<Vec<u8>> {
     Some(unescape(payload))
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn unescape(s: &str) -> Vec<u8> {
+/// Also how a remembered host's `srvcert` is unwrapped, on every platform.
+pub(super) fn unescape(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {

@@ -52,6 +52,10 @@ pub struct ServerInfo {
     pub authenticated: bool,
     /// Sunshine's application-level status, not the HTTP one.
     pub status_code: u16,
+    /// The certificate the host presented, as DER. Only a TLS probe sees
+    /// one, and it is what tells a host that minted a new certificate from
+    /// the one the client paired with.
+    pub server_cert: Option<Vec<u8>>,
 }
 
 impl ServerInfo {
@@ -170,6 +174,13 @@ async fn query(
         .await
         .map_err(|e| describe(&e))?;
     let rtt_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+    // Read before the body, which consumes the response. Only a client
+    // built with `tls_info` records it; see `state::tls_client`.
+    let server_cert = response
+        .extensions()
+        .get::<reqwest::tls::TlsInfo>()
+        .and_then(reqwest::tls::TlsInfo::peer_certificate)
+        .map(<[u8]>::to_vec);
 
     if !response.status().is_success() {
         return Err(format!("serverinfo returned {}", response.status()));
@@ -182,6 +193,7 @@ async fn query(
         rtt_ms,
         authenticated,
         status_code,
+        server_cert,
     })
 }
 
@@ -365,6 +377,7 @@ mod tests {
             rtt_ms: 3,
             authenticated,
             status_code,
+            server_cert: None,
         }
     }
 

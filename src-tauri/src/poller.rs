@@ -5,19 +5,25 @@
 //! order and the first to answer becomes the primary, which is how a machine
 //! reachable on both LAN and VPN settles on whichever path is up.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
 use tauri::AppHandle;
 
+use crate::account::Membership;
 use crate::applist;
-use crate::model::{DeviceId, Reachability};
+use crate::model::{DeviceId, PairingState, Reachability};
+use crate::moonlight::hosts::{certificate_changed, KnownHost};
 use crate::registry::ProbeOutcome;
 use crate::serverinfo;
 use crate::state::{emit_snapshot, AppState};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long after pairing again with a machine before trying once more.
+const RE_PAIR_EVERY: Duration = Duration::from_secs(10 * 60);
 
 pub fn spawn(app: AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
@@ -46,6 +52,10 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
 
     // All machines are probed concurrently; one unreachable host must not
     // hold up the rest of the grid.
+    // Read every tick rather than once at start: pairing here, by PIN or by
+    // certificate, is what writes a host's certificate into this list.
+    let known = crate::moonlight::hosts::load(state.moonlight.as_ref());
+
     let probes = targets.into_iter().map(|(id, addresses, port, tls_port)| {
         let http = state.http.clone();
         let tls = tls_client.clone();
@@ -59,15 +69,31 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
 
     let results = join_all(probes).await;
 
+    // What each host presented, under the id its probe settled on.
+    let mut presented: HashMap<DeviceId, Vec<u8>> = HashMap::new();
     {
         let mut registry = state.registry.write().await;
-        for (id, outcome) in results {
-            registry.apply_probe(&id, outcome);
+        for (id, (outcome, cert)) in results {
+            let probed = match &outcome {
+                ProbeOutcome::Reached { info, pairing, .. } => pairing.unwrap_or(info.pairing()),
+                ProbeOutcome::Unreachable => PairingState::Unknown,
+            };
+            let id = registry.apply_probe(&id, outcome);
+            // Under the same lock as the probe, so no snapshot taken in
+            // between can show a pairing this machine cannot use.
+            let stored = stored_cert(&known, &id);
+            if shown_pairing(probed, stored, cert.as_deref()) != probed {
+                registry.withhold_pairing(&id);
+            }
+            if let Some(cert) = cert {
+                presented.insert(id, cert);
+            }
         }
     }
 
     ask_who_they_are(state).await;
     hold_the_account_machines(state).await;
+    re_pair_changed_hosts(state, &known, &presented).await;
 
     emit_snapshot(app, state).await;
     fetch_app_lists(app, state).await;
@@ -183,6 +209,158 @@ async fn ask_who_they_are(state: &Arc<AppState>) {
     }
 }
 
+/// The certificate the client trusts the host behind `id` by, if any.
+///
+/// Matched without regard to case: the client and the host both write the
+/// id upper case, so this agrees with the registry's exact match on every
+/// id seen so far, and a host that wrote it otherwise must not lose a PIN
+/// pairing over it.
+fn stored_cert<'a>(known: &'a [KnownHost], id: &str) -> Option<&'a str> {
+    let uniqueid = crate::registry::unique_id_of(id)?;
+    known
+        .iter()
+        .find(|host| {
+            host.uuid
+                .as_deref()
+                .is_some_and(|uuid| uuid.eq_ignore_ascii_case(uniqueid))
+        })
+        .and_then(|host| host.server_cert.as_deref())
+}
+
+/// What the card says about pairing, given what the probe said.
+///
+/// A host can trust this machine while the client cannot trust it back:
+/// the host half of a pairing by certificate done and the client half not,
+/// or a host that has since minted a new certificate. Either way a stream
+/// would fail, so the card must not say paired. A PIN pairing always leaves
+/// the client holding the host's certificate, so it reads as it always did.
+fn shown_pairing(
+    probed: PairingState,
+    stored: Option<&str>,
+    presented: Option<&[u8]>,
+) -> PairingState {
+    if probed != PairingState::Paired {
+        return probed;
+    }
+    match (stored, presented) {
+        (None, _) => PairingState::NotPaired,
+        (Some(stored), Some(presented)) if certificate_changed(stored, presented) => {
+            PairingState::NotPaired
+        }
+        _ => PairingState::Paired,
+    }
+}
+
+/// Whether to pair again with a host: only one of your own, and only when
+/// it is presenting a certificate other than the one the client trusts.
+fn should_re_pair(on_account: bool, stored: Option<&str>, presented: Option<&[u8]>) -> bool {
+    on_account
+        && matches!(
+            (stored, presented),
+            (Some(stored), Some(presented)) if certificate_changed(stored, presented)
+        )
+}
+
+/// When each machine was last paired again, and which are being now.
+#[derive(Default)]
+pub struct RePairs(Mutex<RePairLog>);
+
+#[derive(Default)]
+struct RePairLog {
+    started: HashMap<DeviceId, Instant>,
+    running: HashSet<DeviceId>,
+}
+
+impl RePairs {
+    /// Claim a try at pairing again with `id`. False while one is still
+    /// running, which can be a long time, and for ten minutes after the
+    /// last one started.
+    fn begin(&self, id: &str, now: Instant) -> bool {
+        let mut log = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if log.running.contains(id) {
+            return false;
+        }
+        if let Some(last) = log.started.get(id) {
+            if now.saturating_duration_since(*last) < RE_PAIR_EVERY {
+                return false;
+            }
+        }
+        log.started.insert(id.to_string(), now);
+        log.running.insert(id.to_string());
+        true
+    }
+
+    fn end(&self, id: &str) {
+        let mut log = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        log.running.remove(id);
+    }
+}
+
+/// Pair again, without asking, with any machine of yours that has started
+/// presenting a new certificate.
+///
+/// The host still trusts this machine, so its card would read as paired,
+/// but the client pins the certificate it paired with and would refuse every
+/// stream. The card reads as unpaired until this succeeds, and a host that
+/// declines is simply left that way.
+///
+/// Spawned, never awaited: a pairing can wait minutes for a stream window
+/// here to close, and for as long as the host is streaming to someone.
+async fn re_pair_changed_hosts(
+    state: &Arc<AppState>,
+    known: &[KnownHost],
+    presented: &HashMap<DeviceId, Vec<u8>>,
+) {
+    if presented.is_empty() {
+        return;
+    }
+    // The cached list only: background work must never be what puts a
+    // keystore prompt on screen.
+    let Membership::Machines(account) = state.account.known_membership().await else {
+        return;
+    };
+    let devices = state.registry.read().await.devices();
+    for device in devices {
+        let Some(cert) = presented.get(&device.id) else {
+            continue;
+        };
+        let on_account = device
+            .machine_id
+            .as_deref()
+            .is_some_and(|machine| account.contains(machine));
+        if !should_re_pair(on_account, stored_cert(known, &device.id), Some(cert)) {
+            continue;
+        }
+        let Some(address) = device.primary_address.clone() else {
+            continue;
+        };
+        if !state.repairs.begin(&device.id, Instant::now()) {
+            continue;
+        }
+
+        let state = state.clone();
+        let id = device.id.clone();
+        let name = device.name.clone();
+        tauri::async_runtime::spawn(async move {
+            eprintln!("dusk: {name} has a new certificate; pairing again");
+            let paired = crate::cert_pairing::client::pair(
+                &state,
+                &address,
+                &id,
+                || eprintln!("dusk: pairing with {id} again once the stream window here closes"),
+                || eprintln!("dusk: pairing with {id} again once it stops streaming"),
+            )
+            .await;
+            match paired {
+                Ok(true) => state.request_refresh(),
+                Ok(false) => eprintln!("dusk: {id} did not pair again by certificate"),
+                Err(err) => eprintln!("dusk: could not pair again with {id}: {err}"),
+            }
+            state.repairs.end(&id);
+        });
+    }
+}
+
 /// Try each address in turn, preferring the authenticated probe.
 ///
 /// Three outcomes matter, not two:
@@ -193,24 +371,29 @@ async fn ask_who_they_are(state: &Arc<AppState>) {
 ///   plain probe still runs for detail and the pairing verdict is carried
 ///   over. A host that answers only this is still online.
 /// - TLS fails outright — plain probe alone, pairing unknown.
+///
+/// Alongside the outcome comes the certificate the host presented over TLS,
+/// whatever it then said about us.
 async fn probe(
     http: &reqwest::Client,
     tls: Option<&reqwest::Client>,
     addresses: &[String],
     port: u16,
     tls_port: u16,
-) -> ProbeOutcome {
+) -> (ProbeOutcome, Option<Vec<u8>>) {
     let mut rejected: Option<(String, serverinfo::ServerInfo)> = None;
 
     for address in addresses {
         if let Some(tls) = tls {
             if let Ok(info) = serverinfo::query_https(tls, address, tls_port).await {
                 if info.status_code == serverinfo::STATUS_OK {
-                    return ProbeOutcome::Reached {
+                    let cert = info.server_cert.clone();
+                    let outcome = ProbeOutcome::Reached {
                         address: address.clone(),
                         info,
                         pairing: None,
                     };
+                    return (outcome, cert);
                 }
                 if info.status_code == serverinfo::STATUS_UNAUTHORIZED && rejected.is_none() {
                     rejected = Some((address.clone(), info));
@@ -219,24 +402,94 @@ async fn probe(
         }
 
         if let Ok(info) = serverinfo::query_http(http, address, port).await {
-            return ProbeOutcome::Reached {
+            let cert = rejected.as_ref().and_then(|(_, r)| r.server_cert.clone());
+            let outcome = ProbeOutcome::Reached {
                 address: address.clone(),
                 // Carry the authenticated verdict over the plain probe's
                 // Unknown, which is strictly less informative.
                 pairing: rejected.as_ref().map(|(_, r)| r.pairing()),
                 info,
             };
+            return (outcome, cert);
         }
     }
 
     // Reachable over TLS but not over the plain port: still online, and we
     // know exactly where we stand on pairing.
     match rejected {
-        Some((address, info)) => ProbeOutcome::Reached {
-            address,
-            pairing: Some(info.pairing()),
-            info,
-        },
-        None => ProbeOutcome::Unreachable,
+        Some((address, info)) => {
+            let cert = info.server_cert.clone();
+            let outcome = ProbeOutcome::Reached {
+                address,
+                pairing: Some(info.pairing()),
+                info,
+            };
+            (outcome, cert)
+        }
+        None => (ProbeOutcome::Unreachable, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pem(der: &[u8]) -> String {
+        use base64::Engine;
+        let body = base64::engine::general_purpose::STANDARD.encode(der);
+        format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n")
+    }
+
+    const STORED: &[u8] = b"the certificate paired with";
+    const MINTED: &[u8] = b"a certificate minted since";
+
+    #[test]
+    fn a_machine_off_the_account_is_never_re_paired() {
+        let stored = pem(STORED);
+        assert!(!should_re_pair(false, Some(&stored), Some(MINTED)));
+        // The same change on one of yours is exactly the case to act on.
+        assert!(should_re_pair(true, Some(&stored), Some(MINTED)));
+        // Nothing changed, or nothing to compare: nothing to do.
+        assert!(!should_re_pair(true, Some(&stored), Some(STORED)));
+        assert!(!should_re_pair(true, None, Some(MINTED)));
+        assert!(!should_re_pair(true, Some(&stored), None));
+    }
+
+    #[test]
+    fn a_re_pair_is_not_retried_more_than_once_in_ten_minutes() {
+        let repairs = RePairs::default();
+        let start = Instant::now();
+        assert!(repairs.begin("sunshine:A", start));
+        // Not while the first is still going, however long it waits.
+        assert!(!repairs.begin("sunshine:A", start + Duration::from_secs(1)));
+        repairs.end("sunshine:A");
+        assert!(!repairs.begin("sunshine:A", start + Duration::from_secs(9 * 60)));
+        // Another machine has its own allowance.
+        assert!(repairs.begin("sunshine:B", start + Duration::from_secs(60)));
+        assert!(repairs.begin("sunshine:A", start + Duration::from_secs(10 * 60)));
+    }
+
+    #[test]
+    fn a_host_trusting_us_that_we_cannot_trust_back_is_not_shown_paired() {
+        let stored = pem(STORED);
+        // The host answers paired, but the client has no certificate for it.
+        assert_eq!(
+            shown_pairing(PairingState::Paired, None, Some(STORED)),
+            PairingState::NotPaired
+        );
+        // The client holds a certificate the host no longer presents.
+        assert_eq!(
+            shown_pairing(PairingState::Paired, Some(&stored), Some(MINTED)),
+            PairingState::NotPaired
+        );
+        // A PIN pairing: both halves agree, and nothing changes.
+        assert_eq!(
+            shown_pairing(PairingState::Paired, Some(&stored), Some(STORED)),
+            PairingState::Paired
+        );
+        // Anything the probe did not call paired is left as it said.
+        for probed in [PairingState::NotPaired, PairingState::Unknown] {
+            assert_eq!(shown_pairing(probed, None, Some(MINTED)), probed);
+        }
     }
 }

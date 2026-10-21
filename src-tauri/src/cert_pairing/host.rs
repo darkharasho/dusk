@@ -175,7 +175,14 @@ async fn answer(
     let at = async { Some(files.state.clone()) };
     let outcome = state
         .reconciler
-        .run(&state.store, &state.store_path, &membership, at, &host)
+        .run(
+            &state.store,
+            &state.store_path,
+            &membership,
+            at,
+            &host,
+            &Timing::REAL,
+        )
         .await
         .map_err(|err| {
             eprintln!("dusk: could not pair {name} by certificate: {err}");
@@ -186,7 +193,7 @@ async fn answer(
         // soon as the stream ends.
         state.reconciler.nudge();
     }
-    let ready = ready(outcome, &host, &Timing::REAL).await;
+    let ready = ready(outcome);
 
     let reply = cert_reply_message(cert, &identity.uniqueid, &identity.server_cert);
     let proof = state

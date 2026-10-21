@@ -95,6 +95,10 @@ pub struct Fake {
     pub file: Option<PathBuf>,
     /// Run on each poll, to stand in for the host rewriting the file.
     pub on_poll: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Takes the restart request and carries on as it was, never going
+    /// down. Otherwise each restart is one unanswered poll and then the
+    /// script again.
+    pub stays_up: bool,
 }
 
 impl Fake {
@@ -131,6 +135,9 @@ impl Host for Fake {
             .lock()
             .unwrap()
             .push((self.polls.load(Ordering::SeqCst), held));
+        if !self.stays_up {
+            self.script.lock().unwrap().push_front(None);
+        }
         Ok(())
     }
 }

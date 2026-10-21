@@ -38,6 +38,8 @@ pub trait Host: Send + Sync {
     /// `Some(true)` while streaming, `Some(false)` when idle, `None` when it
     /// does not answer — which is never taken as idle.
     async fn hosting(&self) -> Option<bool>;
+    /// Ask the host to restart. `Ok` means it took the request, not that it
+    /// has restarted: see [`came_back`] for that.
     async fn restart(&self) -> Result<(), String>;
 }
 
@@ -59,7 +61,7 @@ impl Host for Local<'_> {
     async fn restart(&self) -> Result<(), String> {
         SunshineApi::new(api::DEFAULT_PORT)
             .map_err(|e| e.to_string())?
-            .restart(self.credentials)
+            .restart_checked(self.credentials)
             .await
             .map_err(|e| e.to_string())
     }
@@ -129,13 +131,15 @@ pub struct Pass {
 }
 
 /// Bring the file in line with `add` and `remove`, and restart the host if
-/// it is owed one and nothing is streaming.
+/// it is owed one and nothing is streaming. The restart is only counted
+/// once it has been seen to happen, and only then is it no longer owed.
 async fn pass(
     owed: &dyn Owed,
     path: &Path,
     add: &[NamedDevice],
     remove: &[String],
     host: &dyn Host,
+    timing: &Timing,
 ) -> Result<Pass, StateFileError> {
     let mut pending = owed.get().await;
     if let Some(merged) = state_file::merge(&state_file::read(path)?, add, remove)? {
@@ -166,22 +170,52 @@ async fn pass(
     if let Some(merged) = state_file::merge(&state_file::read(path)?, add, remove)? {
         state_file::write_atomic(path, &merged)?;
     }
-    match host.restart().await {
-        Ok(()) => {
-            // Forgetting to clear it costs one needless restart, no more.
-            if let Err(err) = owed.set(false).await {
-                eprintln!("dusk: could not note that hosting has restarted: {err}");
-            }
-            Ok(Pass {
-                pending: false,
-                restarted: true,
-            })
-        }
-        Err(err) => {
-            eprintln!("dusk: could not restart hosting to load paired machines: {err}");
-            Ok(waiting)
-        }
+    if let Err(err) = host.restart().await {
+        eprintln!("dusk: could not restart hosting to load paired machines: {err}");
+        return Ok(waiting);
     }
+    if !came_back(host, timing).await {
+        // Still owed, so the next pass asks again. A host that did restart
+        // and was only slow to come back costs one restart more, no more.
+        eprintln!(
+            "dusk: hosting took the restart but was not seen to go down and come back \
+             within {:?}; it is still owed",
+            timing.back_within
+        );
+        return Ok(waiting);
+    }
+    // Forgetting to clear it costs one needless restart, no more.
+    if let Err(err) = owed.set(false).await {
+        eprintln!("dusk: could not note that hosting has restarted: {err}");
+    }
+    Ok(Pass {
+        pending: false,
+        restarted: true,
+    })
+}
+
+/// Whether a restart the host was asked for really happened: it is seen not
+/// answering at least once, and then answering again, within `back_within`.
+///
+/// An answer before it has gone down is the process on its way out — or one
+/// that never left — and counts for nothing: that one still holds the list
+/// as it was. Asked every `probe`, which is far shorter than the time the
+/// host spends down: it stops serving before it exits and only serves again
+/// once the new process has loaded its files.
+async fn came_back(host: &dyn Host, timing: &Timing) -> bool {
+    tokio::time::timeout(timing.back_within, async {
+        let mut gone = false;
+        loop {
+            match host.hosting().await {
+                None => gone = true,
+                Some(_) if gone => return,
+                Some(_) => {}
+            }
+            tokio::time::sleep(timing.probe).await;
+        }
+    })
+    .await
+    .is_ok()
 }
 
 /// How long the reconciler waits for things.
@@ -191,12 +225,10 @@ pub(super) struct Timing {
     tick: Duration,
     /// Between passes while a restart is owed.
     poll: Duration,
-    /// After a restart, before asking whether the host is back, so the
-    /// process on its way out is not what answers.
-    settle: Duration,
-    /// Between asks while waiting for it to come back.
-    retry: Duration,
-    /// How long a pairing waits for the host to come back.
+    /// Between asks while watching a restart: short enough that the time
+    /// the host spends down cannot fall between two of them.
+    probe: Duration,
+    /// How long a restart has to be seen going down and coming back.
     back_within: Duration,
 }
 
@@ -204,8 +236,7 @@ impl Timing {
     pub(super) const REAL: Timing = Timing {
         tick: Duration::from_secs(60),
         poll: Duration::from_secs(15),
-        settle: Duration::from_secs(1),
-        retry: Duration::from_millis(500),
+        probe: Duration::from_millis(250),
         back_within: Duration::from_secs(20),
     };
 }
@@ -227,26 +258,12 @@ where
     }
 }
 
-/// Whether the host answers again within the time a pairing waits.
-async fn back_within(host: &dyn Host, timing: &Timing) -> bool {
-    tokio::time::timeout(timing.back_within, async {
-        tokio::time::sleep(timing.settle).await;
-        while host.hosting().await.is_none() {
-            tokio::time::sleep(timing.retry).await;
-        }
-    })
-    .await
-    .is_ok()
-}
-
 /// Whether a machine just paired can stream from here now: the host has
-/// nothing left to load, or it has just restarted and is answering again.
-pub(super) async fn ready(outcome: Pass, host: &dyn Host, timing: &Timing) -> bool {
-    if outcome.restarted {
-        back_within(host, timing).await
-    } else {
-        !outcome.pending
-    }
+/// nothing left to load. A pass that restarted it has already seen it go
+/// down and come back (see [`came_back`]); one where that was not seen is
+/// still pending, so an answer from the old process never makes it ready.
+pub(super) fn ready(outcome: Pass) -> bool {
+    !outcome.pending
 }
 
 /// Keeps the host's list of paired machines in line with your account.
@@ -307,7 +324,14 @@ impl Reconciler {
         };
         let path = async { files(&credentials).await.map(|f| f.state) };
         match self
-            .run(&state.store, &state.store_path, &membership, path, &host)
+            .run(
+                &state.store,
+                &state.store_path,
+                &membership,
+                path,
+                &host,
+                &Timing::REAL,
+            )
             .await
         {
             Ok(pass) => pass.pending,
@@ -328,6 +352,7 @@ impl Reconciler {
         membership: &Membership,
         state_path: impl Future<Output = Option<PathBuf>>,
         host: &dyn Host,
+        timing: &Timing,
     ) -> Result<Pass, StateFileError> {
         let _one = self.running.lock().await;
         let (pairings, retired, owed) = {
@@ -348,10 +373,11 @@ impl Reconciler {
             store,
             path: store_path,
         };
-        let outcome = pass(&settings, &path, &add, &remove, host).await?;
-        // Not while a restart is owed: the running host still has them, and
-        // its next rewrite would put them back in the file with nothing left
-        // here to take them out again.
+        let outcome = pass(&settings, &path, &add, &remove, host, timing).await?;
+        // Not while a restart is owed, which includes one asked for but not
+        // seen to happen: the running host still has them, and its next
+        // rewrite would put them back in the file with nothing left here to
+        // take them out again.
         if !outcome.pending && !remove.is_empty() {
             let mut store = store.lock().await;
             store.account_pairings.retain(|p| !remove.contains(&p.uuid));
@@ -369,6 +395,13 @@ mod tests {
     use super::super::fixtures::{on_account, pairing, uuids, Dir, Fake, STATE};
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// Watching a restart without waiting on a real one.
+    const QUICK: Timing = Timing {
+        probe: Duration::from_millis(1),
+        back_within: Duration::from_millis(200),
+        ..Timing::REAL
+    };
 
     /// Owed held in memory, for driving `pass` alone.
     #[derive(Default)]
@@ -395,13 +428,13 @@ mod tests {
         let (add, remove) = plan(&[pairing("aa", "D1")], &on_account(&["aa"]));
         let owed = Flag::default();
         for round in 1..=3 {
-            let out = pass(&owed, &dir.state(), &add, &remove, &host)
+            let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
                 .await
                 .unwrap();
             assert!(out.pending && !out.restarted, "round {round}");
             assert!(host.restarts().is_empty());
         }
-        let out = pass(&owed, &dir.state(), &add, &remove, &host)
+        let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
             .await
             .unwrap();
         assert!(out.restarted && !out.pending);
@@ -409,7 +442,7 @@ mod tests {
         assert_eq!(host.restarts()[0].0, 4);
 
         // Once loaded, a pass with nothing to change restarts nothing.
-        let out = pass(&owed, &dir.state(), &add, &remove, &host)
+        let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
             .await
             .unwrap();
         assert!(!out.pending && !out.restarted);
@@ -424,7 +457,9 @@ mod tests {
         let owed = Flag::default();
 
         let busy = Fake::new(&[Some(true)], &path);
-        pass(&owed, &path, &add, &remove, &busy).await.unwrap();
+        pass(&owed, &path, &add, &remove, &busy, &QUICK)
+            .await
+            .unwrap();
         assert_eq!(uuids(&path), ["U1", "D1"]);
 
         // The host rewrites the file from what it holds in memory, which
@@ -435,7 +470,9 @@ mod tests {
             on_poll: Some(Box::new(move || std::fs::write(&rewrite, STATE).unwrap())),
             ..Fake::new(&[Some(false)], &path)
         };
-        let out = pass(&owed, &path, &add, &remove, &idle).await.unwrap();
+        let out = pass(&owed, &path, &add, &remove, &idle, &QUICK)
+            .await
+            .unwrap();
         assert!(out.restarted);
         assert_eq!(idle.restarts()[0].1, ["U1", "D1"]);
     }
@@ -448,19 +485,25 @@ mod tests {
         let owed = Flag::default();
         let (add, remove) = plan(&paired, &on_account(&["aa"]));
         let idle = Fake::new(&[Some(false)], &path);
-        pass(&owed, &path, &add, &remove, &idle).await.unwrap();
+        pass(&owed, &path, &add, &remove, &idle, &QUICK)
+            .await
+            .unwrap();
         assert_eq!(idle.restarts().len(), 1);
 
         let (add, remove) = plan(&paired, &on_account(&[]));
         let host = Fake::new(&[Some(true), Some(true), Some(false)], &path);
         for _ in 0..2 {
-            let out = pass(&owed, &path, &add, &remove, &host).await.unwrap();
+            let out = pass(&owed, &path, &add, &remove, &host, &QUICK)
+                .await
+                .unwrap();
             assert!(out.pending && !out.restarted);
         }
         // Out of the file at once; out of the running host only when idle.
         assert_eq!(uuids(&path), ["U1"]);
         assert!(host.restarts().is_empty());
-        pass(&owed, &path, &add, &remove, &host).await.unwrap();
+        pass(&owed, &path, &add, &remove, &host, &QUICK)
+            .await
+            .unwrap();
         assert_eq!(host.restarts(), [(3, vec!["U1".to_string()])]);
     }
 
@@ -471,7 +514,7 @@ mod tests {
         let (add, remove) = plan(&[pairing("aa", "D1")], &on_account(&["aa"]));
         let owed = Flag::default();
         for _ in 0..3 {
-            let out = pass(&owed, &dir.state(), &add, &remove, &host)
+            let out = pass(&owed, &dir.state(), &add, &remove, &host, &QUICK)
                 .await
                 .unwrap();
             assert!(out.pending && !out.restarted);
@@ -496,7 +539,14 @@ mod tests {
 
         let idle = Fake::new(&[Some(false)], &path);
         let paired = reconciler
-            .run(&store, &dir.store(), &on_account(&["aa"]), at(), &idle)
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&["aa"]),
+                at(),
+                &idle,
+                &QUICK,
+            )
             .await
             .unwrap();
         assert!(paired.restarted);
@@ -506,7 +556,7 @@ mod tests {
         let busy = Fake::new(&[Some(true)], &path);
         let off = on_account(&[]);
         let out = reconciler
-            .run(&store, &dir.store(), &off, at(), &busy)
+            .run(&store, &dir.store(), &off, at(), &busy, &QUICK)
             .await
             .unwrap();
         assert!(out.pending);
@@ -518,12 +568,57 @@ mod tests {
         std::fs::write(&path, &with_d1).unwrap();
         let idle = Fake::new(&[Some(false)], &path);
         let out = reconciler
-            .run(&store, &dir.store(), &off, at(), &idle)
+            .run(&store, &dir.store(), &off, at(), &idle, &QUICK)
             .await
             .unwrap();
         assert!(out.restarted);
         assert_eq!(idle.restarts()[0].1, ["U1"]);
         assert!(store.lock().await.account_pairings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_restart_the_host_never_went_down_for_is_still_owed() {
+        let dir = Dir::new("reconcile-never-down");
+        let path = dir.state();
+        let store = stored(&[pairing("aa", "D1")]);
+        let reconciler = Reconciler::new(Arc::default());
+        let at = || async { Some(dir.state()) };
+        let idle = Fake::new(&[Some(false)], &path);
+        reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&["aa"]),
+                at(),
+                &idle,
+                &QUICK,
+            )
+            .await
+            .unwrap();
+
+        // Taken off the account. The host takes the restart request but
+        // never goes down: what answers is still the old process, holding D1.
+        let unmoved = Fake {
+            stays_up: true,
+            ..Fake::new(&[Some(false)], &path)
+        };
+        let out = reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&[]),
+                at(),
+                &unmoved,
+                &QUICK,
+            )
+            .await
+            .unwrap();
+        assert_eq!(unmoved.restarts().len(), 1);
+        assert!(out.pending && !out.restarted);
+        assert!(store.lock().await.restart_owed);
+        assert!(Store::load(&dir.store()).restart_owed);
+        assert_eq!(store.lock().await.account_pairings.len(), 1);
+        assert!(!ready(out));
     }
 
     #[tokio::test]
@@ -539,11 +634,12 @@ mod tests {
                 &on_account(&["aa"]),
                 async { Some(dir.state()) },
                 &busy,
+                &QUICK,
             )
             .await
             .unwrap();
         assert!(out.pending);
-        assert!(!ready(out, &busy, &Timing::REAL).await);
+        assert!(!ready(out));
 
         // Dusk quits. Next launch reads its settings back from disk; the
         // file is already current, so only the note says a restart is owed.
@@ -557,11 +653,12 @@ mod tests {
                 &on_account(&["aa"]),
                 async { Some(dir.state()) },
                 &still_busy,
+                &QUICK,
             )
             .await
             .unwrap();
         assert!(out.pending && !out.restarted);
-        assert!(!ready(out, &still_busy, &Timing::REAL).await);
+        assert!(!ready(out));
 
         let idle = Fake::new(&[Some(false)], &path);
         let out = Reconciler::new(Arc::default())
@@ -571,6 +668,7 @@ mod tests {
                 &on_account(&["aa"]),
                 async { Some(dir.state()) },
                 &idle,
+                &QUICK,
             )
             .await
             .unwrap();
@@ -597,6 +695,7 @@ mod tests {
                 &on_account(&["aa"]),
                 async { Some(path.clone()) },
                 &idle,
+                &QUICK,
             )
             .await;
         assert!(added.is_err());
@@ -611,6 +710,7 @@ mod tests {
                 &on_account(&["aa"]),
                 async { Some(path.clone()) },
                 &idle,
+                &QUICK,
             )
             .await
             .unwrap();
@@ -623,6 +723,7 @@ mod tests {
                 &on_account(&[]),
                 async { Some(path.clone()) },
                 &idle,
+                &QUICK,
             )
             .await;
         assert!(removed.is_err());
@@ -644,6 +745,7 @@ mod tests {
                 &Membership::SignedOut,
                 async { None::<PathBuf>.or_else(|| panic!("looked for the file")) },
                 &host,
+                &QUICK,
             )
             .await
             .unwrap();
@@ -676,25 +778,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_host_is_ready_once_it_answers_again() {
-        let dir = Dir::new("reconcile-ready");
-        let timing = Timing {
-            settle: Duration::ZERO,
-            retry: Duration::from_millis(1),
-            back_within: Duration::from_millis(200),
-            ..Timing::REAL
-        };
-        let restarted = Pass {
+    async fn a_restart_counts_once_the_host_is_seen_down_and_back() {
+        let dir = Dir::new("reconcile-came-back");
+        let returning = Fake::new(&[None, None, Some(false)], &dir.state());
+        assert!(came_back(&returning, &QUICK).await);
+        // Answering at first is the old process; only what follows counts.
+        let late = Fake::new(&[Some(false), Some(false), None, Some(true)], &dir.state());
+        assert!(came_back(&late, &QUICK).await);
+        // Never down: nothing says it restarted.
+        let unmoved = Fake::new(&[Some(false)], &dir.state());
+        assert!(!came_back(&unmoved, &QUICK).await);
+        // Down and never back.
+        let gone = Fake::new(&[None], &dir.state());
+        assert!(!came_back(&gone, &QUICK).await);
+    }
+
+    #[test]
+    fn a_host_is_ready_only_with_nothing_left_to_load() {
+        assert!(ready(Pass::default()));
+        assert!(ready(Pass {
             pending: false,
             restarted: true,
-        };
-        let returning = Fake::new(&[None, None, Some(false)], &dir.state());
-        assert!(ready(restarted, &returning, &timing).await);
-        let gone = Fake::new(&[None], &dir.state());
-        assert!(!ready(restarted, &gone, &timing).await);
-        // Nothing was owed: ready without asking.
-        let quiet = Fake::new(&[None], &dir.state());
-        assert!(ready(Pass::default(), &quiet, &timing).await);
-        assert_eq!(quiet.polls.load(Ordering::SeqCst), 0);
+        }));
+        assert!(!ready(Pass {
+            pending: true,
+            restarted: false,
+        }));
     }
 }

@@ -9,6 +9,7 @@
 // Nothing calls this yet; the pairing tasks that follow wire it in.
 #![allow(dead_code)]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
@@ -162,7 +163,17 @@ pub fn write_atomic(path: &Path, state: &Value) -> Result<(), StateFileError> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".dusk-tmp");
     let tmp = PathBuf::from(tmp);
-    let result = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path));
+    let result = (|| {
+        // The mode is copied before any content lands, so a private file is
+        // never briefly readable under the default mode.
+        let mut file = std::fs::File::create(&tmp)?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.write_all(text.as_bytes())?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    })();
     if let Err(e) = result {
         let _ = std::fs::remove_file(&tmp);
         return Err(StateFileError::Unwritable(e.to_string()));
@@ -316,6 +327,51 @@ mod tests {
             read(&dir.join("nope.json")),
             Err(StateFileError::Missing)
         ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rewrite_keeps_sunshines_key_order() {
+        let text = r#"{
+  "username": "u",
+  "salt": "s",
+  "password": "p",
+  "root": {
+    "uniqueid": "ID",
+    "named_devices": [
+      {"name": "Phone", "cert": "C", "uuid": "U1", "enabled": "true"}
+    ]
+  }
+}"#;
+        let before: Value = serde_json::from_str(text).unwrap();
+        let out = merge(&before, &[dev("D1", "MINE")], &[]).unwrap().unwrap();
+        let written = serde_json::to_string_pretty(&out).unwrap();
+        let keys = |v: &Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
+        assert_eq!(keys(&out), ["username", "salt", "password", "root"]);
+        assert_eq!(keys(&out["root"]), ["uniqueid", "named_devices"]);
+        for entry in named(&out) {
+            assert_eq!(keys(entry), ["name", "cert", "uuid", "enabled"]);
+        }
+        // Same order in the text that lands on disk, not just in memory.
+        let at = |needle: &str| written.find(needle).unwrap();
+        assert!(at("\"username\"") < at("\"salt\""));
+        assert!(at("\"salt\"") < at("\"password\""));
+        assert!(at("\"password\"") < at("\"root\""));
+        assert!(at("\"uniqueid\"") < at("\"named_devices\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_keeps_the_files_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dusk-state-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sunshine_state.json");
+        std::fs::write(&path, "{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomic(&path, &state()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

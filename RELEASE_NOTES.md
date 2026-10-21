@@ -1,5 +1,32 @@
 # Release Notes
 
+Version v0.3.27 — October 21, 2026
+
+Streams from a Linux machine fit the screen watching them.
+
+## Changes
+
+- **A Linux machine can now give each stream a screen the size of the
+  device watching it.** Turn it on in Settings › Hosting. An ultrawide
+  gets an ultrawide picture from a host whose own monitor is nothing of
+  the sort, instead of a smaller one with black bars down the sides. The
+  host's own screen changes with it for the length of the stream and
+  changes back afterwards — and now changes back too if a stream ends
+  badly and never gets the chance.
+- **Your own machines are no longer sometimes filed as other people's.**
+  A machine that said who it was before Dusk had finished reading your
+  account list was put under "Other machines on this network" and left
+  there, which lasted until Dusk happened to be restarted at a better
+  moment. Your account decides it now, every time it looks.
+- **A machine with no screen of its own can be set up to do this.**
+  `dusk screen on` from a terminal, alongside the existing `dusk setup`,
+  `dusk signin` and `dusk status`, for a host in a cupboard.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.26 — October 21, 2026
 
 Pairing works again with an up-to-date host.

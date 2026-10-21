@@ -6,8 +6,76 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.26 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It fixes pairing against a 2026 Sunshine, which had
+**v0.3.27 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It gives a **Linux host** the screen-sizing that was
+Windows-only, and fixes a grid bug that had nothing to do with it.
+
+The Linux mechanism is `host/screen_mode.rs` and it is not the Windows one.
+There is no virtual display to stream: the driver is user-mode IddCx, a
+Windows interface, `amdgpu` offers no `VIRTUAL` output, and **Sunshine's
+display-device settings are Windows-only** — a Linux host's config has no
+`dd_*` key at all, measured on `2026.914.233613`. So the output the host is
+really using is changed around the stream, through Sunshine's own
+`global_prep_cmd`, with **Dusk registered as its own prep command** and
+re-run as `dusk --dusk-match-screen do|undo`. Those hooks are the only thing
+that brackets a stream reliably; the host's Dusk has no equivalent.
+
+Four things here were got wrong first and are worth not repeating. **(1)
+Only using modes the monitor lists is useless.** That was the first cut, and
+it did nothing whatsoever for the two machines it was built for: this Mac is
+3440x1440 and Venus's monitor lists no ultrawide mode, so the request
+snapped to the nearest 16:9 size, which was the size it already was. A
+monitor only lists the shapes it *is*, and "match the device watching" is
+mostly asked by a device of a different shape. The answer is `Plan::Scaled`:
+keep the panel on the mode it already had and resize **only the
+framebuffer**, which is what Sunshine captures. `--scale` with six decimals
+lands exactly — measured on 3440x1440 and on an awkward 2000x1300 — and the
+framebuffer is read back from the **`Screen 0:` line** and pinned with
+`--fb` if it is ever a pixel out. Reading the *output's* mode back will not
+do: it stays where it was and would report that nothing had happened.
+`cvt`/`--newmode` is still refused, because driving the panel at a mode it
+may not display leaves the host dark if `undo` never runs; scaling cannot do
+that. **(2) Sunshine reads `sunshine.conf` when it starts, not when a stream
+does.** Writing the prep command and stopping there gives a host that has
+the setting and ignores it — a stream ran with the command in the file and
+never invoked it. `enable`/`disable` restart the host, which is what the
+Windows half always did and should have been the clue. **(3) `undo` goes
+with the session, not the client.** A client that is killed rather than
+asked to quit leaves the session up and the screen resized; Sunshine logs
+`CLIENT DISCONNECTED` and runs nothing. Hence
+`screen_mode::restore_if_left_resized`, called at startup. **(4) The mode in
+use is not the preferred mode.** Venus sits at 2560x1440 while `+` marks
+1920x1080, so `xrandr --auto` would "restore" it to the wrong size; the mode
+in use is recorded before the switch.
+
+`dusk screen on|off` exists for the same reason `dusk setup` does: a Linux
+host could otherwise only turn this on from its own screen, which a host in
+a cupboard has not got. It needs the settings directory **without Tauri to
+ask**, so `store::config_dir` reproduces `app_config_dir` — and the window
+compares the two at startup and says so if they differ, because the day they
+disagree one writes a setting the other never reads. That is the failure
+`secrets/mod.rs` argues about; `config_base` takes its environment values as
+arguments so the choice between them is tested rather than assumed.
+
+Separately, **a machine of your own could be filed as a stranger and stay
+that way**. The tell was an inversion: the only machine in "Your machines"
+was the one that was *switched off*. A machine is asked `identify` only
+while it has no id (the poller filters on `machine_id.is_none()`), so the
+answer arrives once and the `mine` computed from it sticks for the life of
+the window; if the account's gist has not been read by then, nothing is
+known to be yours. It keeps its id, is never asked again, and `sync_account`
+skips it ever after because a found id needs no placeholder. An undiscovered
+machine was right precisely because the placeholder path re-decides every
+tick. `sync_account` now re-decides `mine` for every machine that has
+answered, so the list is the authority and not the timing. It presents as
+"fine all morning, wrong after an update restarted the window".
+
+Useful while working on any of this: `peer::identify` and the `display`
+answer can be asked straight from another machine, which tests the host
+without a stream —
+`printf '{"type":"display","screen":{"width":3440,"height":1440}}\n' | nc <host> 47850`.
+
+**v0.3.26** fixes pairing against a 2026 Sunshine, which had
 looked like every pairing layer at once and was none of them. **Sunshine
 grew a second step in `/api/pin`**: a host from 2026 holds each pairing
 request under an id, lists them at `GET /api/pin`, and **refuses a POST that
@@ -308,7 +376,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.26>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.27>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -344,7 +412,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

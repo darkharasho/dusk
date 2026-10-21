@@ -187,10 +187,22 @@ fn api(
         .timeout(TIMEOUT)
 }
 
+/// What GitHub says when it will not take the token any more.
+///
+/// Named so a caller can recognise it rather than match on prose: a stale
+/// token is one of the few errors worth *acting* on, because another process
+/// may have signed in since and the keystore may already hold a good one.
+pub const REJECTED: &str = "GitHub no longer accepts this sign-in. Sign in again.";
+
+/// Whether an error is GitHub refusing the token itself.
+pub fn is_rejected(err: &str) -> bool {
+    err == REJECTED
+}
+
 async fn json_of(response: reqwest::Response) -> Result<Value, String> {
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("GitHub no longer accepts this sign-in. Sign in again.".into());
+        return Err(REJECTED.into());
     }
     let body: Value = response.json().await.map_err(|e| e.to_string())?;
     if !status.is_success() {

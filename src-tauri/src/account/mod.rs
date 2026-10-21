@@ -535,7 +535,36 @@ impl AccountState {
         }
     }
 
+    /// Forget what was read, so the next read goes to the keystore again.
+    ///
+    /// The window reads the sign-in once and keeps it for the run, which is
+    /// right: a keystore read can put a password prompt on screen. But it
+    /// means a sign-in that happens *elsewhere* — `dusk signin` over SSH, or
+    /// the other half of this app — is invisible to a window already open,
+    /// which kept using a token GitHub had stopped accepting and refused
+    /// every one of its own machines as "not the same account". Observed on
+    /// a real machine, and the only clue was a line in a log nobody reads.
+    async fn reread(&self) {
+        let mut cached = self.cached.write().await;
+        cached.read = false;
+        cached.account = None;
+    }
+
     async fn refresh_list(&self, http: &reqwest::Client) -> Result<(), String> {
+        match self.fetch_list(http).await {
+            // Not a retry for its own sake: the token being refused is
+            // exactly the case where the keystore may already hold a better
+            // one. Once only, so a genuinely dead sign-in still ends as an
+            // error rather than a loop.
+            Err(err) if github::is_rejected(&err) => {
+                self.reread().await;
+                self.fetch_list(http).await
+            }
+            other => other,
+        }
+    }
+
+    async fn fetch_list(&self, http: &reqwest::Client) -> Result<(), String> {
         let Some(account) = self.load().await else {
             return Ok(());
         };
@@ -979,6 +1008,46 @@ mod identity_tests {
         };
         state.stored().await.unwrap();
         assert!(!*written.lock().unwrap(), "nothing to write");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_token_makes_the_next_read_go_to_the_keystore() {
+        // The window reads the sign-in once per run, which is right -- a
+        // keystore read can put a prompt on screen. But a sign-in that
+        // happens elsewhere (`dusk signin` over SSH) was then invisible to
+        // an open window, which kept using a token GitHub had stopped
+        // accepting and refused every one of its own machines. Observed on
+        // a real machine; the only clue was a log line nobody reads.
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        READS.store(0, Ordering::SeqCst);
+        let first = an_account(42);
+        let second = an_account(42);
+        let state = with_keystore(move || {
+            let n = READS.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(if n == 0 {
+                first.clone()
+            } else {
+                second.clone()
+            }))
+        });
+
+        let before = state.load().await.expect("an account").key.id;
+        assert_eq!(
+            state.load().await.unwrap().key.id,
+            before,
+            "cached for the run"
+        );
+
+        state.reread().await;
+        let after = state.load().await.expect("an account").key.id;
+        assert_ne!(after, before, "the keystore is consulted again");
+        assert_eq!(READS.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_refused_token_is_recognised_without_matching_prose() {
+        assert!(github::is_rejected(github::REJECTED));
+        assert!(!github::is_rejected("GitHub answered 500: no reason given"));
     }
 
     #[tokio::test]

@@ -1,5 +1,27 @@
 # Release Notes
 
+Version v0.3.16 — October 21, 2026
+
+Pairing your own machines works again.
+
+## Changes
+
+- **"That PIN was not accepted" when nothing was wrong.** Connecting one
+  of your machines to another could fail with that message even when both
+  were signed in to the same account and everything else was right. The
+  machine being connected to gave the other one five seconds to get ready,
+  then gave up — and giving up stopped the machine that was still starting.
+  It now waits long enough for a client that takes a moment to start, which
+  is most of them.
+
+If a PIN really is wrong, you will now wait half a minute to be told so.
+That is the cost of not cutting off every pairing that was merely slow.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.15 — October 21, 2026
 
 Dusk now says when a GitHub sign-in has run out.

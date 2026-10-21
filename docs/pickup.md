@@ -6,8 +6,25 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.15 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. **Read this before touching the account code.** The
+**v0.3.16 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It fixes Dusk-to-Dusk pairing, which failed with
+"That PIN was not accepted" on a correctly configured pair of machines.
+`peer::enter_pin` retried five times at one-second intervals; the client it
+was waiting for is a Qt app that `moonlight::cli::PAIR_TIMEOUT` allows 120s
+to start and send its request. The host declared failure at five seconds,
+and since `Outcome::Declined` makes `pair_device` return, that dropped the
+pairing future and killed the client — so Sunshine never saw a pair request
+and the symptom read as a bad PIN. `PIN_WINDOW` is now 30s with
+`peer::budget_tests` asserting it stays under `PAIR_TIMEOUT`; the invariant
+is that the *client* decides when pairing has failed. Sunshine returns the
+same `status: false` for "nobody waiting yet" and "wrong PIN", so there is
+nothing to distinguish them by and a wrong PIN now takes 30s to report.
+How it was found, since the same method will work again: watch `netstat`
+for the peer port during an attempt — a completed connection on 47850
+proves the proof path ran — and check the host's `sunshine.log` for pairing
+activity, whose *absence* localises the fault to the client side. Also
+noted on the Mac: ~108 leaked `CLOSE_WAIT` sockets on 47984 from Dusk's
+5s poll, not yet investigated. v0.3.15 is where sign-in expiry is handled. **Read this before touching the account code.** The
 OAuth app was set to expire user tokens at eight hours, and `parse_poll`
 kept only `access_token`. Eight hours after any sign-in the machine could
 no longer read the account's machine list, so every pairing proof from one
@@ -136,7 +153,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.15>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.16>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -172,7 +189,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

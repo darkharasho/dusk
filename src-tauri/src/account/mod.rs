@@ -220,6 +220,21 @@ impl AccountState {
         self.load().await.map(|a| a.key.id.clone())
     }
 
+    /// Every machine on the account's list, as `(id, name)`.
+    ///
+    /// The grid's source of truth for "yours". Empty when signed out or
+    /// before the list has been read, which the caller must treat as "not
+    /// known yet" rather than as "you own nothing".
+    pub async fn machines_on_account(&self) -> Vec<(String, String)> {
+        self.list
+            .read()
+            .await
+            .entries
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.name.clone()))
+            .collect()
+    }
+
     /// Is this machine id on your account's list?
     ///
     /// False when signed out: with no list to check against, no machine can

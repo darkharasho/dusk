@@ -67,6 +67,7 @@ pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
     }
 
     ask_who_they_are(state).await;
+    hold_the_account_machines(state).await;
 
     emit_snapshot(app, state).await;
     fetch_app_lists(app, state).await;
@@ -105,6 +106,28 @@ async fn fetch_app_lists(app: &AppHandle, state: &Arc<AppState>) {
     if changed {
         emit_snapshot(app, state).await;
     }
+}
+
+/// Keep a card for every machine on the account, found or not.
+///
+/// Discovery alone makes the grid a list of what is advertising right now,
+/// so a machine of yours that is switched off -- or whose hosting was
+/// uninstalled -- simply disappears. That reads as Dusk losing the machine
+/// rather than as the machine being off, and it is the whole reason the
+/// account's list is the better source of truth for "yours".
+async fn hold_the_account_machines(state: &Arc<AppState>) {
+    let entries = state.account.machines_on_account().await;
+    // Nothing known yet is not the same as owning nothing: before the list
+    // is read, leaving the grid as discovery found it is the honest answer.
+    if entries.is_empty() {
+        return;
+    }
+    let own = state.account.machine_id().await;
+    state
+        .registry
+        .write()
+        .await
+        .sync_account(&entries, own.as_deref());
 }
 
 /// Ask every reachable machine which one it is, and mark the ones that are

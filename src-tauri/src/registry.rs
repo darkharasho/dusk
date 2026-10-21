@@ -126,6 +126,17 @@ pub struct Registry {
     local_addresses: HashSet<String>,
 }
 
+/// The id a machine on the account gets while nothing has found it.
+///
+/// Prefixed so it cannot collide with an address-keyed device, and so the
+/// placeholder can be recognised and withdrawn once the real machine turns
+/// up at an address.
+const ACCOUNT_PREFIX: &str = "account:";
+
+fn account_id(machine: &str) -> DeviceId {
+    format!("{ACCOUNT_PREFIX}{machine}")
+}
+
 impl Registry {
     pub fn new(self_name: String, local_addresses: HashSet<String>) -> Self {
         let mut this = Self {
@@ -147,6 +158,57 @@ impl Registry {
 
     pub fn devices(&self) -> Vec<Device> {
         self.devices.values().cloned().collect()
+    }
+
+    /// Make the grid hold every machine on the account, found or not.
+    ///
+    /// Without this the grid is still a list of what is advertising: a
+    /// machine of yours that is switched off, or whose hosting was
+    /// uninstalled, simply vanishes -- which is what happened to Venus and
+    /// reads as Dusk losing it rather than as the machine being off.
+    ///
+    /// `own` is this machine's own id, which is already the self card and
+    /// must not appear twice.
+    pub fn sync_account(&mut self, entries: &[(String, String)], own: Option<&str>) {
+        // Which ids a real, discovered device already covers. Those need no
+        // placeholder, and any placeholder they had is now stale.
+        let found: HashSet<String> = self
+            .devices
+            .values()
+            .filter(|d| !d.id.starts_with(ACCOUNT_PREFIX))
+            .filter_map(|d| d.machine_id.clone())
+            .collect();
+
+        self.devices.retain(|id, _| {
+            let Some(machine) = id.strip_prefix(ACCOUNT_PREFIX) else {
+                return true;
+            };
+            // Keep only placeholders that are still on the account and still
+            // unfound. A machine signed out elsewhere leaves the list, and
+            // its card should go with it.
+            !found.contains(machine)
+                && entries.iter().any(|(m, _)| m == machine)
+                && Some(machine) != own
+        });
+
+        for (machine, name) in entries {
+            if found.contains(machine) || Some(machine.as_str()) == own {
+                continue;
+            }
+            let id = account_id(machine);
+            if let Some(existing) = self.devices.get_mut(&id) {
+                existing.name = name.clone();
+                continue;
+            }
+            let mut device = Device::new(id, name.clone());
+            device.machine_id = Some(machine.clone());
+            device.mine = true;
+            // Not "offline" -- that is a verdict from a probe, and nothing
+            // has been probed. This machine is yours and nothing has found
+            // it, which is what the card should say.
+            device.reachability = Reachability::Unknown;
+            self.devices.insert(device.id.clone(), device);
+        }
     }
 
     /// Record what a machine answered when asked which one it is.
@@ -464,6 +526,83 @@ impl Registry {
                     })
             })
             .map(|device| device.id.clone())
+    }
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+
+    fn entries() -> Vec<(String, String)> {
+        vec![
+            ("aaa".into(), "Venus".into()),
+            ("bbb".into(), "R-3X".into()),
+            ("ccc".into(), "Michaels-Mini".into()),
+        ]
+    }
+
+    fn registry() -> Registry {
+        Registry::new("Michaels-Mini".into(), HashSet::new())
+    }
+
+    #[test]
+    fn a_machine_of_yours_that_is_off_still_has_a_card() {
+        // The point of the whole change: Venus vanished from the grid when
+        // its hosting was uninstalled, though it was still one of yours.
+        let mut r = registry();
+        r.sync_account(&entries(), Some("ccc"));
+        let names: Vec<String> = r.devices().into_iter().map(|d| d.name).collect();
+        assert!(names.contains(&"Venus".to_string()), "{names:?}");
+        assert!(names.contains(&"R-3X".to_string()), "{names:?}");
+    }
+
+    #[test]
+    fn this_machine_does_not_appear_twice() {
+        // It is already the self card; a second one would be the same
+        // machine listed as a remote host.
+        let mut r = registry();
+        r.sync_account(&entries(), Some("ccc"));
+        let mine = r
+            .devices()
+            .into_iter()
+            .filter(|d| d.name == "Michaels-Mini")
+            .count();
+        assert_eq!(mine, 1);
+    }
+
+    #[test]
+    fn a_placeholder_gives_way_once_the_machine_is_found() {
+        // Otherwise the same machine shows twice: once as the account knows
+        // it and once at the address discovery found it at.
+        let mut r = registry();
+        r.sync_account(&entries(), Some("ccc"));
+        assert_eq!(r.devices().iter().filter(|d| d.name == "Venus").count(), 1);
+
+        let found = r.upsert_mdns("Venus", &["192.168.50.149".into()], 47989);
+        r.set_identity(&found, Some("aaa".into()), true);
+        r.sync_account(&entries(), Some("ccc"));
+
+        let venus: Vec<Device> = r
+            .devices()
+            .into_iter()
+            .filter(|d| d.machine_id.as_deref() == Some("aaa"))
+            .collect();
+        assert_eq!(venus.len(), 1, "one card for one machine");
+        assert!(
+            !venus[0].id.starts_with(ACCOUNT_PREFIX),
+            "the real one wins"
+        );
+    }
+
+    #[test]
+    fn a_machine_taken_off_the_account_loses_its_card() {
+        let mut r = registry();
+        r.sync_account(&entries(), Some("ccc"));
+        let fewer: Vec<(String, String)> =
+            entries().into_iter().filter(|(m, _)| m != "bbb").collect();
+        r.sync_account(&fewer, Some("ccc"));
+        let names: Vec<String> = r.devices().into_iter().map(|d| d.name).collect();
+        assert!(!names.contains(&"R-3X".to_string()), "{names:?}");
     }
 }
 

@@ -1,5 +1,27 @@
 # Release Notes
 
+Version v0.3.21 — October 21, 2026
+
+Only your own machines can read where your machines are.
+
+## Changes
+
+- **The addresses your machines share are now encrypted.** They are kept
+  in a private list on your GitHub account, which v0.3.20 wrote in plain
+  text. That list is unlisted rather than secret — anyone holding its
+  address could read it — and where your machines answer is a map of your
+  network. Each machine now seals its addresses so that only the other
+  machines signed in to your account can open them.
+
+Nothing to do: machines re-share their addresses, sealed, the next time
+they notice a change. A machine that has not been signed in since this
+release keeps working as before and simply shares nothing until it is.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.20 — October 21, 2026
 
 Your machines are there when you are somewhere else.

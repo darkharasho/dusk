@@ -6,8 +6,26 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.20 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It implements step one of `docs/addresses.md`:
+**v0.3.21 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. It is step two of `docs/addresses.md`: published
+addresses are sealed (`account/sealed.rs`). Each machine holds a second
+X25519 keypair beside its Ed25519 signing one — Ed25519 does not encrypt,
+converting it needs the private scalar `ring` will not expose, and **`ring`
+cannot hold the receiving end at all** because its X25519 is ephemeral-only
+and a recipient's key must outlive the message; hence `x25519-dalek` with
+the `static_secrets` feature. Ephemeral-static ECDH per recipient, HKDF
+(`dusk-addresses-v1`), ChaCha20-Poly1305 from `ring`. The payload is tiny so
+it is sealed once per recipient rather than wrapping a content key. Both
+keys live in the one keystore entry (`Stored::box_key`, defaulted so older
+entries load and mint one); **both are carried across a re-sign-in as the
+same user**, because a new box key makes every box already addressed to this
+machine unreadable. `Entry::addresses` is now **read-only** — written in the
+clear only by v0.3.20, which existed for hours. A machine with no published
+`box_key` cannot receive and is skipped. Republished when the addresses
+change *or* when the recipient count does, so a machine joining the account
+gets a box without waiting for an address to move. v0.3.20 published them
+in the clear, deliberately, to find out whether the reach was worth the
+encryption work. It implements step one of `docs/addresses.md`:
 machines publish `addresses`/`updated` into their `github::Entry`, and
 `Registry::sync_account` gives an unfound machine those addresses so it
 reaches `probe_targets` — without that the card is decorative. Read that
@@ -208,7 +226,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.20>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.21>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -244,7 +262,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

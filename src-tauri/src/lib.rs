@@ -71,6 +71,44 @@ fn local_addresses() -> HashSet<String> {
     addresses
 }
 
+/// Every address another machine could reach this one on.
+///
+/// `local_addresses` answers a different question — "is this address me?" —
+/// and so includes loopback, which is exactly what must not be published.
+/// This is the set worth telling other machines about:
+///
+/// - loopback is never useful to anyone else
+/// - link-local (`169.254/16`, `fe80::/10`) does not route
+/// - unique-local IPv6 (`fc00::/7`) is what the streaming client already
+///   discards, logging `Ignoring ULA:` when it does
+///
+/// What is left is LAN addresses and overlay-network addresses — Tailscale,
+/// ZeroTier and the like — and Dusk deliberately does not try to tell those
+/// apart. They are all just addresses to try, and classifying them is how
+/// this grows a special case per provider.
+pub fn reachable_addresses() -> Vec<String> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut addresses: Vec<String> = interfaces
+        .into_iter()
+        .map(|i| i.ip())
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        .filter(|ip| match ip {
+            std::net::IpAddr::V4(v4) => !v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => {
+                let seg = v6.segments()[0];
+                // fe80::/10 link-local, fc00::/7 unique-local.
+                (seg & 0xffc0) != 0xfe80 && (seg & 0xfe00) != 0xfc00
+            }
+        })
+        .map(|ip| ip.to_string())
+        .collect();
+    addresses.sort();
+    addresses.dedup();
+    addresses
+}
+
 /// Keep WebKit off its DMA-BUF renderer on Wayland.
 ///
 /// Without this the window never appears on a Wayland compositor that

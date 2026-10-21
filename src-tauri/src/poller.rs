@@ -122,6 +122,7 @@ async fn hold_the_account_machines(state: &Arc<AppState>) {
     if entries.is_empty() {
         return;
     }
+    state.account.publish_addresses(&state.http).await;
     let own = state.account.machine_id().await;
     state
         .registry

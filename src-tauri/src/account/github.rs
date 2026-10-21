@@ -64,6 +64,23 @@ pub struct DeviceCode {
 pub struct Entry {
     pub name: String,
     pub key: String,
+    /// Where this machine answers, for the machines that cannot find it.
+    ///
+    /// mDNS does not cross a VPN, so from another network the account knows
+    /// which machines are yours and nothing knows where they are. Publishing
+    /// them here leans on an overlay network the person already runs rather
+    /// than on a rendezvous service this project will not operate — see
+    /// `docs/addresses.md`.
+    ///
+    /// Defaulted so an entry written before this still loads; such a machine
+    /// is simply one with no published addresses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
+    /// Unix seconds, so a reader can prefer the freshest of two answers.
+    /// Written when the addresses change, never on a timer: a heartbeat
+    /// would be a rendezvous service with extra steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -473,7 +490,9 @@ mod tests {
             list["ab12"],
             Entry {
                 name: "Desk".into(),
-                key: "00ff".into()
+                key: "00ff".into(),
+                addresses: Vec::new(),
+                updated: None,
             }
         );
     }

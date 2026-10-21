@@ -38,6 +38,15 @@ pub const ACCOUNT_EVENT: &str = "dusk://account";
 /// to GitHub.
 const LIST_REFRESH: Duration = Duration::from_secs(10);
 
+/// A machine on the account, as the grid needs it: who it is, what it is
+/// called, and where it said it answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountMachine {
+    pub id: String,
+    pub name: String,
+    pub addresses: Vec<String>,
+}
+
 /// What a signed pairing request carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proof {
@@ -220,18 +229,78 @@ impl AccountState {
         self.load().await.map(|a| a.key.id.clone())
     }
 
+    /// Tell the account where this machine answers, if that has changed.
+    ///
+    /// Only on change. Writing on a timer to prove liveness would be a
+    /// rendezvous service with extra steps, which this project does not run
+    /// — see `docs/addresses.md`.
+    pub async fn publish_addresses(&self, http: &reqwest::Client) {
+        let Some(account) = self.load().await else {
+            return;
+        };
+        let Some(token) = self.access_token(http).await else {
+            return;
+        };
+        let here = crate::reachable_addresses();
+        if here.is_empty() {
+            return;
+        }
+        // Compared against what the list already says, which is why this
+        // runs after the list has been read rather than at sign-in only.
+        let published = self
+            .list
+            .read()
+            .await
+            .entries
+            .get(&account.key.id)
+            .map(|e| e.addresses.clone())
+            .unwrap_or_default();
+        if published == here {
+            return;
+        }
+
+        let entry = Entry {
+            name: crate::peer::host_name(),
+            key: account.key.public_hex(),
+            addresses: here,
+            updated: Some(github::now_unix()),
+        };
+        match github::publish(
+            http,
+            &token,
+            account.list.as_deref(),
+            &account.key.id,
+            &entry,
+        )
+        .await
+        {
+            Ok(_) => {
+                if let Err(err) = self.refresh_list(http).await {
+                    eprintln!("dusk: could not re-read the machine list: {err}");
+                }
+            }
+            // Not worth failing over: the machine is still reachable by
+            // every other means, it is just harder to find from elsewhere.
+            Err(err) => eprintln!("dusk: could not publish this machine's addresses: {err}"),
+        }
+    }
+
     /// Every machine on the account's list, as `(id, name)`.
     ///
     /// The grid's source of truth for "yours". Empty when signed out or
     /// before the list has been read, which the caller must treat as "not
     /// known yet" rather than as "you own nothing".
-    pub async fn machines_on_account(&self) -> Vec<(String, String)> {
+    pub async fn machines_on_account(&self) -> Vec<AccountMachine> {
         self.list
             .read()
             .await
             .entries
             .iter()
-            .map(|(id, entry)| (id.clone(), entry.name.clone()))
+            .map(|(id, entry)| AccountMachine {
+                id: id.clone(),
+                name: entry.name.clone(),
+                addresses: entry.addresses.clone(),
+            })
             .collect()
     }
 
@@ -487,6 +556,8 @@ pub(crate) async fn finish(
     let entry = Entry {
         name: crate::peer::host_name(),
         key: key.public_hex(),
+        addresses: crate::reachable_addresses(),
+        updated: Some(github::now_unix()),
     };
     let list = github::publish(http, &token, list.as_deref(), &key.id, &entry).await?;
     account
@@ -558,6 +629,8 @@ mod tests {
             Entry {
                 name: "Desk".into(),
                 key: key.public_hex(),
+                addresses: Vec::new(),
+                updated: None,
             },
         )])
     }

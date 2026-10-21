@@ -169,7 +169,7 @@ impl Registry {
     ///
     /// `own` is this machine's own id, which is already the self card and
     /// must not appear twice.
-    pub fn sync_account(&mut self, entries: &[(String, String)], own: Option<&str>) {
+    pub fn sync_account(&mut self, entries: &[crate::account::AccountMachine], own: Option<&str>) {
         // Which ids a real, discovered device already covers. Those need no
         // placeholder, and any placeholder they had is now stale.
         let found: HashSet<String> = self
@@ -187,22 +187,30 @@ impl Registry {
             // unfound. A machine signed out elsewhere leaves the list, and
             // its card should go with it.
             !found.contains(machine)
-                && entries.iter().any(|(m, _)| m == machine)
+                && entries.iter().any(|m| m.id == machine)
                 && Some(machine) != own
         });
 
-        for (machine, name) in entries {
+        for entry in entries {
+            let machine = &entry.id;
             if found.contains(machine) || Some(machine.as_str()) == own {
                 continue;
             }
             let id = account_id(machine);
             if let Some(existing) = self.devices.get_mut(&id) {
-                existing.name = name.clone();
+                existing.name = entry.name.clone();
+                // Addresses can change under a machine that is still off, so
+                // the published set replaces rather than merges.
+                existing.addresses = entry.addresses.clone();
                 continue;
             }
-            let mut device = Device::new(id, name.clone());
+            let mut device = Device::new(id, entry.name.clone());
             device.machine_id = Some(machine.clone());
             device.mine = true;
+            // What the machine said about itself, so the grid has somewhere
+            // to try when nothing on this network has found it. This is what
+            // makes a machine across a VPN reachable without being typed in.
+            device.addresses = entry.addresses.clone();
             // Not "offline" -- that is a verdict from a probe, and nothing
             // has been probed. This machine is yours and nothing has found
             // it, which is what the card should say.
@@ -533,11 +541,19 @@ impl Registry {
 mod account_tests {
     use super::*;
 
-    fn entries() -> Vec<(String, String)> {
+    fn machine(id: &str, name: &str, addresses: &[&str]) -> crate::account::AccountMachine {
+        crate::account::AccountMachine {
+            id: id.into(),
+            name: name.into(),
+            addresses: addresses.iter().map(|a| a.to_string()).collect(),
+        }
+    }
+
+    fn entries() -> Vec<crate::account::AccountMachine> {
         vec![
-            ("aaa".into(), "Venus".into()),
-            ("bbb".into(), "R-3X".into()),
-            ("ccc".into(), "Michaels-Mini".into()),
+            machine("aaa", "Venus", &["100.101.8.12"]),
+            machine("bbb", "R-3X", &[]),
+            machine("ccc", "Michaels-Mini", &[]),
         ]
     }
 
@@ -595,11 +611,50 @@ mod account_tests {
     }
 
     #[test]
+    fn a_published_address_makes_an_unfound_machine_reachable() {
+        // The whole point: from another network mDNS finds nothing, so the
+        // only address the grid has is the one the machine published. If it
+        // does not reach probe_targets, the card is decorative.
+        let mut r = registry();
+        r.sync_account(&entries(), Some("ccc"));
+        let targets = r.probe_targets();
+        let venus = targets
+            .iter()
+            .find(|(id, ..)| id == &account_id("aaa"))
+            .expect("a machine with a published address is probed");
+        assert_eq!(venus.1, vec!["100.101.8.12".to_string()]);
+
+        // And one that published nothing is not probed, rather than probed
+        // with an empty list.
+        assert!(!targets.iter().any(|(id, ..)| id == &account_id("bbb")));
+    }
+
+    #[test]
+    fn addresses_follow_the_account_rather_than_accumulating() {
+        // A machine that moves networks republishes; the stale address must
+        // not linger, or the grid keeps trying somewhere it no longer is.
+        let mut r = registry();
+        r.sync_account(&entries(), Some("ccc"));
+        let moved = vec![
+            machine("aaa", "Venus", &["100.101.8.99"]),
+            machine("bbb", "R-3X", &[]),
+            machine("ccc", "Michaels-Mini", &[]),
+        ];
+        r.sync_account(&moved, Some("ccc"));
+        let venus = r
+            .devices()
+            .into_iter()
+            .find(|d| d.machine_id.as_deref() == Some("aaa"))
+            .expect("still listed");
+        assert_eq!(venus.addresses, vec!["100.101.8.99".to_string()]);
+    }
+
+    #[test]
     fn a_machine_taken_off_the_account_loses_its_card() {
         let mut r = registry();
         r.sync_account(&entries(), Some("ccc"));
-        let fewer: Vec<(String, String)> =
-            entries().into_iter().filter(|(m, _)| m != "bbb").collect();
+        let fewer: Vec<crate::account::AccountMachine> =
+            entries().into_iter().filter(|m| m.id != "bbb").collect();
         r.sync_account(&fewer, Some("ccc"));
         let names: Vec<String> = r.devices().into_iter().map(|d| d.name).collect();
         assert!(!names.contains(&"R-3X".to_string()), "{names:?}");

@@ -40,6 +40,16 @@ pub const ACCOUNT_EVENT: &str = "dusk://account";
 /// to GitHub.
 const LIST_REFRESH: Duration = Duration::from_secs(10);
 
+/// Whether a sign-in keeps this machine's existing identity.
+///
+/// Pure, and separated from the read for one reason: the interesting case is
+/// not "same user" but "the keystore would not say", and that is the one a
+/// test can reach. Signing in as somebody else is the only honest reason to
+/// become a different machine.
+fn carries_its_key(existing_user: Option<u64>, signing_in_as: u64) -> bool {
+    existing_user == Some(signing_in_as)
+}
+
 /// A machine on the account, as the grid needs it: who it is, what it is
 /// called, and where it said it answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,16 +196,32 @@ pub struct AccountEvent {
 }
 
 impl AccountState {
+    /// Best-effort: `None` covers both "nothing stored" and "could not tell".
+    ///
+    /// Fine for anything that degrades — a grid that shows signed-out, a
+    /// pairing that falls back to a PIN. **Not** fine for anything that
+    /// would act on the absence; see [`AccountState::stored`].
     async fn load(&self) -> Option<Account> {
+        self.stored().await.ok().flatten()
+    }
+
+    /// The same read, keeping the distinction the caller may need.
+    ///
+    /// `Ok(None)` is a settled "this machine has no sign-in". `Err` is "the
+    /// keystore would not answer", which is not the same thing and must not
+    /// be treated as one: minting a new identity on a failed read orphans
+    /// this machine's entry on the account and, since sealing, makes every
+    /// box already addressed to it unreadable.
+    async fn stored(&self) -> Result<Option<Account>, String> {
         {
             let cached = self.cached.read().await;
             if cached.read {
-                return cached.account.clone();
+                return Ok(cached.account.clone());
             }
         }
         let mut cached = self.cached.write().await;
         if cached.read {
-            return cached.account.clone();
+            return Ok(cached.account.clone());
         }
         match blocking(read_keystore).await {
             Ok(stored) => {
@@ -208,11 +234,13 @@ impl AccountState {
                 });
                 cached.read = true;
                 cached.persistent = true;
-                cached.account.clone()
+                Ok(cached.account.clone())
             }
+            // Deliberately not cached: a failed read is not an answer, or
+            // one dismissed keychain prompt would strand the whole run.
             Err(err) => {
                 eprintln!("dusk: could not read the sign-in from the keystore ({err})");
-                None
+                Err(err)
             }
         }
     }
@@ -631,18 +659,23 @@ pub(crate) async fn finish(
     let user = github::user(http, &token).await?;
     // Keep the machine's key across signing in again as the same person, so
     // its entry in the list is replaced rather than joined by a stale one.
-    let key = match account.load().await {
-        Some(old) if old.user.id == user.id => old.key,
-        _ => MachineKey::generate()?,
+    //
+    // A keystore that will not answer is not grounds for minting: this
+    // machine may well have an identity that simply could not be read, and
+    // replacing it orphans its entry on the account and loses every sealed
+    // box already addressed to it. Two machines did exactly that before this
+    // check existed, each leaving a duplicate behind.
+    let existing = account.stored().await.map_err(|err| {
+        format!(
+            "Dusk could not read whether this machine is already signed in ({err}),              so it stopped rather than give the machine a new identity and lose the one it has.              Try again once the keystore is reachable."
+        )
+    })?;
+    let carry = carries_its_key(existing.as_ref().map(|a| a.user.id), user.id);
+    let (key, box_key) = match (carry, existing) {
+        (true, Some(old)) => (old.key, old.box_key),
+        _ => (MachineKey::generate()?, BoxKey::generate()?),
     };
     let list = github::find_list(http, &token).await?;
-    // Carried across a re-sign-in with the signing key, for the same
-    // reason: a new one would make every box already addressed to this
-    // machine unreadable.
-    let box_key = match account.load().await {
-        Some(old) if old.user.id == user.id => old.box_key,
-        _ => BoxKey::generate()?,
-    };
     let entry = Entry {
         name: crate::peer::host_name(),
         key: key.public_hex(),
@@ -710,6 +743,57 @@ fn write_keystore(stored: &Stored) -> Result<(), String> {
 
 fn clear_keystore() -> Result<(), String> {
     crate::secrets::delete(crate::secrets::ACCOUNT)
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn signing_in_again_as_yourself_keeps_this_machine() {
+        // Otherwise every re-sign-in orphans the machine's entry on the
+        // account, and since sealing, every box addressed to it.
+        assert!(carries_its_key(Some(42), 42));
+    }
+
+    #[test]
+    fn signing_in_as_somebody_else_makes_a_new_machine() {
+        // The one honest reason to become a different machine.
+        assert!(!carries_its_key(Some(42), 7));
+    }
+
+    #[test]
+    fn a_machine_with_no_sign_in_mints_one() {
+        assert!(!carries_its_key(None, 42));
+    }
+
+    #[test]
+    fn a_keystore_that_will_not_answer_is_not_a_machine_without_a_sign_in() {
+        // The bug this guards, and it bit twice before it was found. `load`
+        // flattens "nothing stored" and "could not read" into None, and
+        // `finish` used to mint on either -- so one dismissed keychain
+        // prompt or a locked keyring gave the machine a new identity,
+        // orphaned its entry, and lost every box sealed to it.
+        //
+        // `stored` keeps them apart and `finish` refuses on Err. This test
+        // pins the distinction at the type level, which is where it has to
+        // live: a bare Option cannot express it.
+        let unreadable: Result<Option<Account>, String> = Err("keyring locked".into());
+        let absent: Result<Option<Account>, String> = Ok(None);
+
+        assert!(unreadable.is_err(), "a failed read must stay an error");
+        assert!(
+            absent.as_ref().is_ok_and(|a| a.is_none()),
+            "a settled absence is Ok(None)"
+        );
+        // And the two must not collapse into the same thing on the way to
+        // the decision, which is exactly what `load` does and why `finish`
+        // no longer uses it.
+        assert_eq!(
+            unreadable.ok().flatten().is_none(),
+            absent.ok().flatten().is_none()
+        );
+    }
 }
 
 #[cfg(test)]

@@ -35,7 +35,7 @@ impl HostBackend for MockHost {
     fn capabilities(&self) -> HostCapabilities {
         HostCapabilities {
             support_tier: SupportTier::Supported,
-            virtual_display: true,
+            sized_screen: true,
             gamepad_input: true,
             system_audio: true,
             automated_setup: true,

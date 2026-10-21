@@ -22,7 +22,11 @@
 //!   question about size with the closest mode it really has; see
 //!   [`best_mode`].
 //!
-//! Only Windows has the driver, so elsewhere most of this goes unused.
+//! Only Windows has the driver, so elsewhere most of this goes unused — but
+//! the *setting* is not Windows-only. Linux reaches the same end by changing
+//! the mode of the output the host is really using, which is a different
+//! enough mechanism to live in [`super::screen_mode`]; this module stays the
+//! front door, and [`best_mode`] is shared by both. macOS has neither.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 /// Screen sizes written into the driver's list, in real pixels.
@@ -379,15 +383,37 @@ pub async fn disable(
     api.restart(credentials).await.map_err(|e| e.to_string())
 }
 
-#[cfg(not(windows))]
+// ------------------------------------------------------------------- linux
+
+/// Linux has no virtual display to stream, so it resizes the screen the host
+/// is really using; [`super::screen_mode`] is the whole of that difference.
+#[cfg(target_os = "linux")]
+pub async fn enable(
+    api: &crate::sunshine::SunshineApi,
+    credentials: &crate::sunshine::Credentials,
+) -> Result<(), String> {
+    super::screen_mode::enable(api, credentials).await
+}
+
+#[cfg(target_os = "linux")]
+pub async fn disable(
+    api: &crate::sunshine::SunshineApi,
+    credentials: &crate::sunshine::Credentials,
+) -> Result<(), String> {
+    super::screen_mode::disable(api, credentials).await
+}
+
+// ----------------------------------------------------------- everywhere else
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub async fn enable(
     _api: &crate::sunshine::SunshineApi,
     _credentials: &crate::sunshine::Credentials,
 ) -> Result<(), String> {
-    Err("A virtual display is only offered on Windows.".into())
+    Err("This machine cannot give a stream a screen of its own size.".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub async fn disable(
     _api: &crate::sunshine::SunshineApi,
     _credentials: &crate::sunshine::Credentials,
@@ -395,8 +421,10 @@ pub async fn disable(
     Ok(())
 }
 
-/// The sizes the driver has right now, for answering a client. Empty when
-/// the file cannot be read, which makes [`best_mode`] answer `None`.
+/// The sizes a stream can be given right now, for answering a client.
+///
+/// Empty when they cannot be read, which makes [`best_mode`] answer `None`
+/// and the host offer its own screen size instead.
 pub fn current_modes() -> Vec<(u32, u32)> {
     #[cfg(windows)]
     {
@@ -404,8 +432,32 @@ pub fn current_modes() -> Vec<(u32, u32)> {
             .map(|xml| listed_modes(&xml))
             .unwrap_or_default()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        super::screen_mode::modes()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     Vec::new()
+}
+
+/// How this machine can size a stream's screen to the device watching: the
+/// virtual display on Windows, the real output's mode on Linux, and nothing
+/// on macOS.
+pub fn mechanism() -> crate::model::ScreenMechanism {
+    use crate::model::ScreenMechanism;
+    #[cfg(windows)]
+    {
+        if crate::install::display_driver::installed() {
+            return ScreenMechanism::VirtualDisplay;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if super::screen_mode::available() {
+            return ScreenMechanism::HostOutput;
+        }
+    }
+    ScreenMechanism::None
 }
 
 /// Copy the new list into place and restart the driver's device. `pnputil`

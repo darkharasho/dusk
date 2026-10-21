@@ -192,7 +192,13 @@ pub enum SupportTier {
 pub struct HostCapabilities {
     /// Sunshine's own support tier for hosting on this platform, not ours.
     pub support_tier: SupportTier,
-    pub virtual_display: bool,
+    /// Whether this platform can give a stream a screen the size of the
+    /// device watching, by any means. Deliberately not named for the
+    /// mechanism: Windows streams a virtual display and Linux changes the
+    /// real output's mode, and the setting is one setting either way. Which
+    /// mechanism, and whether it is ready to use, is
+    /// [`Snapshot::virtual_screen_mechanism`].
+    pub sized_screen: bool,
     pub gamepad_input: bool,
     pub system_audio: bool,
     /// False where the OS requires a manual permission grant no installer can
@@ -266,8 +272,25 @@ pub struct Snapshot {
     /// Kbps, or `None` for the client's own choice.
     pub bitrate_kbps: Option<u32>,
     pub codec: crate::store::Codec,
-    /// Whether streams from here show the virtual display at the client's
-    /// size, and whether that can be turned on: the driver is installed.
+    /// Whether streams from here are given a screen the size of the device
+    /// watching, and by what means this machine could do it.
     pub virtual_screen: bool,
-    pub virtual_screen_available: bool,
+    pub virtual_screen_mechanism: ScreenMechanism,
+}
+
+/// How a machine can give a stream a screen the size of the device watching.
+///
+/// The frontend needs this and not just a yes-or-no, because what it has to
+/// say about the setting differs: a virtual display leaves the host's own
+/// monitors alone and switches them off, where resizing the real output
+/// changes what the person sitting at the host sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenMechanism {
+    /// It cannot: no virtual display installed, or no output to resize.
+    None,
+    /// A virtual display of its own, streamed instead of the real monitors.
+    VirtualDisplay,
+    /// The mode of the output the host is really using.
+    HostOutput,
 }

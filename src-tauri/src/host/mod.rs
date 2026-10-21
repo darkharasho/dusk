@@ -12,6 +12,7 @@ use crate::sunshine::Credentials;
 
 pub mod mock;
 pub mod platform;
+pub mod screen_mode;
 pub mod service;
 pub mod virtual_screen;
 

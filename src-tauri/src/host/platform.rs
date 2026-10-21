@@ -30,7 +30,7 @@ impl HostBackend for WindowsHost {
     fn capabilities(&self) -> HostCapabilities {
         HostCapabilities {
             support_tier: SupportTier::Supported,
-            virtual_display: true,
+            sized_screen: true,
             gamepad_input: true,
             system_audio: true,
             automated_setup: true,
@@ -191,8 +191,10 @@ impl HostBackend for LinuxHost {
     fn capabilities(&self) -> HostCapabilities {
         HostCapabilities {
             support_tier: SupportTier::Supported,
-            // A dummy plug or a kernel option, not a driver Dusk can install.
-            virtual_display: false,
+            // No virtual display here — no driver Dusk can install, and
+            // `amdgpu` has no VIRTUAL output — but the real output's mode
+            // can be changed around a stream; see `host::screen_mode`.
+            sized_screen: true,
             gamepad_input: true,
             system_audio: true,
             automated_setup: true,
@@ -368,7 +370,7 @@ impl HostBackend for MacosHost {
             // Sunshine's own tier, not ours: macOS hosting is experimental
             // upstream. Streaming *to* a Mac is unaffected.
             support_tier: SupportTier::Experimental,
-            virtual_display: false,
+            sized_screen: false,
             gamepad_input: false,
             system_audio: false,
             // Screen Recording and Accessibility are per-app grants in System

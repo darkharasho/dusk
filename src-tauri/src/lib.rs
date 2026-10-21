@@ -148,6 +148,18 @@ pub fn run_helper_if_asked() -> Option<i32> {
     install::display_driver::run_helper_if_asked()
 }
 
+/// See [`host::screen_mode::run_hook_if_asked`]. Sunshine runs Dusk around
+/// each stream to resize the screen, and that must not open a window: it
+/// happens while someone is starting to watch.
+pub fn run_screen_hook_if_asked() -> Option<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        host::screen_mode::run_hook_if_asked()
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
 pub fn run() {
     #[cfg(target_os = "linux")]
     avoid_wayland_dmabuf_crash();

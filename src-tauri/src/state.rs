@@ -337,7 +337,7 @@ impl AppState {
             bitrate_kbps,
             codec,
             virtual_screen,
-            virtual_screen_available: crate::install::display_driver::installed(),
+            virtual_screen_mechanism: crate::host::virtual_screen::mechanism(),
         }
     }
 }

@@ -80,7 +80,11 @@ export type HostPlatform = "windows" | "linux" | "macos" | "mock";
 export interface HostCapabilities {
   /** Sunshine's own support tier for hosting on this platform. */
   supportTier: "supported" | "experimental" | "unsupported";
-  virtualDisplay: boolean;
+  /**
+   * This platform can give a stream a screen the size of the device
+   * watching. How it does that differs; see `virtualScreenMechanism`.
+   */
+  sizedScreen: boolean;
   gamepadInput: boolean;
   systemAudio: boolean;
   /** False where the OS requires a manual permission grant we cannot script. */
@@ -182,13 +186,20 @@ export interface Snapshot {
   /** Which video format a stream asks the host for. */
   codec: Codec;
   /**
-   * Whether streams from this machine show the virtual display, sized to
-   * the connecting machine's screen.
+   * Whether streams from this machine are given a screen the size of the
+   * connecting machine's.
    */
   virtualScreen: boolean;
-  /** The virtual display driver is installed, so that can be turned on. */
-  virtualScreenAvailable: boolean;
+  /** How this machine could do that, and `"none"` if it cannot. */
+  virtualScreenMechanism: ScreenMechanism;
 }
+
+/**
+ * How a machine sizes a stream's screen to the device watching: a virtual
+ * display of its own (Windows, with the driver installed), the mode of the
+ * output it is really using (Linux, on X11), or not at all.
+ */
+export type ScreenMechanism = "none" | "virtualDisplay" | "hostOutput";
 
 export type Codec = "auto" | "h264" | "hevc" | "av1";
 

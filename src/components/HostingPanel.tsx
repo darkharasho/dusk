@@ -33,8 +33,20 @@ function statusLine(host: HostState): string {
 }
 
 function virtualScreenDetail(snapshot: Snapshot): string {
-  if (!snapshot.virtualScreen && !snapshot.virtualScreenAvailable) {
-    return "Needs the virtual display. Install it from Setup first.";
+  const mechanism = snapshot.virtualScreenMechanism;
+  if (!snapshot.virtualScreen && mechanism === "none") {
+    // The two platforms are short of different things, and "install the
+    // driver" is no use to someone on Linux.
+    return snapshot.host.platform === "linux"
+      ? "Needs a screen Dusk can resize. A Wayland session cannot be, and nor can one with several screens and no primary."
+      : "Needs the virtual display. Install it from Setup first.";
+  }
+  // On Linux there is only the one screen, and the person at the host sees
+  // it change. Saying the monitors switch off would be plainly wrong there.
+  if (mechanism === "hostOutput") {
+    return snapshot.virtualScreen
+      ? "Each stream gets a screen the size of the device watching it, with no bars. This machine's own screen changes to that size while it streams, and changes back afterwards."
+      : "Give each stream a screen the size of the device watching it, so an ultrawide or a laptop fills edge to edge. This machine's own screen changes with it, to the nearest size it supports, and changes back afterwards.";
   }
   if (snapshot.virtualScreen) {
     return "Each stream gets a screen the size of the device watching it, with no bars. This machine's own monitors switch off while it streams.";
@@ -164,13 +176,17 @@ export function HostingPanel({ name, snapshot, onSetup }: Props) {
         onChange={(on) => run(() => setAllowOtherDevices(on))}
       />
 
-      {capabilities.virtualDisplay && installed && managed && (
+      {capabilities.sizedScreen && installed && managed && (
         <Toggle
           id="virtual-screen"
           label="Stream a screen sized to the other device"
           detail={virtualScreenDetail(snapshot)}
           on={snapshot.virtualScreen}
-          disabled={busy || !running || (!snapshot.virtualScreen && !snapshot.virtualScreenAvailable)}
+          disabled={
+            busy ||
+            !running ||
+            (!snapshot.virtualScreen && snapshot.virtualScreenMechanism === "none")
+          }
           onChange={(on) =>
             run(
               () => setVirtualScreen(on),

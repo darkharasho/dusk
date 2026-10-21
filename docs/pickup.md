@@ -63,7 +63,14 @@ that. **(2) Sunshine reads `sunshine.conf` when it starts, not when a stream
 does.** Writing the prep command and stopping there gives a host that has
 the setting and ignores it — a stream ran with the command in the file and
 never invoked it. `enable`/`disable` restart the host, which is what the
-Windows half always did and should have been the clue. **(3) `undo` goes
+Windows half always did and should have been the clue. **Do not try to
+confirm that restart with `ps`:** `/api/restart` re-execs Sunshine, which
+keeps both the PID *and* the start time, so the process looks untouched
+while its configuration has genuinely been reloaded. Reading it as "no
+restart happened" nearly got this fix reverted as unnecessary. What settles
+it is the behaviour: with the identical config written and no restart, a
+stream runs no prep command; after a restart, the same config resizes the
+screen. **(3) `undo` goes
 with the session, not the client.** A client that is killed rather than
 asked to quit leaves the session up and the screen resized; Sunshine logs
 `CLIENT DISCONNECTED` and runs nothing. Hence

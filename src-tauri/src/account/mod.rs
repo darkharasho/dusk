@@ -90,7 +90,9 @@ pub struct AccountMachine {
 /// What this machine knows of the account's machine list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Membership {
-    /// Signed in, but no list has been fetched yet.
+    /// Not known: no list fetched yet, a list without this machine on it,
+    /// or a sign-in that could not be read or used. Never acted on as if
+    /// nobody were on the account.
     Unknown,
     SignedOut,
     /// The ids of the machines the account lists.
@@ -179,6 +181,9 @@ struct Cached {
     read: bool,
     account: Option<Account>,
     persistent: bool,
+    /// Something is stored but cannot be used. Behaves as signed out for
+    /// anything that degrades, but is not a sign-out: see [`Membership`].
+    unusable: bool,
 }
 
 #[derive(Default)]
@@ -309,10 +314,15 @@ impl AccountState {
                 // never open a box addressed to any of them. So a minted key
                 // is written back here, once, before anything uses it.
                 let minted = stored.as_ref().is_some_and(|s| s.box_key.is_none());
+                cached.unusable = false;
                 cached.account = stored.and_then(|s| match Account::from_stored(s) {
                     Ok(account) => Some(account),
                     Err(err) => {
-                        eprintln!("dusk: the stored sign-in is unusable ({err}); signed out");
+                        eprintln!(
+                            "dusk: the stored sign-in is unusable ({err}); \
+                             treated as signed out, but not as a sign-out"
+                        );
+                        cached.unusable = true;
                         None
                     }
                 });
@@ -355,6 +365,7 @@ impl AccountState {
             }
         };
         cached.account = account;
+        cached.unusable = false;
         cached.read = true;
     }
 
@@ -571,6 +582,7 @@ impl AccountState {
         let mut cached = self.cached.write().await;
         cached.read = false;
         cached.account = None;
+        cached.unusable = false;
     }
 
     async fn refresh_list(&self, http: &reqwest::Client) -> Result<(), String> {
@@ -713,20 +725,17 @@ impl AccountState {
     /// the keystore: for background work, which must not be what puts a
     /// keystore prompt on screen. Nothing known yet is `Unknown`.
     pub async fn known_membership(&self) -> Membership {
-        {
+        let own = {
             let cached = self.cached.read().await;
-            if !cached.read {
+            if !cached.read || cached.unusable {
                 return Membership::Unknown;
             }
-            if cached.account.is_none() {
-                return Membership::SignedOut;
+            match &cached.account {
+                Some(account) => account.key.id.clone(),
+                None => return Membership::SignedOut,
             }
-        }
-        let list = self.list.read().await;
-        if list.fetched.is_none() {
-            return Membership::Unknown;
-        }
-        Membership::Machines(list.entries.keys().cloned().collect())
+        };
+        self.listed(&own).await
     }
 
     /// Which machines the account lists, as last fetched. A list that was
@@ -735,13 +744,34 @@ impl AccountState {
         // Only a keystore that answers "nothing stored" means signed out. One
         // that will not answer is unknown, or a locked keyring would read as
         // a sign-out and unpair every machine.
-        match self.stored().await {
-            Ok(Some(_)) => {}
-            Ok(None) => return Membership::SignedOut,
+        // A stored sign-in that cannot be used is unknown for the same
+        // reason.
+        let own = match self.stored().await {
+            Ok(Some(account)) => account.key.id,
+            Ok(None) => {
+                // Asked again rather than trusted from the read above, so a
+                // reread in between can only make it unknown.
+                let cached = self.cached.read().await;
+                let signed_out = cached.read && cached.account.is_none() && !cached.unusable;
+                return if signed_out {
+                    Membership::SignedOut
+                } else {
+                    Membership::Unknown
+                };
+            }
             Err(_) => return Membership::Unknown,
-        }
+        };
+        self.listed(&own).await
+    }
+
+    /// The list as last fetched, if it is one this machine can believe.
+    ///
+    /// This machine is always on its own account's list, so a list without
+    /// it is not an answer: the wrong list, an emptied one, or a misread.
+    /// Taken at its word it would say none of your machines are yours.
+    async fn listed(&self, own: &str) -> Membership {
         let list = self.list.read().await;
-        if list.fetched.is_none() {
+        if list.fetched.is_none() || !list.entries.contains_key(own) {
             return Membership::Unknown;
         }
         Membership::Machines(list.entries.keys().cloned().collect())
@@ -1173,10 +1203,15 @@ mod identity_tests {
 
         // Once read, it answers as the full one does, still without a read.
         assert_eq!(state.membership().await, Membership::Unknown);
-        state.list.write().await.fetched = Some(Instant::now());
+        let own = state.machine_id().await.unwrap();
+        {
+            let mut list = state.list.write().await;
+            list.entries.insert(own.clone(), entry());
+            list.fetched = Some(Instant::now());
+        }
         assert_eq!(
             state.known_membership().await,
-            Membership::Machines(Default::default())
+            Membership::Machines(std::collections::HashSet::from([own]))
         );
         assert_eq!(reads.load(Ordering::SeqCst), 1);
 
@@ -1194,17 +1229,55 @@ mod identity_tests {
     #[tokio::test]
     async fn membership_lists_the_machines_once_fetched() {
         let stored = an_account(42);
+        let own = stored.machine.clone();
         let state = with_keystore(move || Ok(Some(stored.clone())));
         {
             let mut list = state.list.write().await;
             list.entries.insert("aa".into(), entry());
+            list.entries.insert(own.clone(), entry());
             // Any age counts: an old list still says who was on the account.
             list.fetched = Some(Instant::now());
         }
         assert_eq!(
             state.membership().await,
-            Membership::Machines(std::collections::HashSet::from(["aa".to_string()]))
+            Membership::Machines(std::collections::HashSet::from(["aa".to_string(), own]))
         );
+    }
+
+    #[tokio::test]
+    async fn a_list_without_this_machine_is_unknown() {
+        // This machine is always on its own account's list. A list without
+        // it is the wrong list, an emptied one, or a misread, and taking it
+        // at its word would unpair every machine.
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        {
+            let mut list = state.list.write().await;
+            list.entries.insert("aa".into(), entry());
+            list.fetched = Some(Instant::now());
+        }
+        assert_eq!(state.membership().await, Membership::Unknown);
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+
+        state.list.write().await.entries.clear();
+        assert_eq!(state.membership().await, Membership::Unknown);
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+    }
+
+    #[tokio::test]
+    async fn a_stored_sign_in_it_cannot_use_is_unknown_not_signed_out() {
+        let mut broken = an_account(42);
+        broken.key = "not a key".into();
+        let state = with_keystore(move || Ok(Some(broken.clone())));
+        assert_eq!(state.membership().await, Membership::Unknown);
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+        // Still nothing to sign with: everything else degrades as before.
+        assert!(state.load().await.is_none());
+
+        // Signing out on purpose is a sign-out.
+        state.save(None).await;
+        assert_eq!(state.membership().await, Membership::SignedOut);
+        assert_eq!(state.known_membership().await, Membership::SignedOut);
     }
 
     #[tokio::test]

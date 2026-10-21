@@ -188,6 +188,19 @@ pub fn run() {
             updates::ensure_self_executable();
 
             let config_dir = app.path().app_config_dir()?;
+            // The CLI has to work this out for itself, having no Tauri to
+            // ask. Checked rather than assumed: if the two ever disagree,
+            // `dusk screen` writes a setting the window never reads, and
+            // silently. Said once here rather than left to be discovered.
+            if store::config_dir().as_deref() != Some(config_dir.as_path()) {
+                eprintln!(
+                    "dusk: the settings directory Tauri gives ({}) is not the one \
+                     the command line works out ({:?}); dusk screen will write to \
+                     the wrong place",
+                    config_dir.display(),
+                    store::config_dir(),
+                );
+            }
             let store_path = store::store_path(&config_dir);
             let store = Store::load(&store_path);
 

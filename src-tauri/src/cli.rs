@@ -32,6 +32,11 @@ USAGE:
     dusk signin    Sign this machine in to GitHub, so your own machines
                    pair with it without anyone typing a PIN
     dusk status    Print what this machine's hosting looks like
+    dusk screen    Show whether streams from here are sized to the device
+                   watching, or turn that on or off:
+                       dusk screen        what it is set to now
+                       dusk screen on     size each stream to the watcher
+                       dusk screen off    stream this machine's own size
 
 SETUP OPTIONS:
     --unlock-keyring   Unlock this machine's keyring first, reading the
@@ -86,6 +91,15 @@ pub fn run_if_asked() -> Option<i32> {
         },
         "signin" => Some(block_on(signin())),
         "status" => Some(block_on(status())),
+        "screen" => match args.get(1).map(String::as_str) {
+            None => Some(block_on(screen_state())),
+            Some("on") => Some(block_on(set_screen(true))),
+            Some("off") => Some(block_on(set_screen(false))),
+            Some(other) => {
+                eprintln!("dusk screen takes on or off, not {other}\n\n{USAGE}");
+                Some(2)
+            }
+        },
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Some(0)
@@ -94,6 +108,108 @@ pub fn run_if_asked() -> Option<i32> {
         // the platform appends — and is not ours to reject.
         _ => None,
     }
+}
+
+/// Where this machine's settings are, for the two `screen` subcommands.
+fn store_path() -> Result<PathBuf, String> {
+    let dir = crate::store::config_dir()
+        .ok_or("Dusk could not work out where this machine's settings live.")?;
+    Ok(crate::store::store_path(&dir))
+}
+
+/// Print whether streams from here are sized to the device watching.
+///
+/// Its own subcommand rather than a line in `dusk status`, because it is
+/// about streaming *from* here rather than whether hosting works, and
+/// because someone turning it on wants to see it took.
+async fn screen_state() -> i32 {
+    let path = match store_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("{err}");
+            return 1;
+        }
+    };
+    let on = crate::store::Store::load(&path).virtual_screen;
+    println!("Sized screen: {}", if on { "on" } else { "off" });
+    match crate::host::virtual_screen::mechanism() {
+        crate::model::ScreenMechanism::VirtualDisplay => {
+            println!("              by streaming this machine's virtual display")
+        }
+        crate::model::ScreenMechanism::HostOutput => {
+            println!("              by resizing the screen this machine is using")
+        }
+        crate::model::ScreenMechanism::None => println!(
+            "              not available on this machine — \
+             nothing here can be resized for a stream"
+        ),
+    }
+    0
+}
+
+/// Turn the sized screen on or off, doing exactly what the toggle in
+/// Settings does: the host's side of it, then the setting itself.
+///
+/// The two halves are both needed and do different things. Without the
+/// host's side nothing resizes; without the setting the host still answers a
+/// client's question with its own size, so a client asking to match the host
+/// never asks for anything else and nothing resizes either.
+async fn set_screen(on: bool) -> i32 {
+    let path = match store_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("{err}");
+            return 1;
+        }
+    };
+
+    let credentials = CredentialStore::default();
+    let Some(creds) = credentials.load().await else {
+        eprintln!(
+            "Hosting is not set up on this machine yet, so there is nothing to \
+             size. Run dusk setup first."
+        );
+        return 1;
+    };
+    let api = match crate::sunshine::SunshineApi::new(crate::sunshine::api::DEFAULT_PORT) {
+        Ok(api) => api,
+        Err(err) => {
+            eprintln!("{err}");
+            return 1;
+        }
+    };
+
+    let host = if on {
+        crate::host::virtual_screen::enable(&api, &creds).await
+    } else {
+        crate::host::virtual_screen::disable(&api, &creds).await
+    };
+    if let Err(err) = host {
+        eprintln!("{err}");
+        return 1;
+    }
+
+    let mut store = crate::store::Store::load(&path);
+    store.virtual_screen = on;
+    if let Err(err) = store.save(&path) {
+        eprintln!("the host was changed but the setting could not be saved: {err}");
+        return 1;
+    }
+
+    println!(
+        "Sized screen: {}. {}",
+        if on { "on" } else { "off" },
+        if on {
+            "Streams from here are now the size of the device watching."
+        } else {
+            "Streams from here are this machine's own size again."
+        }
+    );
+    // The window reads the settings when it starts and keeps them, so one
+    // already open is still working from the old value and would write it
+    // back over this. The same trap v0.3.25 fixed for the sign-in.
+    println!("If Dusk's window is open on this machine, restart it to pick this up.");
+    0
 }
 
 /// The password for `--unlock-keyring`, from standard input.

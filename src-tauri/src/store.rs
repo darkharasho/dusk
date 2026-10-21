@@ -35,9 +35,11 @@ pub struct Store {
     pub bitrate_kbps: Option<u32>,
     /// Which video format a stream asks the host for.
     pub codec: Codec,
-    /// Streams from this machine show the virtual display, sized to the
-    /// connecting machine's screen. Windows only, and only once the driver
-    /// is installed; see [`crate::host::virtual_screen`].
+    /// Streams from this machine are given a screen the size of the device
+    /// watching: the virtual display on Windows, once the driver is
+    /// installed, and the real output resized or scaled on Linux. Keeps its
+    /// old name so an existing settings file still reads. See
+    /// [`crate::host::virtual_screen`].
     pub virtual_screen: bool,
 }
 
@@ -140,9 +142,107 @@ pub fn store_path(config_dir: &Path) -> PathBuf {
     config_dir.join("devices.json")
 }
 
+/// This machine's bundle identifier, which is the directory the settings
+/// live under. Pinned here to match `tauri.conf.json`.
+const IDENTIFIER: &str = "dev.dusk.app";
+
+/// Where the settings live, worked out without asking Tauri.
+///
+/// The CLI runs before Tauri starts, so `app.path().app_config_dir()` is not
+/// available to it — and this **must** give the same answer that does. The
+/// day the two disagree, one of them writes a setting where the other never
+/// looks: exactly the failure [`crate::secrets`] argues about, and the
+/// reason the window checks this against Tauri's own answer at startup
+/// rather than trusting that they agree. `None` when the home directory
+/// cannot be found, which is a machine nothing can be stored on anyway.
+///
+/// What Tauri does, reproduced: the platform's configuration directory with
+/// the bundle identifier under it.
+pub fn config_dir() -> Option<PathBuf> {
+    config_base(
+        std::env::var_os("HOME"),
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("APPDATA"),
+    )
+    .map(|base| base.join(IDENTIFIER))
+}
+
+/// The platform's configuration directory, from the three environment
+/// values that can decide it. Split out from [`config_dir`] so the choice
+/// between them can be tested without changing the environment the test
+/// itself is running in.
+fn config_base(
+    home: Option<std::ffi::OsString>,
+    xdg_config_home: Option<std::ffi::OsString>,
+    appdata: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let home = || home.filter(|h| !h.is_empty()).map(PathBuf::from);
+    if cfg!(windows) {
+        return appdata.filter(|a| !a.is_empty()).map(PathBuf::from);
+    }
+    if cfg!(target_os = "macos") {
+        return Some(home()?.join("Library/Application Support"));
+    }
+    match xdg_config_home {
+        // An empty value is the same as unset, which is what the XDG
+        // specification says and what every other reader of it here does.
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => Some(home()?.join(".config")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_settings_directory_is_named_for_the_bundle() {
+        // If this ever stops matching `tauri.conf.json`, `dusk screen`
+        // writes where the window never reads. The window says so at
+        // startup; this says so at build time.
+        let dir = config_dir().expect("a home to put settings in");
+        assert!(dir.ends_with(IDENTIFIER), "{dir:?}");
+        assert_eq!(store_path(&dir).file_name().unwrap(), "devices.json");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn xdg_config_home_wins_but_only_when_it_says_something() {
+        let home = Some(std::ffi::OsString::from("/home/someone"));
+        let xdg = Some(std::ffi::OsString::from("/elsewhere/config"));
+
+        assert_eq!(
+            config_base(home.clone(), xdg, None),
+            Some(PathBuf::from("/elsewhere/config"))
+        );
+        // Empty is unset, per the specification and the rest of this crate.
+        assert_eq!(
+            config_base(home.clone(), Some(std::ffi::OsString::new()), None),
+            Some(PathBuf::from("/home/someone/.config"))
+        );
+        assert_eq!(
+            config_base(home, None, None),
+            Some(PathBuf::from("/home/someone/.config"))
+        );
+        // Nowhere to put anything is an answer of none, not a guess at /.
+        assert_eq!(config_base(None, None, None), None);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_keeps_settings_under_application_support() {
+        assert_eq!(
+            config_base(
+                Some(std::ffi::OsString::from("/Users/someone")),
+                // Ignored here: Tauri does not consult it on macOS, so
+                // neither may this.
+                Some(std::ffi::OsString::from("/elsewhere")),
+                None
+            ),
+            Some(PathBuf::from("/Users/someone/Library/Application Support"))
+        );
+        assert_eq!(config_base(None, None, None), None);
+    }
 
     #[test]
     fn a_file_from_before_the_setting_keeps_other_devices_out() {

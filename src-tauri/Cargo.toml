@@ -1,6 +1,6 @@
 [package]
 name = "dusk"
-version = "0.3.18"
+version = "0.3.19"
 description = "Your machines, one app: host and stream across them"
 edition = "2021"
 rust-version = "1.77"

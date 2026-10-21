@@ -6,8 +6,19 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.18 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. The grid is grouped by account membership: `mine`
+**v0.3.19 is released**, all three platforms, from `main`, carrying the
+client's `dusk-v0.2.4`. The account's machine list now seeds the registry
+(`Registry::sync_account`, called from the poll tick), so the grid is your
+machines rather than what is advertising: a machine that is off keeps its
+card with `Reachability::Unknown` — deliberately *not* `Offline`, which is
+a probe's verdict and nothing was probed. Placeholders are keyed
+`account:<machine_id>` and `registry::account_tests` pins the three ways
+this goes wrong: this machine listed twice (skip `own`), one machine as two
+cards (placeholder must withdraw once discovery finds it and it identifies),
+and a machine signed out elsewhere lingering forever (dropped when it leaves
+the list). An **empty list means "not read yet", never "you own nothing"** —
+the poller returns early so the grid stays as discovery found it. v0.3.18
+grouped the grid by `mine`. The grid is grouped by account membership: `mine`
 first under "Your machines", everything else under "Other machines on this
 network". The join is `Device::machine_id`, answered by `peer::identify`
 (`Message::Identify`/`Identity`) on the poll tick and checked against
@@ -184,7 +195,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.18>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.19>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -220,7 +231,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19
 └── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
 ```
 

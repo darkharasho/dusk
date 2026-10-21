@@ -1,5 +1,24 @@
 # Release Notes
 
+Version v0.3.19 — October 21, 2026
+
+Your machines stay in the grid when they are switched off.
+
+## Changes
+
+- **A machine of yours no longer disappears when it stops hosting.** The
+  grid showed what was announcing itself on the network, so a machine you
+  own that was turned off — or that had its hosting uninstalled — simply
+  vanished, which looks like Dusk losing it rather than like the machine
+  being off. Every machine signed in to your account now keeps its card,
+  and says it has not been found rather than claiming to be offline.
+  Its card gives way to the real one the moment the machine turns up.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.18 — October 21, 2026
 
 The grid says which machines are actually yours.

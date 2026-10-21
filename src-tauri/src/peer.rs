@@ -264,10 +264,12 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
 /// The size a stream from here should be, for a machine whose screen is
 /// `screen`.
 ///
-/// Streaming the virtual display, it is the closest size the display has to
-/// the asker's screen: a size it does not have would make the host give up
-/// on the virtual display and stream the monitor. An asker too old to say
-/// its size is treated as this machine's size.
+/// Sizing a stream to whoever is watching, it is the asker's own screen as
+/// near as this machine can give it — which is exactly, on a host that can
+/// scale, and the closest size the virtual display has otherwise, since a
+/// size it does not have would make the host give up on the virtual display
+/// and stream the monitor. An asker too old to say its size is treated as
+/// this machine's size.
 async fn display_answer(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -278,8 +280,7 @@ async fn display_answer(
         return own;
     }
     let want = screen.map(|s| (s.width, s.height)).or(own)?;
-    let modes = crate::host::virtual_screen::current_modes();
-    crate::host::virtual_screen::best_mode(want, &modes).or(own)
+    crate::host::virtual_screen::offer_for(want).or(own)
 }
 
 /// The size of the screen a stream from here shows, in real pixels.

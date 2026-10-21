@@ -13,14 +13,17 @@
 //! things follow, all of them different from Windows, and all worth knowing
 //! before changing this:
 //!
-//! - **The host's own monitor changes mode too.** On Windows the physical
+//! - **The host's own monitor is not left alone.** On Windows the physical
 //!   monitors switch off and the virtual one is streamed; here there is one
-//!   screen and the person sitting at it sees it change.
-//! - **Only modes the output already lists are used.** A custom mode can be
-//!   added with `cvt` and `xrandr --newmode`, and is deliberately not: a
-//!   mode the monitor cannot display leaves the host with no picture, which
-//!   is a bad place to be if the `undo` hook never runs. The list a monitor
-//!   reports is wide enough to cover the shapes people stream from.
+//!   screen, and the person sitting at it sees it change size or go squashed
+//!   for the length of the stream.
+//! - **A size the monitor has no mode for is reached by scaling, never by
+//!   inventing a mode.** `cvt` and `xrandr --newmode` would drive the panel
+//!   at something it may not be able to display, leaving the host dark if
+//!   the `undo` hook never runs. Scaling keeps the panel on a mode it
+//!   already had and resizes only the framebuffer, which is what a stream
+//!   captures. See [`Plan::Scaled`] — without it the feature does nothing
+//!   whatsoever for an ultrawide client against a 16:9 host.
 //! - **Sunshine does the calling, not Dusk.** `do` and `undo` are the only
 //!   hooks that reliably bracket a stream, including one that dies, and the
 //!   host's Dusk has no equivalent. So Dusk registers *itself* as the prep
@@ -189,14 +192,63 @@ fn xrandr(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// The output a stream from this machine shows, if there is one to switch.
-fn current_target() -> Option<Output> {
-    target(parse_query(&xrandr(&["--query"]).ok()?))
+/// The `Screen 0:` line: the size X is rendering at now, and the largest it
+/// is willing to.
+///
+/// Both matter and neither is on an output's line. The current size is the
+/// *framebuffer*, which is what a scaled screen changes and what Sunshine
+/// captures — an output's mode stays where it was, so reading the mode back
+/// would say nothing had happened. The maximum is the bound on asking for a
+/// size at all.
+pub fn screen_line(query: &str) -> Option<((u32, u32), (u32, u32))> {
+    let line = query.lines().next()?;
+    let after = |key: &str| -> Option<(u32, u32)> {
+        let rest = line.split_once(key)?.1;
+        let mut parts = rest.split_whitespace();
+        let width: u32 = parts.next()?.trim_end_matches(',').parse().ok()?;
+        if parts.next()? != "x" {
+            return None;
+        }
+        let height: u32 = parts.next()?.trim_end_matches(',').parse().ok()?;
+        Some((width, height))
+    };
+    Some((after("current ")?, after("maximum ")?))
 }
 
-/// The sizes this machine can stream at, for answering a client.
+/// The output a stream from this machine shows, and the biggest screen X
+/// will give it.
+fn current_screen() -> Option<(Output, (u32, u32))> {
+    let query = xrandr(&["--query"]).ok()?;
+    let (_, limit) = screen_line(&query)?;
+    Some((target(parse_query(&query))?, limit))
+}
+
+/// The framebuffer size right now, which is what a stream is capturing.
+fn framebuffer() -> Option<(u32, u32)> {
+    screen_line(&xrandr(&["--query"]).ok()?).map(|(current, _)| current)
+}
+
+/// The sizes this machine can stream at without scaling anything.
 pub fn modes() -> Vec<(u32, u32)> {
-    current_target().map(|o| o.sizes()).unwrap_or_default()
+    current_screen().map(|(o, _)| o.sizes()).unwrap_or_default()
+}
+
+/// The size to offer a client whose screen is `want`.
+///
+/// Its own size, near enough always: scaling means the shape of the host's
+/// monitor no longer limits what a stream can be, so there is nothing to
+/// snap to and the answer is the client's screen as it is. Only an
+/// impossible size is turned down, and then the host offers its own instead.
+pub fn offer_for(want: (u32, u32)) -> Option<(u32, u32)> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return None;
+    }
+    let (output, limit) = current_screen()?;
+    match plan_for(&output, want, limit)? {
+        Plan::Already => Some(even(want)),
+        Plan::Mode(mode) => Some(mode.size),
+        Plan::Scaled { size, .. } => Some(size),
+    }
 }
 
 /// Whether this machine can resize the screen it streams.
@@ -211,7 +263,7 @@ pub fn available() -> bool {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         return false;
     }
-    current_target().is_some_and(|o| o.current.is_some() && o.sizes().len() > 1)
+    current_screen().is_some_and(|(o, _)| o.current.is_some() && o.sizes().len() > 1)
 }
 
 /// Where the mode to go back to is remembered.
@@ -234,34 +286,133 @@ fn client_size() -> Option<(u32, u32)> {
     ))
 }
 
+/// How to give the screen the size a client asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Plan {
+    /// It is already that size.
+    Already,
+    /// A mode the output lists. Preferred where there is one: the monitor
+    /// shows it properly and nothing is scaled.
+    Mode(Mode),
+    /// A mode the output lists, with the framebuffer scaled on top of it to
+    /// the size wanted.
+    ///
+    /// This is what makes the setting worth having. A monitor only lists the
+    /// shapes it is: Venus's lists no ultrawide, so an ultrawide client got
+    /// the nearest 16:9 mode — which is the size it already was — and the
+    /// feature did nothing at all for the pair of machines it was built for.
+    /// Scaling detaches the size X renders at from the mode the panel is
+    /// driven at, so the client gets its exact size whatever the monitor is.
+    ///
+    /// The base mode is left as it is rather than chosen, so the panel keeps
+    /// the signal it already had: a mode a monitor cannot display would
+    /// leave the host dark, which is the risk that ruled out `--newmode`.
+    /// The cost is that the host's own screen shows the whole desktop
+    /// squashed into its real mode for the length of the stream.
+    Scaled { base: Mode, size: (u32, u32) },
+}
+
+/// Sizes are rounded down to even: hardware encoders want even dimensions,
+/// and a client reporting an odd one would otherwise be passed straight
+/// through to the framebuffer.
+fn even(size: (u32, u32)) -> (u32, u32) {
+    (size.0 & !1, size.1 & !1)
+}
+
+/// How to reach `want` on `output`, or `None` if it cannot be reached.
+pub fn plan_for(output: &Output, want: (u32, u32), limit: (u32, u32)) -> Option<Plan> {
+    let current = output.current.clone()?;
+    let want = even(want);
+    if want.0 == 0 || want.1 == 0 || want.0 > limit.0 || want.1 > limit.1 {
+        return None;
+    }
+    if want == current.size {
+        return Some(Plan::Already);
+    }
+    if let Some(mode) = output.mode_for(want) {
+        return Some(Plan::Mode(mode.clone()));
+    }
+    Some(Plan::Scaled {
+        base: current,
+        size: want,
+    })
+}
+
+/// The `--scale` factors that turn `base` into `size`.
+///
+/// Six decimals, which is enough: measured on a live X server, 2000x1300
+/// from a 2560x1440 base lands exactly, and so does an ultrawide 3440x1440.
+/// The framebuffer is checked afterwards all the same.
+fn scale_factors(base: (u32, u32), size: (u32, u32)) -> String {
+    format!(
+        "{:.6}x{:.6}",
+        f64::from(size.0) / f64::from(base.0),
+        f64::from(size.1) / f64::from(base.1)
+    )
+}
+
 /// Switch the screen to the size the client asked for, remembering what it
 /// was on first so that a switch which only half happens is still
 /// recoverable.
 fn switch_to_client() -> Result<(), String> {
     let want = client_size().ok_or("the host did not say what size the client wants")?;
-    let output = current_target().ok_or("no single output to resize")?;
+    let (output, limit) = current_screen().ok_or("no single output to resize")?;
     let current = output
         .current
         .clone()
         .ok_or("that output is not showing anything")?;
 
-    let size = super::virtual_screen::best_mode(want, &output.sizes())
-        .ok_or("no mode close enough to the client's screen")?;
-    if size == current.size {
+    let plan = plan_for(&output, want, limit).ok_or("that is not a size this screen can be")?;
+    if plan == Plan::Already {
         return Ok(());
     }
-    let mode = output
-        .mode_for(size)
-        .ok_or("the chosen mode went away")?
-        .clone();
 
     std::fs::write(state_path(), format!("{}\n{}\n", output.name, current.name))
         .map_err(|e| format!("could not record the screen's mode: {e}"))?;
 
-    xrandr(&["--output", &output.name, "--mode", &mode.name])?;
+    let size = match &plan {
+        Plan::Already => return Ok(()),
+        Plan::Mode(mode) => {
+            xrandr(&[
+                "--output",
+                &output.name,
+                "--mode",
+                &mode.name,
+                "--scale",
+                "1x1",
+            ])?;
+            mode.size
+        }
+        Plan::Scaled { base, size } => {
+            let factors = scale_factors(base.size, *size);
+            xrandr(&[
+                "--output",
+                &output.name,
+                "--mode",
+                &base.name,
+                "--scale",
+                &factors,
+            ])?;
+            // Scaling asks for a size indirectly, so the framebuffer is read
+            // back and pinned if it came out a pixel off: an odd width would
+            // reach the encoder as an odd width.
+            if framebuffer() != Some(*size) {
+                let _ = xrandr(&["--fb", &format!("{}x{}", size.0, size.1)]);
+            }
+            *size
+        }
+    };
+
     eprintln!(
-        "dusk: streaming at {}x{}, was {}x{}",
-        size.0, size.1, current.size.0, current.size.1
+        "dusk: streaming at {}x{}, was {}x{}{}",
+        size.0,
+        size.1,
+        current.size.0,
+        current.size.1,
+        match plan {
+            Plan::Scaled { .. } => " (scaled)",
+            _ => "",
+        }
     );
     Ok(())
 }
@@ -277,7 +428,10 @@ fn restore() -> Result<(), String> {
         let _ = std::fs::remove_file(&path);
         return Err("what the screen was on was not readable".into());
     };
-    let result = xrandr(&["--output", output, "--mode", mode]);
+    // `--scale 1x1` whether or not a scale was applied: resetting one that
+    // was never set costs nothing, where leaving one that was would hold the
+    // host's screen at the client's size after the stream had ended.
+    let result = xrandr(&["--output", output, "--mode", mode, "--scale", "1x1"]);
     // Removed either way: a mode that cannot be restored now will not be
     // restorable at the end of the next stream either, and leaving the file
     // would have every later stream try it again.
@@ -514,6 +668,77 @@ DP-2 connected 1920x1080+1920+0 (normal)
             target(parse_query(one)).map(|o| o.name),
             Some("DP-1".into())
         );
+    }
+
+    #[test]
+    fn the_screen_line_gives_the_framebuffer_and_the_limit() {
+        // The framebuffer is what a scaled screen changes and what a stream
+        // captures; an output's mode stays put, so this line is the only
+        // place the change shows.
+        let (current, limit) = screen_line(VENUS).expect("the first line");
+        assert_eq!(current, (2560, 1440));
+        assert_eq!(limit, (16384, 16384));
+
+        assert!(screen_line("HDMI-A-1 connected primary 2560x1440+0+0").is_none());
+    }
+
+    #[test]
+    fn an_ultrawide_client_is_scaled_rather_than_given_up_on() {
+        // The case the feature exists for, and the one it originally failed:
+        // this Mac is 3440x1440 and Venus's monitor lists no ultrawide mode,
+        // so snapping to the nearest listed size returned the size it
+        // already was and nothing happened at all.
+        let output = parse_query(VENUS).remove(0);
+        let plan = plan_for(&output, (3440, 1440), (16384, 16384)).expect("a plan");
+        match plan {
+            Plan::Scaled { base, size } => {
+                assert_eq!(size, (3440, 1440), "the client gets its exact size");
+                assert_eq!(
+                    base.size,
+                    (2560, 1440),
+                    "the panel keeps the mode it already had, so it keeps its signal"
+                );
+            }
+            other => panic!("expected a scaled plan, got {other:?}"),
+        }
+        // Measured against a live X server: these are the factors that put
+        // the framebuffer exactly on 3440x1440.
+        assert_eq!(
+            scale_factors((2560, 1440), (3440, 1440)),
+            "1.343750x1.000000"
+        );
+    }
+
+    #[test]
+    fn a_listed_mode_is_preferred_to_scaling_it() {
+        let output = parse_query(VENUS).remove(0);
+        // 1920x1080 is listed, so the panel is driven at it properly.
+        assert_eq!(
+            plan_for(&output, (1920, 1080), (16384, 16384)),
+            Some(Plan::Mode(Mode {
+                name: "1920x1080".into(),
+                size: (1920, 1080)
+            }))
+        );
+        // The size it is already at needs nothing doing, and must not be
+        // recorded as a change or the restore would be spurious.
+        assert_eq!(
+            plan_for(&output, (2560, 1440), (16384, 16384)),
+            Some(Plan::Already)
+        );
+    }
+
+    #[test]
+    fn an_impossible_size_is_turned_down_rather_than_attempted() {
+        let output = parse_query(VENUS).remove(0);
+        assert_eq!(plan_for(&output, (99999, 1440), (16384, 16384)), None);
+        assert_eq!(plan_for(&output, (0, 1080), (16384, 16384)), None);
+        // A client reporting an odd size gets an even one: encoders want
+        // even dimensions and the framebuffer would take the odd one.
+        match plan_for(&output, (3441, 1441), (16384, 16384)) {
+            Some(Plan::Scaled { size, .. }) => assert_eq!(size, (3440, 1440)),
+            other => panic!("expected a scaled plan, got {other:?}"),
+        }
     }
 
     #[test]

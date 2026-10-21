@@ -440,6 +440,28 @@ pub fn current_modes() -> Vec<(u32, u32)> {
     Vec::new()
 }
 
+/// The size to offer a client whose screen is `want`, or `None` to leave it
+/// to the host's own screen size.
+///
+/// Windows is bounded by the sizes written into the driver's list, so the
+/// answer is the nearest of those. Linux can scale the framebuffer to
+/// anything, so the answer is the client's own size.
+pub fn offer_for(want: (u32, u32)) -> Option<(u32, u32)> {
+    #[cfg(windows)]
+    {
+        best_mode(want, &current_modes())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        super::screen_mode::offer_for(want)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = want;
+        None
+    }
+}
+
 /// How this machine can size a stream's screen to the device watching: the
 /// virtual display on Windows, the real output's mode on Linux, and nothing
 /// on macOS.

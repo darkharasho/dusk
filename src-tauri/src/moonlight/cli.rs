@@ -85,7 +85,7 @@ pub struct Moonlight {
     binary: PathBuf,
     kind: ClientKind,
     /// Whether this client can record a host it never paired with itself,
-    /// asked once. See [`Moonlight::supports_add_host`].
+    /// once it has answered. See [`Moonlight::supports_add_host`].
     add_host: OnceCell<bool>,
 }
 
@@ -234,18 +234,22 @@ impl Moonlight {
         if self.kind != ClientKind::Dusk {
             return false;
         }
-        *self
+        // Only an answer is kept. A client that could not be asked, timed
+        // out or would not start, is asked again next time.
+        let answer = self
             .add_host
-            .get_or_init(|| async {
-                match self.run(&["--version"], ACTION_TIMEOUT).await {
-                    Ok(stdout) => advertises_add_host(&stdout),
-                    Err(err) => {
-                        eprintln!("dusk: could not ask the client what it supports: {err}");
-                        false
-                    }
-                }
+            .get_or_try_init(|| async {
+                let stdout = self.run(&["--version"], ACTION_TIMEOUT).await?;
+                Ok::<_, MoonlightError>(advertises_add_host(&stdout))
             })
-            .await
+            .await;
+        match answer {
+            Ok(supported) => *supported,
+            Err(err) => {
+                eprintln!("dusk: could not ask the client what it supports: {err}");
+                false
+            }
+        }
     }
 
     /// Record a host as paired, under the certificate it gave Dusk.
@@ -1108,26 +1112,72 @@ mod tests {
         assert_eq!(clean_stderr(stderr), "Not a PEM certificate: /tmp/x.pem");
     }
 
+    /// An executable script at a fresh path in the temp directory.
+    ///
+    /// Written under another name and renamed into place, so the path that
+    /// is run was never open for writing: executing a file that still is
+    /// fails with "text file busy".
+    #[cfg(unix)]
+    fn a_script(name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("dusk-fake-client-{name}-{}", std::process::id()));
+        let staging = dir.join(format!(
+            "dusk-fake-client-{name}-{}.partial",
+            std::process::id()
+        ));
+        std::fs::write(&staging, body).unwrap();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::rename(&staging, &path).unwrap();
+        path
+    }
+
     /// A stand-in client: a script that checks it was handed a certificate
     /// file and then exits with `code`, saying `says` on stderr.
     #[cfg(unix)]
     fn a_client_exiting(name: &str, code: i32, says: &str) -> Moonlight {
-        use std::os::unix::fs::PermissionsExt;
-        let path =
-            std::env::temp_dir().join(format!("dusk-fake-client-{name}-{}", std::process::id()));
-        std::fs::write(
-            &path,
-            format!(
+        let path = a_script(
+            name,
+            &format!(
                 "#!/bin/sh\n\
                  [ \"$1\" = add-host ] && [ -f \"$8\" ] || exit 9\n\
                  echo '00:00:00 - Qt Info: Dusk fork: add-host available' 1>&2\n\
                  echo '{says}' 1>&2\n\
                  exit {code}\n"
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         Moonlight::new(path, ClientKind::Dusk)
+    }
+
+    /// A client that could not be asked is asked again next time, rather
+    /// than taken for one without the action until Dusk restarts.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_version_check_is_not_remembered() {
+        let ready =
+            std::env::temp_dir().join(format!("dusk-fake-client-ready-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ready);
+        let path = a_script(
+            "version",
+            &format!(
+                "#!/bin/sh\n\
+                 [ -f '{}' ] || exit 1\n\
+                 echo 'Moonlight 6.1.0'\n\
+                 echo 'Dusk fork: add-host available'\n",
+                ready.display()
+            ),
+        );
+        let client = Moonlight::new(path.clone(), ClientKind::Dusk);
+
+        assert!(!client.supports_add_host().await);
+        assert!(client.add_host.get().is_none(), "a failure was cached");
+
+        std::fs::write(&ready, b"").unwrap();
+        assert!(client.supports_add_host().await);
+        assert_eq!(client.add_host.get(), Some(&true));
+
+        let _ = std::fs::remove_file(&ready);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[cfg(unix)]

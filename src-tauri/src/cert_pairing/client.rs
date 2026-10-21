@@ -38,12 +38,14 @@ const NOT_FINISHED: &str = "That machine hasn't finished pairing yet. Try again 
 /// `Ok(true)` when both halves are done. `Ok(false)` when it was not tried
 /// or the host would not, and the PIN should be used instead. `Err` when
 /// the host has paired this machine but this machine could not finish its
-/// half. `on_waiting_for_host` runs if the host is busy streaming and will
-/// finish once it is free.
+/// half. `on_client_open` runs if a stream window here has to close before
+/// this machine can finish. `on_waiting_for_host` runs if the host is busy
+/// streaming and will finish once it is free.
 pub async fn pair(
     state: &Arc<AppState>,
     address: &str,
     device_id: &str,
+    on_client_open: impl FnOnce(),
     on_waiting_for_host: impl FnOnce(),
 ) -> Result<bool, String> {
     let Some(uniqueid) = crate::registry::unique_id_of(device_id) else {
@@ -95,7 +97,7 @@ pub async fn pair(
     };
 
     let at = serverinfo::with_port(address, http_port);
-    record(client, &at, &uniqueid, &name, &server_cert).await?;
+    record(client, &at, &uniqueid, &name, &server_cert, on_client_open).await?;
 
     if !ready {
         on_waiting_for_host();
@@ -151,19 +153,25 @@ async fn device(state: &Arc<AppState>, id: &str) -> Option<(String, u16, u16)> {
 }
 
 /// Have the client record the host as paired. A client that is open holds
-/// its settings, so this waits a while for it to close.
+/// its settings, so this waits a while for it to close, saying so through
+/// `on_client_open` the first time.
 async fn record(
     client: &Moonlight,
     address: &str,
     uniqueid: &str,
     name: &str,
     server_cert: &str,
+    on_client_open: impl FnOnce(),
 ) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + CLIENT_OPEN_WAIT;
+    let mut on_client_open = Some(on_client_open);
     loop {
         match client.add_host(address, uniqueid, name, server_cert).await {
             Ok(()) => return Ok(()),
             Err(MoonlightError::ClientOpen) if tokio::time::Instant::now() < deadline => {
+                if let Some(f) = on_client_open.take() {
+                    f();
+                }
                 tokio::time::sleep(RETRY_EVERY).await;
             }
             Err(err @ MoonlightError::ClientOpen) => return Err(err.to_string()),

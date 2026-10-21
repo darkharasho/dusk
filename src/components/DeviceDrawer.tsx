@@ -278,6 +278,18 @@ function PairPanel({
     );
   }
 
+  if (stage === "clientOpen") {
+    return (
+      <div className="axi-stack">
+        <p>Close the stream window to finish pairing.</p>
+        <p className="axi-ink-dim">
+          {name} has already said yes. Dusk finishes as soon as the window is
+          closed.
+        </p>
+      </div>
+    );
+  }
+
   if (stage === "waitingForHost") {
     return (
       <div className="axi-stack">

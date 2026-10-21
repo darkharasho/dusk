@@ -161,6 +161,8 @@ pub struct PairProgress {
     /// `manual` when no Dusk answered and the PIN has to be typed there;
     /// `waitingForHost` when the other machine paired this one but is
     /// streaming, and finishes once that stream ends.
+    /// `clientOpen` when a stream window here has to close before this
+    /// machine can finish its half.
     pub stage: &'static str,
 }
 
@@ -191,8 +193,13 @@ pub async fn pair_device(
             },
         );
     };
-    let by_cert =
-        crate::cert_pairing::client::pair(&inner, &address, &id, || progress("waitingForHost"));
+    let by_cert = crate::cert_pairing::client::pair(
+        &inner,
+        &address,
+        &id,
+        || progress("clientOpen"),
+        || progress("waitingForHost"),
+    );
     if by_cert.await? {
         inner.reload_identity();
         inner.request_refresh();

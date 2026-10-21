@@ -696,8 +696,13 @@ impl AccountState {
     /// never fetched is `Unknown`, not empty: the two must not be confused.
     #[allow(dead_code)] // Task 6 onward asks it before trusting a pairing.
     pub async fn membership(&self) -> Membership {
-        if self.load().await.is_none() {
-            return Membership::SignedOut;
+        // Only a keystore that answers "nothing stored" means signed out. One
+        // that will not answer is unknown, or a locked keyring would read as
+        // a sign-out and unpair every machine.
+        match self.stored().await {
+            Ok(Some(_)) => {}
+            Ok(None) => return Membership::SignedOut,
+            Err(_) => return Membership::Unknown,
         }
         let list = self.list.read().await;
         if list.fetched.is_none() {
@@ -1111,6 +1116,12 @@ mod identity_tests {
 
         let signed_out = with_keystore(|| Ok(None));
         assert_eq!(signed_out.membership().await, Membership::SignedOut);
+    }
+
+    #[tokio::test]
+    async fn a_keystore_it_cannot_read_is_unknown_not_signed_out() {
+        let state = with_keystore(|| Err("keyring is locked".into()));
+        assert_eq!(state.membership().await, Membership::Unknown);
     }
 
     #[tokio::test]

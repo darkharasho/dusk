@@ -187,6 +187,14 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_changes_when_either_certificate_does() {
+        let other = "-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----";
+        let base = cert_reply_message(CERT, "H1", CERT);
+        assert_ne!(base, cert_reply_message(CERT, "H1", other));
+        assert_ne!(base, cert_reply_message(other, "H1", CERT));
+    }
+
+    #[test]
     fn crlf_and_lf_copies_of_a_certificate_sign_the_same() {
         let crlf = CERT.replace('\n', "\r\n") + "\r\n";
         assert_eq!(

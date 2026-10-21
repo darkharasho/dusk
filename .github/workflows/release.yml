@@ -45,10 +45,17 @@ env:
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 jobs:
-  # Gates all three builds, same as axibridge: a tag must not produce a
-  # shippable artifact from code that does not pass its own checks. One
-  # platform is enough for a gate — ci.yml runs the full three-OS matrix on
-  # every pull request, and macOS is the one whose release path is signed.
+  # Gates `publish`, not the builds. A tag must not produce a *shippable*
+  # artifact from code that does not pass its own checks — but nothing a
+  # build job makes is shippable until `publish` attaches it to the release,
+  # so gating there keeps the same promise and lets the builds start at once.
+  # Worth it: the builds take thirteen minutes and this takes nearly five, so
+  # gating them serialised a third of the wall clock for no added safety. The
+  # cost is runner minutes on a build that is then thrown away, which is the
+  # cheaper of the two.
+  #
+  # One platform is enough for a gate — ci.yml runs the full three-OS matrix
+  # on every pull request, and macOS is the one whose release path is signed.
   test:
     name: Test
     runs-on: macos-latest
@@ -89,7 +96,6 @@ jobs:
 
   build-macos:
     name: Build (macOS universal)
-    needs: [test]
     runs-on: macos-latest
     # Notarization waits on Apple's service, usually a couple of minutes but
     # with no guaranteed turnaround.
@@ -270,7 +276,6 @@ jobs:
   # verified organisation, so it waits until there is demand to justify one.
   build-windows:
     name: Build (Windows x86_64)
-    needs: [test]
     runs-on: windows-latest
     timeout-minutes: 60
 
@@ -341,7 +346,6 @@ jobs:
 
   build-linux:
     name: Build (Linux x86_64)
-    needs: [test]
     # 22.04 rather than latest on purpose. An AppImage and a .deb are built
     # against the runner's glibc and webkit2gtk, so building on the newest
     # Ubuntu silently restricts the result to distributions that new. The
@@ -453,7 +457,7 @@ jobs:
 
   publish:
     name: Publish
-    needs: [build-macos, build-windows, build-linux, updater-manifest]
+    needs: [test, build-macos, build-windows, build-linux, updater-manifest]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

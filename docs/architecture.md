@@ -166,12 +166,20 @@ The connection has its own port, 47851 (`clipboard::PORT`), apart from the
 peer port, 47850. It is mutual TLS with no CA: each side pins the other's
 certificate as recorded at pairing (A presents its client identity, B its
 host certificate), and resumption is off so the pin is checked every time.
-B admits a connection only while sharing is on, its desktop is supported
-(not GNOME on Wayland) and it is hosting a stream, which it rechecks every
-5 s. A plain `Declined` or `Hello` line precedes the handshake, so an older
-Dusk with nothing listening just means no sync. Text only, up to 1 MB;
-nothing from before the stream is sent, and clipboard text is never logged
-or stored. See `src-tauri/src/clipboard/`.
+B admits one connection at a time, and only while sharing is on, its
+desktop is supported (not GNOME on Wayland), and it is hosting a stream with
+a client still connected. The host stays busy after a client drops while the
+launched app keeps running, so its log has to show a client still there; a
+log that can't be read counts as connected. B rechecks the stream and the
+setting every 5 s, and A checks its own setting, so turning sharing off on
+either side ends the connection. Admission only uses a host password already
+in memory: a connection never makes B read its keystore. A plain `Declined`
+or `Hello` line comes before the handshake, so an older Dusk with nothing
+listening just means no sync. Text only, up to 1 MB. A larger copy on either
+side isn't sent, and A's stream window shows a notice. Nothing from before
+the stream is sent, and clipboard text is never logged or stored. If both
+sides copy at the same moment, they can briefly disagree until the next
+copy. See `src-tauri/src/clipboard/`.
 
 ## What this deliberately is not
 

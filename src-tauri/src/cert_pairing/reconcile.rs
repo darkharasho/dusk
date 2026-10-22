@@ -85,7 +85,7 @@ impl Host for Local<'_> {
 /// an end and there have been at least as many ends as starts, so a second
 /// client still streaming keeps it busy. A log with none of them says
 /// nothing, and is taken as busy.
-fn client_connected(log: &str) -> bool {
+pub(crate) fn client_connected(log: &str) -> bool {
     let (mut starts, mut ends, mut last_ended) = (0usize, 0usize, None);
     for line in log.lines() {
         if line.contains("New streaming session started") {

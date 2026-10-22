@@ -22,19 +22,38 @@ fn hash(text: &str) -> Hash {
 /// Decides which clipboard changes should cross the connection.
 pub struct Guard {
     last_synced: Option<Hash>,
+    /// The last copy too big to send that the other side was told about.
+    last_too_big: Option<Hash>,
 }
 
 impl Guard {
     /// Starts a connection with the clipboard as it was when it opened.
     pub fn new(baseline: Option<&str>) -> Self {
+        let baseline = baseline.map(hash);
         Self {
-            last_synced: baseline.map(hash),
+            last_synced: baseline,
+            // An oversized baseline is from before the stream: not news.
+            last_too_big: baseline,
         }
     }
 
     /// Local clipboard now reads `text`: should it be sent? Records it if so.
     pub fn outgoing(&mut self, text: &str) -> bool {
+        // The clipboard holds something else now, so copying the oversized
+        // text again later is a new copy to tell the other side about.
+        self.last_too_big = None;
         self.record(text)
+    }
+
+    /// Local clipboard now reads `text`, which is over the cap: should the
+    /// other side be told? Once per distinct copy, not once per poll.
+    pub fn too_big(&mut self, text: &str) -> bool {
+        let h = hash(text);
+        if self.last_too_big == Some(h) {
+            return false;
+        }
+        self.last_too_big = Some(h);
+        true
     }
 
     /// `text` arrived from the other side: should it be written locally?
@@ -81,6 +100,22 @@ mod tests {
         assert!(!g.outgoing("a"));
         assert!(g.outgoing("b"));
         assert!(g.outgoing("a"), "copying a again after b is a new copy");
+    }
+
+    #[test]
+    fn an_oversized_copy_is_reported_once_per_copy() {
+        let mut g = Guard::new(None);
+        assert!(g.too_big("huge"));
+        assert!(!g.too_big("huge"), "the next poll sees the same copy");
+        assert!(g.too_big("other huge"));
+        assert!(g.outgoing("small"));
+        assert!(g.too_big("huge"), "copied again after something else");
+    }
+
+    #[test]
+    fn an_oversized_baseline_is_not_reported() {
+        let mut g = Guard::new(Some("huge"));
+        assert!(!g.too_big("huge"));
     }
 
     #[test]

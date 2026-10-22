@@ -45,6 +45,9 @@ pub enum Wire {
     Declined { reason: Decline },
     /// The sender is leaving the session.
     Bye,
+    /// The host's newest copy is over the cap, so it was not sent. Carries
+    /// nothing about the copy. An older Dusk reads it as [`Wire::Unknown`].
+    TooBig,
     /// A message type this build does not know. Not an error.
     #[serde(other)]
     Unknown,
@@ -65,6 +68,7 @@ impl std::fmt::Debug for Wire {
                 f.debug_struct("Declined").field("reason", reason).finish()
             }
             Wire::Bye => f.write_str("Bye"),
+            Wire::TooBig => f.write_str("TooBig"),
             Wire::Unknown => f.write_str("Unknown"),
         }
     }
@@ -142,6 +146,21 @@ mod tests {
     fn an_unknown_message_is_not_fatal() {
         let w: Wire = serde_json::from_str(r#"{"type":"from_the_future"}"#).unwrap();
         assert!(matches!(w, Wire::Unknown));
+    }
+
+    #[test]
+    fn too_big_is_a_bare_message_an_older_dusk_ignores() {
+        assert_eq!(line(&Wire::TooBig), "{\"type\":\"too_big\"}\n");
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Older {
+            Bye,
+            #[serde(other)]
+            Unknown,
+        }
+        let older: Older = serde_json::from_str(r#"{"type":"too_big"}"#).unwrap();
+        assert!(matches!(older, Older::Unknown));
+        let _ = Older::Bye;
     }
 
     #[test]

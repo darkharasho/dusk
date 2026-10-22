@@ -440,9 +440,10 @@ fn pinned_cert<'a>(
 }
 
 /// Share the clipboard with the host for as long as the returned sender
-/// lives. Dropping it ends the connection.
+/// lives and the setting stays on. Dropping it ends the connection.
 fn start_clipboard(
     app: &AppHandle,
+    state: Arc<AppState>,
     control: crate::session::Control,
     device_id: String,
     config: Arc<rustls::ClientConfig>,
@@ -453,7 +454,13 @@ fn start_clipboard(
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let ended = match client::connect(&address, config).await {
-            Ok(stream) => client::run(stream, control, rx).await,
+            Ok(stream) => {
+                let sharing_on = move || {
+                    let state = state.clone();
+                    async move { state.store.lock().await.clipboard_sharing.is_on() }
+                };
+                client::run(stream, control, rx, sharing_on).await
+            }
             Err(ended) => ended,
         };
         match ended {
@@ -578,6 +585,7 @@ pub async fn launch_app(
                         {
                             clipboard = Some(start_clipboard(
                                 &overlay_app,
+                                clipboard_state.clone(),
                                 session.control(),
                                 stats_device.clone(),
                                 config,
@@ -587,6 +595,13 @@ pub async fn launch_app(
                     }
                 }
                 crate::session::Effect::Clipboard(text) => {
+                    // Turned off mid-stream: the connection goes with the
+                    // sender, and nothing more is passed on.
+                    if clipboard.is_some()
+                        && !clipboard_state.store.lock().await.clipboard_sharing.is_on()
+                    {
+                        clipboard = None;
+                    }
                     if let Some(clipboard) = &clipboard {
                         let _ = clipboard.send(text);
                     }

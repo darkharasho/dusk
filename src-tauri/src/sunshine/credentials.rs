@@ -147,6 +147,16 @@ impl CredentialStore {
         }
     }
 
+    /// The credential if this run has already read or saved it, and `None`
+    /// otherwise, without touching the keystore or waiting for a read that
+    /// is in progress.
+    ///
+    /// For paths something unauthenticated can set off, such as another
+    /// machine connecting: those must never put a keystore prompt on screen.
+    pub fn cached_only(&self) -> Option<Credentials> {
+        self.cached.try_read().ok()?.credentials.clone()
+    }
+
     /// The credential, reading the keystore if this is the first time.
     ///
     /// May block for as long as it takes someone to answer a Keychain prompt,
@@ -377,6 +387,26 @@ mod tests {
             assert_eq!(store.peek().await, Known::Unknown);
         }
         assert_eq!(reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_cached_credential_never_reads_the_keystore() {
+        // What an unauthenticated connection uses: it must not be able to put
+        // a keystore prompt on screen, or wait behind one.
+        let (store, reads) = store();
+        assert!(store.cached_only().is_none());
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        store.prime().await;
+        assert_eq!(store.cached_only().unwrap().username, "sunshine");
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_cached_credential_does_not_wait_for_a_read_in_progress() {
+        let (store, _) = store();
+        let held = store.cached.write().await;
+        assert!(store.cached_only().is_none());
+        drop(held);
     }
 
     #[tokio::test]

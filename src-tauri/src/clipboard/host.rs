@@ -5,6 +5,9 @@
 //! pinned mutual TLS, then either one `Declined` line or `Hello` and the
 //! relay. Clipboard text only ever travels inside TLS, and is never logged:
 //! not its contents, not its length.
+//!
+//! One connection is admitted at a time. Nothing a connection does before
+//! admission reads the keystore, and all of it is bounded by one timeout.
 
 use std::future::Future;
 use std::io;
@@ -16,11 +19,13 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
+use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
 use super::local::{support, LocalClipboard, Support, System, POLL};
 use super::tls::server_config;
 use super::{fits, line, text_of, Decline, Guard, Wire, MAX_LINE, PORT};
+use crate::cert_pairing::reconcile::client_connected;
 use crate::model::{Activity, DEFAULT_HTTP_PORT};
 use crate::state::AppState;
 use crate::sunshine::state_file;
@@ -28,8 +33,12 @@ use crate::sunshine::{api, SunshineApi};
 
 /// How often a live connection checks that a stream is still running.
 const RECHECK: Duration = Duration::from_secs(5);
-/// How long a peer gets to finish the TLS handshake.
-const HANDSHAKE: Duration = Duration::from_secs(10);
+/// How long a connection may take from accept to admission: building the
+/// TLS setup, the plain line, the handshake and the checks, all together.
+const ADMISSION: Duration = Duration::from_secs(10);
+/// How long a declined peer is read from before the socket is dropped, so
+/// the decline is not lost to a reset over bytes left unread.
+const DRAIN: Duration = Duration::from_secs(1);
 /// How long any one write (or the closing shutdown) may take before the
 /// connection is given up on: a peer that stops reading must not pin it.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,6 +53,26 @@ pub enum Hosting {
     No,
     /// The check itself failed, which says nothing about whether it holds.
     Unknown,
+}
+
+/// Whether a busy host still has a client watching. The host stays busy
+/// for as long as the app a stream launched runs, which outlasts a client
+/// that dropped, so only its log says. A log that cannot be read keeps it
+/// hosting, as the pairing reconciler takes it.
+pub fn still_connected(busy: bool, log: Option<&str>) -> Hosting {
+    match (busy, log) {
+        (false, _) => Hosting::No,
+        (true, Some(log)) if !client_connected(log) => Hosting::No,
+        (true, _) => Hosting::Yes,
+    }
+}
+
+/// The one admitted connection at a time. While another holds it, a new one
+/// is declined as though nothing were streaming, which for it is the case.
+pub fn claim(live: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit, Decline> {
+    live.clone()
+        .try_acquire_owned()
+        .map_err(|_| Decline::NotStreaming)
 }
 
 /// Pure admission decision, checked after the TLS handshake.
@@ -144,14 +173,21 @@ async fn write_clipboard<C: LocalClipboard + 'static>(clipboard: &Arc<Mutex<C>>,
     .await;
 }
 
-/// One admitted connection: Hello, then relay until either side ends or
-/// `still_hosting` turns false.
-pub async fn run<S, C, F, Fut>(stream: S, clipboard: C, mut still_hosting: F) -> io::Result<()>
+/// One admitted connection: Hello, then relay until either side ends, or
+/// `still_hosting` or `sharing_on` turns false.
+pub async fn run<S, C, F, Fut, G, GFut>(
+    stream: S,
+    clipboard: C,
+    mut still_hosting: F,
+    mut sharing_on: G,
+) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     C: LocalClipboard + 'static,
     F: FnMut() -> Fut,
     Fut: Future<Output = Hosting>,
+    G: FnMut() -> GFut,
+    GFut: Future<Output = bool>,
 {
     let clipboard = Arc::new(Mutex::new(clipboard));
     let baseline = read_clipboard(&clipboard).await;
@@ -168,6 +204,7 @@ where
         &mut write,
         &mut rx,
         &mut still_hosting,
+        &mut sharing_on,
     )
     .await;
     reader.abort();
@@ -175,18 +212,21 @@ where
     result
 }
 
-async fn relay<C, W, F, Fut>(
+async fn relay<C, W, F, Fut, G, GFut>(
     clipboard: &Arc<Mutex<C>>,
     guard: &mut Guard,
     write: &mut W,
     rx: &mut mpsc::Receiver<io::Result<Incoming>>,
     still_hosting: &mut F,
+    sharing_on: &mut G,
 ) -> io::Result<()>
 where
     C: LocalClipboard + 'static,
     W: AsyncWrite + Unpin,
     F: FnMut() -> Fut,
     Fut: Future<Output = Hosting>,
+    G: FnMut() -> GFut,
+    GFut: Future<Output = bool>,
 {
     let mut poll = interval_at(Instant::now() + POLL, POLL);
     poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -203,7 +243,8 @@ where
                 }
                 Some(Err(err)) => return Err(err),
                 Some(Ok(Incoming::Message(message))) => {
-                    // Hello, Declined, Unknown and non-text clips are ignored.
+                    // Hello, Declined, TooBig, Unknown and non-text clips are
+                    // ignored.
                     if let Some(text) = text_of(&message) {
                         if fits(text) && guard.incoming(text) {
                             write_clipboard(clipboard, text.to_string()).await;
@@ -213,12 +254,20 @@ where
             },
             _ = poll.tick() => {
                 if let Some(text) = read_clipboard(clipboard).await {
-                    if fits(&text) && guard.outgoing(&text) {
+                    if !fits(&text) {
+                        if guard.too_big(&text) {
+                            send(write, &Wire::TooBig).await?;
+                        }
+                    } else if guard.outgoing(&text) {
                         send(write, &Wire::Clip { format: "text".into(), text }).await?;
                     }
                 }
             }
             _ = recheck.tick() => {
+                if !sharing_on().await {
+                    send(write, &Wire::Bye).await?;
+                    return Ok(());
+                }
                 match still_hosting().await {
                     Hosting::Yes => unknown_in_a_row = 0,
                     Hosting::Unknown if unknown_in_a_row == 0 => unknown_in_a_row = 1,
@@ -246,6 +295,7 @@ pub fn spawn(_app: AppHandle, state: Arc<AppState>) {
             }
         };
         let slots = Arc::new(Semaphore::new(PRE_ADMIT));
+        let live = Arc::new(Semaphore::new(1));
         loop {
             let Ok((stream, _)) = listener.accept().await else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -255,9 +305,9 @@ pub fn spawn(_app: AppHandle, state: Arc<AppState>) {
             let Ok(slot) = slots.clone().try_acquire_owned() else {
                 continue;
             };
-            let state = state.clone();
+            let (state, live) = (state.clone(), live.clone());
             tauri::async_runtime::spawn(async move {
-                if let Err(err) = serve(&state, stream, slot).await {
+                if let Err(err) = serve(&state, stream, slot, &live).await {
                     // The kind only: never anything that came off the wire.
                     eprintln!("dusk: a clipboard connection ended: {:?}", err.kind());
                 }
@@ -267,9 +317,11 @@ pub fn spawn(_app: AppHandle, state: Arc<AppState>) {
 }
 
 /// Everything TLS needs, read fresh so a pairing made after Dusk started is
-/// accepted. `None` when any of it cannot be read.
+/// accepted. `None` when any of it cannot be read, and when the host's
+/// password is not already in memory: anyone can connect, so this never
+/// reads the keystore (which could put a prompt on screen).
 async fn tls_acceptor(state: &AppState) -> Option<TlsAcceptor> {
-    let credentials = state.credentials.load().await?;
+    let credentials = state.credentials.cached_only()?;
     let config = SunshineApi::new(api::DEFAULT_PORT)
         .ok()?
         .get_config(&credentials)
@@ -289,58 +341,115 @@ async fn tls_acceptor(state: &AppState) -> Option<TlsAcceptor> {
         .map(TlsAcceptor::from)
 }
 
-/// Whether B's own host is streaming right now.
+/// Whether B's own host is streaming to a client right now. The log is read
+/// only with a password already in memory, never from the keystore.
 async fn hosting(state: &AppState) -> Hosting {
-    match crate::serverinfo::query_http(&state.http, "127.0.0.1", DEFAULT_HTTP_PORT).await {
-        Ok(info) if matches!(info.activity(), Activity::Hosting { .. }) => Hosting::Yes,
-        Ok(_) => Hosting::No,
-        Err(_) => Hosting::Unknown,
+    let busy =
+        match crate::serverinfo::query_http(&state.http, "127.0.0.1", DEFAULT_HTTP_PORT).await {
+            Ok(info) => matches!(info.activity(), Activity::Hosting { .. }),
+            Err(_) => return Hosting::Unknown,
+        };
+    if !busy {
+        return Hosting::No;
     }
+    let log = match (
+        state.credentials.cached_only(),
+        SunshineApi::new(api::DEFAULT_PORT),
+    ) {
+        (Some(credentials), Ok(api)) => api.get_logs(&credentials).await.ok(),
+        _ => None,
+    };
+    still_connected(busy, log.as_deref())
 }
 
-async fn serve(
-    state: &Arc<AppState>,
+/// Read and discard until the peer closes, for at most [`DRAIN`].
+async fn drain<R: AsyncRead + Unpin>(read: &mut R) {
+    let mut buf = [0u8; 1024];
+    let _ = tokio::time::timeout(DRAIN, async {
+        while matches!(read.read(&mut buf).await, Ok(n) if n > 0) {}
+    })
+    .await;
+}
+
+/// The TLS connection, and either what an admitted one runs with or why it
+/// is declined.
+type Admission = (
+    TlsStream<TcpStream>,
+    Result<(System, OwnedSemaphorePermit), Decline>,
+);
+
+/// Everything from accept to the admission decision. `None` when the plain
+/// line already declined.
+async fn admission(
+    state: &AppState,
     mut stream: TcpStream,
-    slot: OwnedSemaphorePermit,
-) -> io::Result<()> {
+    live: &Arc<Semaphore>,
+) -> io::Result<Option<Admission>> {
     // The one plain line. It never carries clipboard data.
     let Some(acceptor) = tls_acceptor(state).await else {
         let declined = Wire::Declined {
             reason: Decline::Unsupported { detail: None },
         };
-        return send(&mut stream, &declined).await;
+        send(&mut stream, &declined).await?;
+        return Ok(None);
     };
     send(&mut stream, &Wire::Hello { version: VERSION }).await?;
 
-    let mut tls = tokio::time::timeout(HANDSHAKE, acceptor.accept(stream))
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "the TLS handshake timed out"))??;
+    let tls = acceptor.accept(stream).await?;
 
     let sharing_on = state.store.lock().await.clipboard_sharing.is_on();
-    let decision = admit(sharing_on, &support(), hosting(state).await == Hosting::Yes);
-    let clipboard = match decision {
-        Ok(()) => tokio::task::spawn_blocking(System::open)
+    let decision = admit(sharing_on, &support(), hosting(state).await == Hosting::Yes)
+        .and_then(|()| claim(live));
+    let outcome = match decision {
+        Ok(permit) => tokio::task::spawn_blocking(System::open)
             .await
             .map_err(|_| ())
             .and_then(|opened| opened.map_err(|_| ()))
+            .map(|clipboard| (clipboard, permit))
             .map_err(|_| Decline::Unsupported { detail: None }),
         Err(decline) => Err(decline),
     };
-    let clipboard = match clipboard {
-        Ok(clipboard) => clipboard,
+    Ok(Some((tls, outcome)))
+}
+
+async fn serve(
+    state: &Arc<AppState>,
+    stream: TcpStream,
+    slot: OwnedSemaphorePermit,
+    live: &Arc<Semaphore>,
+) -> io::Result<()> {
+    let admitted = tokio::time::timeout(ADMISSION, admission(state, stream, live))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "admission timed out"))??;
+    let Some((mut tls, outcome)) = admitted else {
+        return Ok(());
+    };
+    // Held for as long as the connection runs: the one live connection.
+    let (clipboard, _live) = match outcome {
+        Ok(admitted) => admitted,
         Err(reason) => {
             send(&mut tls, &Wire::Declined { reason }).await?;
-            return close(&mut tls).await;
+            let _ = close(&mut tls).await;
+            drain(&mut tls).await;
+            return Ok(());
         }
     };
 
     // Admitted: this connection no longer counts against the pre-admit limit.
     drop(slot);
-    let for_check = state.clone();
-    run(tls, clipboard, move || {
-        let state = for_check.clone();
-        async move { hosting(&state).await }
-    })
+    let (for_hosting, for_sharing) = (state.clone(), state.clone());
+    run(
+        tls,
+        clipboard,
+        move || {
+            let state = for_hosting.clone();
+            async move { hosting(&state).await }
+        },
+        move || {
+            let state = for_sharing.clone();
+            async move { state.store.lock().await.clipboard_sharing.is_on() }
+        },
+    )
     .await
 }
 
@@ -348,6 +457,7 @@ async fn serve(
 mod tests {
     use super::*;
     use crate::clipboard::wire::MAX_TEXT_BYTES;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::io::{DuplexStream, Lines, ReadHalf, WriteHalf};
 
     #[derive(Clone)]
@@ -408,13 +518,29 @@ mod tests {
         fake: &Fake,
         hosting: Arc<Mutex<Hosting>>,
     ) -> (Peer, tokio::task::JoinHandle<io::Result<()>>) {
+        start_sharing(fake, hosting, Arc::new(AtomicBool::new(true)))
+    }
+
+    fn start_sharing(
+        fake: &Fake,
+        hosting: Arc<Mutex<Hosting>>,
+        sharing: Arc<AtomicBool>,
+    ) -> (Peer, tokio::task::JoinHandle<io::Result<()>>) {
         let (a, b) = tokio::io::duplex(8 * 1024 * 1024);
         let (read, write) = tokio::io::split(a);
         let fake = fake.clone();
-        let task = tokio::spawn(run(b, fake, move || {
-            let on = *hosting.lock().unwrap();
-            async move { on }
-        }));
+        let task = tokio::spawn(run(
+            b,
+            fake,
+            move || {
+                let on = *hosting.lock().unwrap();
+                async move { on }
+            },
+            move || {
+                let on = sharing.load(Ordering::SeqCst);
+                async move { on }
+            },
+        ));
         let peer = Peer {
             lines: BufReader::new(read).lines(),
             write,
@@ -526,7 +652,12 @@ mod tests {
         let fake = Fake::new(None);
         let (a, b) = tokio::io::duplex(64);
         let (mut read, _write) = tokio::io::split(a);
-        let task = tokio::spawn(run(b, fake.clone(), || async { Hosting::Yes }));
+        let task = tokio::spawn(run(
+            b,
+            fake.clone(),
+            || async { Hosting::Yes },
+            || async { true },
+        ));
         // Hello fits in the buffer; read just that and then stop reading.
         let mut hello = [0u8; 29];
         read.read_exact(&mut hello).await.unwrap();
@@ -536,12 +667,85 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn host_skips_an_oversized_copy() {
+    async fn an_oversized_copy_is_reported_once_and_not_sent() {
         let fake = Fake::new(None);
         let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         peer.next().await;
         fake.set(&"a".repeat(MAX_TEXT_BYTES + 1));
-        assert_eq!(peer.hears_within(SEC * 2).await, None);
+        assert_eq!(peer.hears_within(SEC).await, Some(Wire::TooBig));
+        // Several more polls see the same copy: no repeat.
+        assert_eq!(peer.hears_within(SEC * 3).await, None);
+        fake.set(&"b".repeat(MAX_TEXT_BYTES + 1));
+        assert_eq!(peer.hears_within(SEC).await, Some(Wire::TooBig));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_oversized_baseline_is_not_reported() {
+        let fake = Fake::new(Some(&"a".repeat(MAX_TEXT_BYTES + 1)));
+        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
+        peer.next().await;
+        assert_eq!(peer.hears_within(SEC * 3).await, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn host_closes_when_sharing_is_turned_off() {
+        let fake = Fake::new(None);
+        let sharing = Arc::new(AtomicBool::new(true));
+        let (mut peer, task) =
+            start_sharing(&fake, Arc::new(Mutex::new(Hosting::Yes)), sharing.clone());
+        peer.next().await;
+        sharing.store(false, Ordering::SeqCst);
+        assert_eq!(peer.hears_within(SEC * 6).await, Some(Wire::Bye));
+        assert_eq!(peer.next().await, None);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[test]
+    fn only_one_connection_is_admitted_at_a_time() {
+        let live = Arc::new(Semaphore::new(1));
+        let first = claim(&live).expect("the first is admitted");
+        assert_eq!(claim(&live).err(), Some(Decline::NotStreaming));
+        drop(first);
+        assert!(claim(&live).is_ok(), "free again once the first ends");
+    }
+
+    #[test]
+    fn hosting_needs_a_client_still_connected() {
+        const STARTED: &str = "Info: New streaming session started";
+        const LEFT: &str = "Info: CLIENT DISCONNECTED";
+        let left = [STARTED, LEFT].join("\n");
+        assert_eq!(still_connected(true, Some(STARTED)), Hosting::Yes);
+        assert_eq!(still_connected(true, Some(&left)), Hosting::No);
+        assert_eq!(
+            still_connected(true, None),
+            Hosting::Yes,
+            "a log that cannot be read keeps it hosting"
+        );
+        assert_eq!(still_connected(false, Some(STARTED)), Hosting::No);
+        // And so admission turns it away.
+        assert_eq!(
+            admit(
+                true,
+                &Support::Supported,
+                still_connected(true, Some(&left)) == Hosting::Yes
+            ),
+            Err(Decline::NotStreaming)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn draining_stops_at_the_peer_closing_or_after_a_second() {
+        let (mut a, b) = tokio::io::duplex(64);
+        drop(b);
+        let started = Instant::now();
+        drain(&mut a).await;
+        assert!(started.elapsed() < SEC / 10, "ends at EOF");
+
+        let (mut a, _b) = tokio::io::duplex(64);
+        let started = Instant::now();
+        drain(&mut a).await;
+        assert!(started.elapsed() >= DRAIN, "waits out a silent peer");
+        assert!(started.elapsed() < DRAIN + SEC);
     }
 
     #[tokio::test(start_paused = true)]

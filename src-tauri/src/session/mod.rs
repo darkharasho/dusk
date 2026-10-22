@@ -320,7 +320,14 @@ async fn serve(
             read = lines.next_line() => {
                 let text = match read? {
                     None => return Ok(()),
-                    // Nothing about it is said but that it happened.
+                    // Before the client has proved itself, only `Ready` may
+                    // come first, so this ends the channel like any other
+                    // bad first line. After, it is skipped. Either way,
+                    // nothing about the line is said but that it happened.
+                    Some(Line::Skipped) if !conversation.authenticated() => {
+                        eprintln!("dusk: closing the session channel: an over-long line came before the client proved itself");
+                        return Ok(());
+                    }
                     Some(Line::Skipped) => {
                         eprintln!("dusk: an over-long line was skipped");
                         continue;
@@ -416,6 +423,27 @@ mod tests {
             effects.recv().await,
             Some(Effect::Overlay(OverlayAction::Disconnect))
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_overlong_line_before_proving_itself_closes_the_channel() {
+        use tokio::io::AsyncWriteExt;
+
+        let (session, mut effects) = start().await.expect("listening");
+        let endpoint = session.env()[0].1.clone();
+        let token = session.env()[1].1.clone();
+
+        let mut client = tokio::net::UnixStream::connect(&endpoint)
+            .await
+            .expect("connect");
+        let junk = vec![b'a'; crate::clipboard::MAX_LINE + 1];
+        client.write_all(&junk).await.unwrap();
+        // The channel may already be closed by the time this is written.
+        let _ = client
+            .write_all(format!("\n{{\"type\":\"ready\",\"token\":\"{token}\"}}\n").as_bytes())
+            .await;
+        assert_eq!(effects.recv().await, None, "never authenticated");
     }
 
     #[test]

@@ -36,7 +36,6 @@ function detail(resolution: Resolution): string {
   }
 }
 
-
 /** Fixed rates, in Mbps. Automatic is offered alongside. */
 const BITRATES = [5, 10, 20, 30, 50, 80, 120, 150];
 

@@ -53,8 +53,27 @@ body,
 
 .dusk-looking {
   --axi-row-gap: 8px;
+  --axi-spinner-size: 12px;
   font: var(--axi-t-small);
   color: var(--axi-text-dim);
+}
+
+/* The grid of machines. One column width for every grid of cards, so the
+   two lists on the Machines tab line up with each other. */
+.dusk-grid {
+  --axi-grid-min: 260px;
+}
+
+/* Rows of one kind of thing (apps, machines on the account): closer than
+   the stack's default, which is the gap between sections of a form. */
+.dusk-list {
+  --axi-stack-gap: 8px;
+}
+
+/* A notice above the page content, in the page's gutters, without opening
+   up the page's bottom padding under it. */
+.dusk-banner {
+  padding-bottom: 0;
 }
 
 /* Icon wrapper: the SVG inside carries .axi-icon and its sizing. */
@@ -74,15 +93,23 @@ body,
   margin: 0;
 }
 
-/* A label above its field. Not a component: two elements and a gap. */
+/* A label above its field. Not a component: two elements and a gap. A
+   "Changed" marker sits beside the label rather than under it. */
 .dusk-field {
   display: grid;
   gap: 5px;
 }
 
 .dusk-field > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font: var(--axi-t-small);
   color: var(--axi-text-dim);
+}
+
+.dusk-field__flag {
+  margin-left: auto;
 }
 
 /* A device address is content that wants to be monospaced. .axi-card :where(p)
@@ -122,17 +149,6 @@ body,
   padding: 0;
   border: 0;
   gap: 18px;
-}
-
-/* A "Changed" marker sits beside its label rather than under it. */
-.dusk-field > label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.dusk-field__flag {
-  margin-left: auto;
 }
 
 /* The settings drawer scrolls its body; head and foot stay put so Save is
@@ -282,9 +298,10 @@ body,
 .dusk-savebar {
   position: sticky;
   bottom: 0;
+  justify-content: flex-end;
   padding-block: 12px;
   background: var(--axi-ground);
-  border-top: 1px solid var(--axi-rule);
+  border-top: var(--axi-border-hairline) solid var(--axi-rule);
 }
 
 .dusk-avatar {
@@ -296,14 +313,20 @@ body,
 
 /* The window's own chrome (components/Titlebar.tsx). The page under it is
    the scrolling region, so the titlebar stays put and the masthead sticks
-   to the top of that region rather than of the window. */
+   to the top of that region rather than of the window. The height is the
+   language's; it is named here once because the drawer and its scrim start
+   where the strip ends. */
+:root {
+  --dusk-titlebar-height: 38px;
+}
+
 #root {
   display: flex;
   flex-direction: column;
 }
 
 .dusk-titlebar {
-  --dusk-titlebar-height: 38px;
+  height: var(--dusk-titlebar-height);
   position: relative;
   /* Above a drawer and its scrim (z-index 50-51), which start below it, so
      the window can still be moved and closed with a drawer open. */
@@ -312,13 +335,29 @@ body,
   -webkit-user-select: none;
 }
 
+/* The name takes the slack, so the pill and the buttons sit at the far end
+   on every platform rather than the pill trailing the name on two of them. */
+.dusk-titlebar__name {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A window that is not the active one says so in its chrome, the way the
+   native bar it replaces does on all three platforms. The same step down
+   the language gives a disabled control. */
+.dusk-titlebar[data-blurred] > .dusk-titlebar__name,
+.dusk-titlebar[data-blurred] > .axi-titlebar__btns {
+  opacity: 0.5;
+}
+
 /* Clears macOS's traffic lights, which sit over the strip's left end. Their
    height is tauri.macos.conf.json's trafficLightPosition.y, which is not an
    offset from the top: it sets the native titlebar container to
    `buttonHeight + y`, and the 14px button sits 9px above that container's
    bottom, so the centre lands at y - 2. Centre it in the strip above and
-   y is 21; change that height and this follows it. */
-.dusk-titlebar[data-mac] {
+   y is 21; change that height and this follows it. In native full screen
+   the lights are gone and the name moves back to the edge. */
+.dusk-titlebar[data-mac]:not([data-fullscreen]) {
   padding-left: 78px;
 }
 
@@ -328,13 +367,13 @@ body,
 }
 
 .dusk-titlebar__update {
+  --axi-spinner-size: 11px;
   text-transform: none;
   letter-spacing: normal;
 }
 
-/* On macOS there are no buttons to push the pill right. */
+/* On macOS there are no buttons for the pill to stop short of. */
 .dusk-titlebar[data-mac] .dusk-titlebar__update {
-  margin-left: auto;
   margin-right: 10px;
 }
 
@@ -346,5 +385,5 @@ body,
 
 .axi-scrim,
 .axi-drawer {
-  top: 38px;
+  top: var(--dusk-titlebar-height);
 }

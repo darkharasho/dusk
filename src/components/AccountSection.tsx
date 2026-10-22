@@ -108,7 +108,7 @@ export function AccountSection() {
             pair is on in Settings › Hosting.
           </p>
           {account.machines.length > 0 && (
-            <div className="axi-stack" style={{ "--axi-stack-gap": "6px" } as React.CSSProperties}>
+            <div className="axi-stack dusk-list">
               {account.machines.map((m, i) => (
                 <div className="axi-row" key={`${m.name}-${i}`}>
                   <span>{m.name}</span>

@@ -119,8 +119,7 @@ export function HostSettings() {
 
       {config && (
         <div className="axi-row dusk-savebar">
-          {saved && <span className="axi-ink-ok dusk-row__end">Saved.</span>}
-          <span className={saved ? "" : "dusk-row__end"} />
+          {saved && <span className="axi-ink-ok">Saved.</span>}
           <button
             type="button"
             className="axi-btn"

@@ -304,6 +304,32 @@ impl SunshineApi {
         }
     }
 
+    /// Read the host's log, which starts afresh each time the host does.
+    pub async fn get_logs(&self, credentials: &Credentials) -> Result<String, ApiError> {
+        let response = self
+            .client
+            .get(self.url("/api/logs"))
+            .basic_auth(&credentials.username, Some(&credentials.password))
+            .timeout(TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized);
+        }
+        if !response.status().is_success() {
+            return Err(ApiError::Failed(format!(
+                "The hosting service answered {}",
+                response.status()
+            )));
+        }
+        response
+            .text()
+            .await
+            .map_err(|e| ApiError::Failed(e.to_string()))
+    }
+
     /// Write changed settings.
     ///
     /// `POST /api/config` **replaces** the configuration with whatever is

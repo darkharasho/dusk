@@ -26,7 +26,12 @@ its own half:
   `~/.config/sunshine/sunshine_state.json`; `file_state` and `cert` in the
   config API override it, absent means the default) and **restarts the host**,
   because it reads the file only at startup. It **never restarts mid-stream**;
-  the restart is owed and kept in Dusk's settings until the stream ends. And it
+  the restart is owed and kept in Dusk's settings until the stream ends.
+  "Mid-stream" is serverinfo busy **and** a client still connected by the
+  host's log (`/api/logs`, `reconcile::client_connected`): the host stays busy
+  while the app a stream launched runs, which outlasts a client that dropped
+  instead of quitting. Until v0.3.31 that held every certificate pairing to
+  such a host forever. And it
   **re-merges from disk immediately before every restart**, because the host
   rewrites the file from memory whenever it PIN-pairs anyone and drops entries
   it never loaded (the spike reproduced this). A pairing leaves the settings

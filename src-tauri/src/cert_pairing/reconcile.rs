@@ -55,7 +55,18 @@ impl Host for Local<'_> {
         let info = crate::serverinfo::query_http(self.http, "127.0.0.1", DEFAULT_HTTP_PORT)
             .await
             .ok()?;
-        Some(matches!(info.activity(), Activity::Hosting { .. }))
+        if !matches!(info.activity(), Activity::Hosting { .. }) {
+            return Some(false);
+        }
+        // The host stays busy for as long as the app a stream launched is
+        // running, which outlasts a client that dropped instead of quitting
+        // — for good, if nobody comes back to it. Only its log says whether
+        // a client is still there. A log that cannot be read keeps it busy.
+        let log = match SunshineApi::new(api::DEFAULT_PORT) {
+            Ok(api) => api.get_logs(self.credentials).await.ok(),
+            Err(_) => None,
+        };
+        Some(log.map_or(true, |log| client_connected(&log)))
     }
 
     async fn restart(&self) -> Result<(), String> {
@@ -65,6 +76,28 @@ impl Host for Local<'_> {
             .await
             .map_err(|e| e.to_string())
     }
+}
+
+/// Whether the host's log leaves a client connected. A session starts with
+/// `New streaming session started` and ends when its client disconnects or
+/// stops answering pings. It counts as over only when the last of those is
+/// an end and there have been at least as many ends as starts, so a second
+/// client still streaming keeps it busy. A log with none of them says
+/// nothing, and is taken as busy.
+fn client_connected(log: &str) -> bool {
+    let (mut starts, mut ends, mut last_ended) = (0usize, 0usize, None);
+    for line in log.lines() {
+        if line.contains("New streaming session started") {
+            starts += 1;
+            last_ended = Some(false);
+        } else if line.contains("CLIENT CONNECTED") {
+            last_ended = Some(false);
+        } else if line.contains("CLIENT DISCONNECTED") || line.contains("Ping Timeout") {
+            ends += 1;
+            last_ended = Some(true);
+        }
+    }
+    !(last_ended == Some(true) && ends >= starts)
 }
 
 /// Where the host keeps the files this needs.
@@ -1101,6 +1134,40 @@ mod tests {
             defaults.state,
             state_file::state_path(Some(&unset)).unwrap()
         );
+    }
+
+    const STARTED: &str =
+        "[2026-10-21 21:00:00.000]: Info: New streaming session started [active sessions: 1]";
+    const CONNECTED: &str = "[2026-10-21 21:00:01.000]: Info: CLIENT CONNECTED";
+    const DISCONNECTED: &str = "[2026-10-21 21:30:00.000]: Info: CLIENT DISCONNECTED";
+    const TIMED_OUT: &str = "[2026-10-21 21:30:00.000]: Info: 192.168.50.146: Ping Timeout";
+
+    #[test]
+    fn a_client_that_left_leaves_the_host_free_to_restart() {
+        // The app it launched is still running, so serverinfo says busy.
+        for end in [DISCONNECTED, TIMED_OUT] {
+            let log = [STARTED, CONNECTED, end].join("\n");
+            assert!(!client_connected(&log), "{end}");
+        }
+    }
+
+    #[test]
+    fn a_client_still_streaming_keeps_the_host_busy() {
+        assert!(client_connected(&[STARTED, CONNECTED].join("\n")));
+        // One that left and came back.
+        let back = [STARTED, CONNECTED, DISCONNECTED, STARTED, CONNECTED];
+        assert!(client_connected(&back.join("\n")));
+        // A second client, still there after the first has gone.
+        let second = [STARTED, CONNECTED, STARTED, CONNECTED, DISCONNECTED];
+        assert!(client_connected(&second.join("\n")));
+    }
+
+    #[test]
+    fn a_log_that_says_nothing_is_taken_as_busy() {
+        assert!(client_connected(""));
+        assert!(client_connected(
+            "[2026-10-21 21:00:00.000]: Info: Sunshine version: v2026.914.233613"
+        ));
     }
 
     #[test]

@@ -170,9 +170,19 @@ B admits one connection at a time, and only while sharing is on, its
 desktop is supported (not GNOME on Wayland), and it is hosting a stream with
 a client still connected. The host stays busy after a client drops while the
 launched app keeps running, so its log has to show a client still there; a
-log that can't be read counts as connected. B rechecks the stream and the
+log that can't be read counts as connected. A stream's slot belongs to the
+first client admitted during it: B tells streams apart by the log line that
+started each one and clients by their certificate, so another paired machine
+is declined until the stream changes, while the bound client may reconnect
+(the log has no client address to match on). B rechecks the stream and the
 setting every 5 s, and A checks its own setting, so turning sharing off on
-either side ends the connection. Admission only uses a host password already
+either side ends the connection. A reconnects during the stream: as soon as
+its own setting is back on, 30 s after B declined for now or closed, and not
+again on that stream once B said it cannot share or never answered. It checks
+every 5 s, and at once when a copy is made with no connection up. B polls its
+clipboard every 500 ms; on Windows and macOS it reads the text only when the
+system's change counter moved, and each clipboard call may take 2 s before
+the connection is ended. Admission only uses a host password already
 in memory: a connection never makes B read its keystore. A plain `Declined`
 or `Hello` line comes before the handshake, so an older Dusk with nothing
 listening just means no sync. Text only, up to 1 MB. A larger copy on either

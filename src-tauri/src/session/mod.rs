@@ -21,7 +21,7 @@ pub mod protocol;
 use std::io;
 use std::path::PathBuf;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use protocol::{line, Conversation};
@@ -206,6 +206,83 @@ async fn accept(listener: Listener) -> io::Result<Listener> {
 
 // ------------------------------------------------------------------ serve
 
+/// One line from the client, or word that one was too long to keep.
+#[derive(Debug, PartialEq, Eq)]
+enum Line {
+    Text(String),
+    /// A line over the cap, read up to its newline and thrown away.
+    Skipped,
+}
+
+/// Lines from the client, each capped at `max` bytes. A longer line is
+/// discarded as it arrives rather than buffered whole, and the next one is
+/// read as usual. Cancel-safe like `Lines::next_line`: what was read of a
+/// line is kept here, not in the future.
+struct CappedLines<R> {
+    reader: BufReader<R>,
+    buf: Vec<u8>,
+    skipping: bool,
+    max: usize,
+}
+
+impl<R: AsyncRead + Unpin> CappedLines<R> {
+    fn new(read: R, max: usize) -> Self {
+        Self {
+            reader: BufReader::new(read),
+            buf: Vec::new(),
+            skipping: false,
+            max,
+        }
+    }
+
+    /// The next line without its `\n` (or `\r\n`), `None` at the end.
+    async fn next_line(&mut self) -> io::Result<Option<Line>> {
+        loop {
+            let available = self.reader.fill_buf().await?;
+            if available.is_empty() {
+                // The end: a last line without a newline still counts.
+                let skipped = std::mem::take(&mut self.skipping);
+                if skipped {
+                    return Ok(Some(Line::Skipped));
+                }
+                if self.buf.is_empty() {
+                    return Ok(None);
+                }
+                return self.finish().map(Some);
+            }
+            let (take, ended) = match available.iter().position(|&b| b == b'\n') {
+                Some(i) => (i, true),
+                None => (available.len(), false),
+            };
+            if !self.skipping {
+                if self.buf.len() + take > self.max {
+                    self.skipping = true;
+                    self.buf = Vec::new();
+                } else {
+                    self.buf.extend_from_slice(&available[..take]);
+                }
+            }
+            self.reader.consume(take + usize::from(ended));
+            if ended {
+                if std::mem::take(&mut self.skipping) {
+                    return Ok(Some(Line::Skipped));
+                }
+                return self.finish().map(Some);
+            }
+        }
+    }
+
+    fn finish(&mut self) -> io::Result<Line> {
+        let mut bytes = std::mem::take(&mut self.buf);
+        if bytes.last() == Some(&b'\r') {
+            bytes.pop();
+        }
+        String::from_utf8(bytes)
+            .map(Line::Text)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "a line was not UTF-8"))
+    }
+}
+
 async fn serve(
     listener: Listener,
     token: String,
@@ -221,7 +298,8 @@ async fn serve(
         _ = effects.closed() => return Ok(()),
     };
     let (reader, mut writer) = tokio::io::split(stream);
-    let mut lines = BufReader::new(reader).lines();
+    // The longest line is a clipboard copy at its cap, JSON-escaped.
+    let mut lines = CappedLines::new(reader, crate::clipboard::MAX_LINE);
     let mut conversation = Conversation::new(token);
 
     loop {
@@ -240,7 +318,15 @@ async fn serve(
             }
 
             read = lines.next_line() => {
-                let Some(text) = read? else { return Ok(()) };
+                let text = match read? {
+                    None => return Ok(()),
+                    // Nothing about it is said but that it happened.
+                    Some(Line::Skipped) => {
+                        eprintln!("dusk: an over-long line was skipped");
+                        continue;
+                    }
+                    Some(Line::Text(text)) => text,
+                };
                 match conversation.accept(&text) {
                     Effect::Ignore => {}
                     Effect::Close(why) => {
@@ -262,6 +348,75 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_overlong_line_is_skipped_and_the_next_is_read() {
+        use crate::clipboard::MAX_LINE;
+        use tokio::io::AsyncWriteExt;
+
+        let (mut client, ours) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            let junk = vec![b'a'; MAX_LINE + 10];
+            client.write_all(&junk).await.unwrap();
+            client.write_all(b"\nnext\r\nlast").await.unwrap();
+        });
+        let mut lines = CappedLines::new(ours, MAX_LINE);
+        assert_eq!(lines.next_line().await.unwrap(), Some(Line::Skipped));
+        assert_eq!(
+            lines.next_line().await.unwrap(),
+            Some(Line::Text("next".into()))
+        );
+        assert_eq!(
+            lines.next_line().await.unwrap(),
+            Some(Line::Text("last".into())),
+            "a last line without a newline still counts"
+        );
+        assert_eq!(lines.next_line().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_line_at_the_cap_is_kept_and_one_over_is_not() {
+        let ours = &b"abcd\nabcde\nok\n"[..];
+        let mut lines = CappedLines::new(ours, 4);
+        assert_eq!(
+            lines.next_line().await.unwrap(),
+            Some(Line::Text("abcd".into()))
+        );
+        assert_eq!(lines.next_line().await.unwrap(), Some(Line::Skipped));
+        assert_eq!(
+            lines.next_line().await.unwrap(),
+            Some(Line::Text("ok".into()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_channel_survives_an_overlong_line() {
+        use tokio::io::AsyncWriteExt;
+
+        let (session, mut effects) = start().await.expect("listening");
+        let endpoint = session.env()[0].1.clone();
+        let token = session.env()[1].1.clone();
+
+        let mut client = tokio::net::UnixStream::connect(&endpoint)
+            .await
+            .expect("connect");
+        client
+            .write_all(format!("{{\"type\":\"ready\",\"token\":\"{token}\"}}\n").as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(effects.recv().await, Some(Effect::Authenticated));
+        let junk = vec![b'a'; crate::clipboard::MAX_LINE + 1];
+        client.write_all(&junk).await.unwrap();
+        client
+            .write_all(b"\n{\"type\":\"overlay_action\",\"action\":\"disconnect\"}\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            effects.recv().await,
+            Some(Effect::Overlay(OverlayAction::Disconnect))
+        );
+    }
 
     #[test]
     fn a_token_is_long_enough_to_be_worth_having() {

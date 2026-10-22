@@ -1,5 +1,23 @@
 # Release Notes
 
+Version v0.3.31 — October 21, 2026
+
+Pairing without a PIN finishes after a stream that dropped.
+
+## Changes
+
+- **Pairing with a machine whose last stream dropped, instead of being
+  quit, now finishes.** That machine went on counting itself as mid-stream
+  for as long as the app the stream had started kept running, so it waited
+  forever to finish pairing. Dusk now checks whether anyone is still
+  connected, and finishes once nobody is. A stream that is really going on
+  is still left alone.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.30 — October 21, 2026
 
 Pairing without a PIN now finishes on Linux.

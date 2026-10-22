@@ -6,10 +6,12 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.30 is released**, all three platforms, from `main` (PR #3), still
-carrying the client's `dusk-v0.2.5`. It fixes certificate pairing from Linux:
-every `add-host` there failed with "--name not provided" (see the client half
-below). **v0.3.29** (PR #2) made **Dusk GPL-3.0-or-later, and your own machines
+**v0.3.31 is released**, all three platforms, from `main` (PR #4), still
+carrying the client's `dusk-v0.2.5`. A host whose stream's client dropped
+without quitting no longer holds a certificate pairing forever (see "never
+restarts mid-stream" below). **v0.3.30** (PR #3) fixed certificate pairing
+from Linux: every `add-host` there failed with "--name not provided" (see the
+client half below). **v0.3.29** (PR #2) made **Dusk GPL-3.0-or-later, and your own machines
 pair without a PIN.** Design:
 `docs/superpowers/specs/2026-10-21-gpl-and-certificate-pairing-design.md`;
 the measurements it rests on:
@@ -524,7 +526,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.30>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.31>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -560,7 +562,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30, v0.3.31
 └── moonlight-qt/    master @ ded3c2f1  tags dusk-v0.1.0 … dusk-v0.2.5
 ```
 

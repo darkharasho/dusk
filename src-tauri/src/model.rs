@@ -72,6 +72,9 @@ pub struct ServerDetails {
     pub local_ip: Option<String>,
 }
 
+/// How many probes in a row must miss before an online card goes Offline.
+pub const OFFLINE_AFTER_MISSES: u8 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Device {
@@ -120,6 +123,12 @@ pub struct Device {
     /// the label someone chose. Internal to the backend.
     #[serde(skip)]
     pub custom_name: Option<String>,
+    /// Probes in a row that did not reach the machine while it was online.
+    /// A card goes Offline only after [`OFFLINE_AFTER_MISSES`] of them, so
+    /// one slow answer (a host busy encoding, a Wi-Fi hiccup) does not flap
+    /// it. Internal to the backend.
+    #[serde(skip)]
+    pub misses: u8,
 }
 
 impl Device {
@@ -143,6 +152,7 @@ impl Device {
             streaming_here: false,
             last_seen_ms: None,
             custom_name: None,
+            misses: 0,
         }
     }
 

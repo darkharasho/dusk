@@ -127,6 +127,12 @@ impl Store {
     /// A parse failure must not stop the app from starting — the grid still
     /// works from discovery alone, and refusing to launch over a bad config
     /// file would be a worse outcome than losing the list.
+    ///
+    /// A file that would not parse is moved aside rather than left in
+    /// place: the next save would otherwise overwrite it, and with it the
+    /// only record of which pairings Dusk added to the host and which
+    /// restart it still owes. Kept beside the original so it can be
+    /// recovered by hand.
     pub fn load(path: &Path) -> Self {
         let Ok(raw) = std::fs::read_to_string(path) else {
             return Self::default();
@@ -134,7 +140,15 @@ impl Store {
         match serde_json::from_str(&raw) {
             Ok(store) => store,
             Err(err) => {
-                eprintln!("dusk: ignoring unreadable address book at {path:?}: {err}");
+                let aside = set_aside(path);
+                match std::fs::rename(path, &aside) {
+                    Ok(()) => eprintln!(
+                        "dusk: could not read the settings at {path:?} ({err}); kept it at {aside:?} and started afresh"
+                    ),
+                    Err(move_err) => eprintln!(
+                        "dusk: could not read the settings at {path:?} ({err}) nor move it aside ({move_err}); it will be overwritten"
+                    ),
+                }
                 Self::default()
             }
         }
@@ -207,6 +221,21 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<
         }
     }
     Ok(())
+}
+
+/// Where an unreadable settings file is kept: `devices.json.corrupt-<secs>`
+/// beside the original.
+fn set_aside(path: &Path) -> PathBuf {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(format!(".corrupt-{secs}"));
+    path.with_file_name(name)
 }
 
 /// A temp file name beside `path`, in the same directory so the rename that
@@ -397,13 +426,33 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupt_file_reads_as_empty_rather_than_failing() {
-        let dir = std::env::temp_dir().join("dusk-test-corrupt");
+    fn a_corrupt_file_reads_as_empty_and_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("dusk-test-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.json");
         std::fs::write(&path, "{ not json").unwrap();
         assert!(Store::load(&path).manual.is_empty());
-        let _ = std::fs::remove_file(&path);
+
+        // The next save must not be the end of the only copy of what the
+        // host owes, so the unreadable file is moved, not left to be
+        // overwritten.
+        assert!(
+            !path.exists(),
+            "the unreadable file is no longer in the way"
+        );
+        let kept: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("devices.json.corrupt-"))
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(&kept[0])).unwrap(),
+            "{ not json"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

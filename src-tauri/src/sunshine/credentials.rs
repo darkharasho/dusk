@@ -139,25 +139,8 @@ impl CredentialStore {
     /// so call it only where that wait belongs: something the person just
     /// asked for, not a background refresh.
     pub async fn load(&self) -> Option<Credentials> {
-        {
-            let cached = self.cached.read().await;
-            if cached.read {
-                return cached.credentials.clone();
-            }
-        }
-
-        let mut cached = self.cached.write().await;
-        // Another task may have done the read while we waited for the lock.
-        if cached.read {
-            return cached.credentials.clone();
-        }
-
-        match self.read_off_runtime().await {
-            Ok(credentials) => {
-                cached.credentials = credentials.clone();
-                cached.read = true;
-                credentials
-            }
+        match self.try_load().await {
+            Ok(credentials) => credentials,
             // Not an answer, so it is not remembered as one. The next thing
             // that needs the password will ask the keystore again.
             Err(err) => {
@@ -165,6 +148,33 @@ impl CredentialStore {
                 None
             }
         }
+    }
+
+    /// Like [`load`](Self::load), but a keystore that would not answer is
+    /// an `Err`, distinct from a definite "nothing is stored".
+    ///
+    /// Anything that would *change* the host on finding no password (set a
+    /// new one, restart the service) must use this one: a locked keyring
+    /// is not a sign-out, and treating it as one rotates the password of a
+    /// host that was working.
+    pub async fn try_load(&self) -> Result<Option<Credentials>, String> {
+        {
+            let cached = self.cached.read().await;
+            if cached.read {
+                return Ok(cached.credentials.clone());
+            }
+        }
+
+        let mut cached = self.cached.write().await;
+        // Another task may have done the read while we waited for the lock.
+        if cached.read {
+            return Ok(cached.credentials.clone());
+        }
+
+        let credentials = self.read_off_runtime().await?;
+        cached.credentials = credentials.clone();
+        cached.read = true;
+        Ok(credentials)
     }
 
     /// Do the one read of the run in the background, off the render path.
@@ -351,6 +361,25 @@ mod tests {
             2,
             "the next thing that needs the password should ask again"
         );
+    }
+
+    #[tokio::test]
+    async fn a_keystore_that_will_not_answer_is_an_error_not_a_sign_out() {
+        // Turning on hosting sets a fresh password when none is stored.
+        // A locked keyring must not read as "none is stored", or a host
+        // that was working gets its password rotated and restarted.
+        let (store, _) = store_answering(Err("keyring is locked".into()));
+        let err = store.try_load().await.expect_err("not an answer");
+        assert!(err.contains("locked"));
+        assert_eq!(store.peek().await, Known::Unknown);
+
+        let (store, _) = store_answering(Ok(None));
+        assert_eq!(
+            store.try_load().await,
+            Ok(None),
+            "an empty keystore is a definite no"
+        );
+        assert_eq!(store.peek().await, Known::SignedOut);
     }
 
     #[tokio::test]

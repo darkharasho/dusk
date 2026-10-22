@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { addManualDevice, getSnapshot, onSnapshot, refreshNow } from "./api";
+import {
+  addManualDevice,
+  getSnapshot,
+  onSessionFailed,
+  onSnapshot,
+  refreshNow,
+  type SessionFailed,
+} from "./api";
 import type { Device, Snapshot } from "./types";
 import { cardState } from "./deviceState";
 import { DeviceCard } from "./components/DeviceCard";
@@ -77,17 +84,51 @@ function Body() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("machines");
   const [section, setSection] = useState<SettingsSection>("account");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // A stream that died after its launch call returned. Kept here rather
+  // than only in the drawer: the drawer is usually closed by then, and
+  // the window coming back with nothing to say was the whole complaint.
+  const [failure, setFailure] = useState<SessionFailed | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
-    getSnapshot().then((s) => !cancelled && setSnapshot(s));
+    const load = () =>
+      getSnapshot()
+        .then((s) => {
+          if (cancelled) return;
+          setSnapshot(s);
+          setLoadError(null);
+        })
+        .catch((err) => !cancelled && setLoadError(String(err)));
+
+    load();
     onSnapshot((s) => !cancelled && setSnapshot(s)).then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+      // A snapshot emitted between the first read and the listener
+      // attaching would be missed; read once more now that it is on.
+      load();
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [attempt]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    onSessionFailed((f) => !cancelled && setFailure(f)).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
     });
-
     return () => {
       cancelled = true;
       unlisten?.();
@@ -98,7 +139,36 @@ function Body() {
     await addManualDevice(address, name);
   }, []);
 
-  if (!snapshot) return <Masthead />;
+  if (!snapshot) {
+    return (
+      <>
+        <Masthead />
+        <main className="axi-page dusk-page">
+          {loadError ? (
+            <div className="axi-notice axi-notice--danger">
+              <span className="axi-notice__icon" aria-hidden="true">
+                !
+              </span>
+              <div className="axi-stack">
+                <p>Dusk could not read its own state: {loadError}</p>
+                <div className="axi-row">
+                  <button
+                    type="button"
+                    className="axi-btn axi-btn--sm"
+                    onClick={() => setAttempt((n) => n + 1)}
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="axi-ink-dim">Starting.</p>
+          )}
+        </main>
+      </>
+    );
+  }
 
   const self = snapshot.devices.find((d) => d.isSelf);
   const remote = sortDevices(snapshot.devices.filter((d) => !d.isSelf));
@@ -138,6 +208,29 @@ function Body() {
           </button>
         </nav>
       </Masthead>
+
+      {failure && (
+        <div className="axi-page dusk-page" style={{ paddingBottom: 0 }}>
+          <div className="axi-notice axi-notice--danger">
+            <span className="axi-notice__icon" aria-hidden="true">
+              !
+            </span>
+            <p>
+              {snapshot.devices.find((d) => d.id === failure.deviceId)?.name ??
+                "A stream"}
+              : {failure.message}
+            </p>
+            <button
+              type="button"
+              className="axi-btn axi-btn--ghost axi-btn--sm dusk-row__end"
+              onClick={() => setFailure(null)}
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       {tab === "settings" ? (
         <main className="axi-page dusk-page">
@@ -184,7 +277,7 @@ function Body() {
                 <button
                   type="button"
                   className="axi-btn axi-btn--ghost axi-btn--sm"
-                  onClick={() => refreshNow()}
+                  onClick={() => refreshNow().catch((err) => console.error(err))}
                 >
                   <Icon name="refresh" />
                   Refresh

@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::{
     Activity, Device, DeviceId, PairingState, Reachability, DEFAULT_HTTPS_PORT, DEFAULT_HTTP_PORT,
+    OFFLINE_AFTER_MISSES,
 };
 use crate::moonlight::hosts::KnownHost;
 use crate::serverinfo::ServerInfo;
@@ -379,15 +380,30 @@ impl Registry {
     }
 
     /// Record a machine seen over mDNS.
+    #[cfg(test)]
     pub fn upsert_mdns(&mut self, name: &str, addresses: &[String], port: u16) -> DeviceId {
+        self.upsert_mdns_noting_change(name, addresses, port).0
+    }
+
+    /// [`upsert_mdns`](Self::upsert_mdns), also saying whether anything
+    /// about the grid changed. mDNS re-resolves every host on each TTL
+    /// refresh, and only a new card or address is worth a probe before
+    /// the next tick.
+    pub fn upsert_mdns_noting_change(
+        &mut self,
+        name: &str,
+        addresses: &[String],
+        port: u16,
+    ) -> (DeviceId, bool) {
         if addresses.iter().any(|a| self.is_local(a)) {
-            return self.absorb_into_self(addresses);
+            return (self.absorb_into_self(addresses), false);
         }
 
         let id = self.find_by_addresses(addresses, port).unwrap_or_else(|| {
             addr_key(addresses.first().map(String::as_str).unwrap_or(name), port)
         });
 
+        let mut changed = !self.devices.contains_key(&id);
         let entry = self
             .devices
             .entry(id.clone())
@@ -396,13 +412,16 @@ impl Registry {
         entry.source.mdns = true;
         entry.http_port = port;
         for address in addresses {
-            entry.add_address(address);
+            if !entry.addresses.iter().any(|a| a == address) {
+                entry.add_address(address);
+                changed = true;
+            }
         }
         if entry.custom_name.is_none() && !name.is_empty() {
             entry.name = name.to_string();
         }
         entry.last_seen_ms = Some(now_ms());
-        id
+        (id, changed)
     }
 
     /// Record a machine the user typed in.
@@ -520,6 +539,15 @@ impl Registry {
 
         let (info, pairing_override) = match outcome {
             ProbeOutcome::Unreachable => {
+                // One miss on a machine that was just answering is more
+                // likely a slow answer than a machine gone. Its card keeps
+                // saying Online until the misses add up; everything else
+                // about it is kept as it was, since nothing new is known.
+                let was_online = matches!(device.reachability, Reachability::Online { .. });
+                device.misses = device.misses.saturating_add(1);
+                if was_online && device.misses < OFFLINE_AFTER_MISSES {
+                    return id.to_string();
+                }
                 device.reachability = Reachability::Offline;
                 device.activity = Activity::Unknown;
                 device.pairing = PairingState::Unknown;
@@ -530,6 +558,7 @@ impl Registry {
                 info,
                 pairing,
             } => {
+                device.misses = 0;
                 device.reachability = Reachability::Online {
                     rtt_ms: info.rtt_ms,
                 };
@@ -539,7 +568,14 @@ impl Registry {
             }
         };
 
-        device.pairing = pairing_override.unwrap_or_else(|| info.pairing());
+        // A probe that could only reach the plain port says Unknown about
+        // pairing, which is not news. A verdict already settled by a TLS
+        // probe stands until a TLS probe says otherwise, or the card would
+        // lose its launch buttons for a tick on every aborted handshake.
+        let verdict = pairing_override.unwrap_or_else(|| info.pairing());
+        if verdict != PairingState::Unknown {
+            device.pairing = verdict;
+        }
         device.activity = info.activity();
         device.server = Some(info.details());
         resolve_running_app(device);
@@ -581,9 +617,30 @@ impl Registry {
                 for address in &moving.addresses {
                     existing.add_address(address);
                 }
+                // Identity is not live state: whichever entry knew whose
+                // machine this is keeps that knowledge, or the account's
+                // placeholder is re-made and merged away on every tick.
+                if moving.machine_id.is_some() {
+                    existing.machine_id = moving.machine_id;
+                }
+                existing.mine |= moving.mine;
+                if existing.apps.is_empty() {
+                    existing.apps = moving.apps;
+                }
+                if existing.http_port == DEFAULT_HTTP_PORT {
+                    existing.http_port = moving.http_port;
+                }
+                if existing.https_port == DEFAULT_HTTPS_PORT {
+                    existing.https_port = moving.https_port;
+                }
                 // The fresher probe wins for live state.
                 existing.reachability = moving.reachability;
-                existing.pairing = moving.pairing;
+                existing.misses = moving.misses;
+                if moving.pairing != PairingState::Unknown
+                    || existing.pairing == PairingState::Unknown
+                {
+                    existing.pairing = moving.pairing;
+                }
                 existing.activity = moving.activity;
                 existing.server = moving.server;
                 existing.last_seen_ms = moving.last_seen_ms.max(existing.last_seen_ms);
@@ -878,6 +935,23 @@ mod tests {
     }
 
     #[test]
+    fn a_re_resolved_advertisement_is_not_news() {
+        // mDNS re-resolves every host on each TTL refresh. Only the first
+        // sighting, or a new address, should cost a probe before the tick.
+        let mut r = registry();
+        let (_, first) =
+            r.upsert_mdns_noting_change("WORKSHOP", &["192.168.1.40".into()], DEFAULT_HTTP_PORT);
+        let (_, again) =
+            r.upsert_mdns_noting_change("WORKSHOP", &["192.168.1.40".into()], DEFAULT_HTTP_PORT);
+        let (_, moved) = r.upsert_mdns_noting_change(
+            "WORKSHOP",
+            &["192.168.1.40".into(), "192.168.1.41".into()],
+            DEFAULT_HTTP_PORT,
+        );
+        assert!(first && !again && moved);
+    }
+
+    #[test]
     fn two_addresses_collapse_once_the_machine_reports_its_id() {
         let mut r = registry();
         let lan = r.upsert_mdns("WORKSHOP", &["192.168.1.40".into()], DEFAULT_HTTP_PORT);
@@ -942,6 +1016,103 @@ mod tests {
         let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
         assert_eq!(device.reachability, Reachability::Offline);
         assert_eq!(device.activity, Activity::Unknown);
+    }
+
+    #[test]
+    fn one_missed_probe_does_not_take_an_online_card_offline() {
+        let mut r = registry();
+        let id = r.upsert_manual("192.168.1.40", None, None);
+        r.apply_probe(
+            &id,
+            ProbeOutcome::Reached {
+                address: "192.168.1.40".into(),
+                info: info(&[("hostname", "WORKSHOP")]),
+                pairing: Some(PairingState::Paired),
+            },
+        );
+        let find = |r: &Registry| r.devices().into_iter().find(|d| !d.is_self).unwrap();
+
+        r.apply_probe(&id, ProbeOutcome::Unreachable);
+        let device = find(&r);
+        assert!(
+            matches!(device.reachability, Reachability::Online { .. }),
+            "one slow answer is not a machine gone"
+        );
+        assert_eq!(device.pairing, PairingState::Paired);
+
+        r.apply_probe(&id, ProbeOutcome::Unreachable);
+        assert_eq!(find(&r).reachability, Reachability::Offline);
+
+        // And a machine that was never seen is Offline at once, not after
+        // a grace it has not earned.
+        let cold = r.upsert_manual("192.168.1.41", None, None);
+        r.apply_probe(&cold, ProbeOutcome::Unreachable);
+        let cold = r.devices().into_iter().find(|d| d.id == cold).unwrap();
+        assert_eq!(cold.reachability, Reachability::Offline);
+    }
+
+    #[test]
+    fn a_plain_probe_does_not_unsettle_a_paired_verdict() {
+        // The TLS probe failed this tick (an aborted handshake, which the
+        // host does now and then) so only the plain port answered. Unknown
+        // is not news; the card stays Paired and keeps its launch buttons.
+        let mut r = registry();
+        let id = r.upsert_manual("192.168.1.40", None, None);
+        r.apply_probe(
+            &id,
+            ProbeOutcome::Reached {
+                address: "192.168.1.40".into(),
+                info: info(&[("hostname", "WORKSHOP")]),
+                pairing: Some(PairingState::Paired),
+            },
+        );
+        r.apply_probe(
+            &id,
+            reached("192.168.1.40", info(&[("hostname", "WORKSHOP")])),
+        );
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert_eq!(device.pairing, PairingState::Paired);
+
+        // A real verdict still replaces it.
+        r.apply_probe(
+            &id,
+            ProbeOutcome::Reached {
+                address: "192.168.1.40".into(),
+                info: info(&[("hostname", "WORKSHOP")]),
+                pairing: Some(PairingState::NotPaired),
+            },
+        );
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert_eq!(device.pairing, PairingState::NotPaired);
+    }
+
+    #[test]
+    fn a_merge_keeps_whose_machine_it_is() {
+        // The LAN card never learned its identity (peer port blocked); the
+        // account's card for the same machine did. Folding the two must not
+        // forget it, or the account re-makes its card every tick.
+        let mut r = registry();
+        let lan = r.upsert_mdns("WORKSHOP", &["192.168.1.40".into()], DEFAULT_HTTP_PORT);
+        r.apply_probe(
+            &lan,
+            reached("192.168.1.40", info(&[("uniqueid", "abc-123")])),
+        );
+
+        let vpn = r.upsert_manual("100.84.2.9", None, None);
+        {
+            let device = r.devices.get_mut(&vpn).unwrap();
+            device.machine_id = Some("machine-1".into());
+            device.mine = true;
+        }
+        r.apply_probe(
+            &vpn,
+            reached("100.84.2.9", info(&[("uniqueid", "abc-123")])),
+        );
+
+        let remote: Vec<_> = r.devices().into_iter().filter(|d| !d.is_self).collect();
+        assert_eq!(remote.len(), 1);
+        assert_eq!(remote[0].machine_id.as_deref(), Some("machine-1"));
+        assert!(remote[0].mine);
     }
 
     #[test]

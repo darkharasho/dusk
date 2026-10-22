@@ -16,6 +16,7 @@ import {
 export function PairRequestPrompt() {
   const [request, setRequest] = useState<PairRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [answering, setAnswering] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -46,12 +47,17 @@ export function PairRequestPrompt() {
   }, [request]);
 
   async function answer(allow: boolean) {
-    if (!request) return;
+    // A second press while the first is on its way would be answered with
+    // "that request has already gone away", in a dialog that is now empty.
+    if (!request || answering) return;
+    setAnswering(true);
     try {
       await answerPairRequest(request.id, allow);
       setRequest(null);
     } catch (err) {
       setError(String(err));
+    } finally {
+      setAnswering(false);
     }
   }
 
@@ -74,13 +80,17 @@ export function PairRequestPrompt() {
               Allow it to stream from this machine? It will be able to see this
               screen and control it whenever it connects, until you remove it.
             </p>
-            <p className="axi-ink-faint">Asking from {request.address}</p>
+            <p className="axi-ink-faint">
+              Asking from {request.address}. Dusk declines on its own if nobody
+              answers within a minute and a half.
+            </p>
             {error && <p className="axi-ink-danger">{error}</p>}
           </div>
           <div className="axi-modal__foot">
             <button
               type="button"
               className="axi-btn axi-btn--ghost"
+              disabled={answering}
               onClick={() => answer(false)}
             >
               Don&rsquo;t allow
@@ -88,9 +98,10 @@ export function PairRequestPrompt() {
             <button
               type="button"
               className="axi-btn axi-btn--primary"
+              disabled={answering}
               onClick={() => answer(true)}
             >
-              Allow
+              {answering ? "Allowing" : "Allow"}
             </button>
           </div>
         </>

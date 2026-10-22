@@ -98,6 +98,16 @@ pub async fn remove_manual_device(
 
 #[tauri::command]
 pub async fn refresh_now(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    // The account's list too, not only the network: Refresh is the one
+    // thing a person reaches for when a machine they just signed in is
+    // missing from the grid. Not awaited: GitHub may take its whole
+    // timeout to not answer, and the local probe should not wait on that.
+    // The read asks for a tick of its own when it lands.
+    let inner = state.inner().clone();
+    tokio::spawn(async move {
+        inner.account.refresh_now(&inner.http).await;
+        inner.request_refresh();
+    });
     state.request_refresh();
     crate::discovery::sweep(&app, state.inner());
     Ok(())
@@ -518,6 +528,24 @@ pub async fn launch_app(
 
 // ------------------------------------------------------------- host side
 
+/// Whether Dusk definitely holds no sign-in for the host.
+///
+/// Only a keystore that answered counts. One that would not (locked
+/// keyring, dismissed prompt, no secret service in this session) is an
+/// error here rather than a "no": the callers set a fresh password and
+/// restart the host on "no", which would cut a stream and replace a
+/// password that was fine.
+async fn no_password_stored(inner: &AppState) -> Result<bool, String> {
+    inner
+        .credentials
+        .try_load()
+        .await
+        .map(|credentials| credentials.is_none())
+        .map_err(|err| {
+            format!("Dusk could not open the system keystore to check hosting's sign-in: {err}. Unlock it and try again.")
+        })
+}
+
 /// Turn hosting on for this machine.
 #[tauri::command]
 pub async fn start_hosting(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -525,7 +553,7 @@ pub async fn start_hosting(app: AppHandle, state: State<'_, Arc<AppState>>) -> R
     // A host Dusk holds no sign-in for gets one on the way up. Setting it
     // restarts the service, and restarting a stopped one starts it, so this
     // is the start too, and on Windows it is one elevation prompt, not two.
-    if inner.credentials.load().await.is_none() {
+    if no_password_stored(&inner).await? {
         provision(&inner).await?;
     } else {
         inner.host.start().await.map_err(|e| e.to_string())?;
@@ -626,11 +654,11 @@ pub async fn accept_pin(
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "Dusk".to_string());
 
-    SunshineApi::new(sunshine::api::DEFAULT_PORT)
-        .map_err(|e| e.to_string())?
-        // No address to go on: this PIN was typed in by hand, not carried by
-        // a peer request, so every waiting pairing is offered it.
-        .submit_pin(&credentials, &pin, &name, None)
+    // The same patient entry the peer path uses: the other machine's
+    // client may not have asked the host yet when the PIN is typed here,
+    // and the host refuses a PIN nobody is waiting on. No address to go
+    // on, so every waiting pairing is offered it.
+    crate::peer::enter_pin(&credentials, None, &pin, &name)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -869,7 +897,7 @@ pub async fn install_sunshine(
     // A Sunshine Dusk just installed has no sign-in yet, and nobody should
     // have to make one up. Skipped when Dusk already holds one, so
     // reinstalling over a working host does not replace its password.
-    let provisioned = if inner.credentials.load().await.is_none() {
+    let provisioned = if no_password_stored(&inner).await? {
         provision(&inner).await.map_err(|e| {
             format!("Hosting is installed, but Dusk could not finish setting it up: {e}")
         })

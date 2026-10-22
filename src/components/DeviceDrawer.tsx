@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Device } from "../types";
-import { cardState } from "../deviceState";
+import { cardState, pairingOf } from "../deviceState";
 import {
   generatePin,
   launchApp,
@@ -56,13 +56,20 @@ export function DeviceDrawer({
     };
   }, [device.id]);
 
+  // Once the other machine has said yes and the pairing is saved on both
+  // sides, what is left is waiting for its stream to end, which can be
+  // hours. Nothing here is needed for that, so the drawer may close; the
+  // card shows Ready when the host is free. Anything else that is busy
+  // keeps the drawer open, the same from every way of closing it.
+  const canClose = busy === null || (busy === "pairing" && stage === "waitingForHost");
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && busy === null) onClose();
+      if (e.key === "Escape" && canClose) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy]);
+  }, [onClose, canClose]);
 
   // A stream can die well after the launch call resolved, so its reason
   // arrives as an event rather than a rejected promise. Same notice either
@@ -86,7 +93,8 @@ export function DeviceDrawer({
 
   const { label, chipClass } = cardState(device);
   const online = device.reachability.kind === "online";
-  const paired = device.pairing.kind === "paired";
+  const pairing = pairingOf(device);
+  const paired = pairing === "paired";
   const hosting = device.activity.kind === "hosting";
 
   async function run(kind: Exclude<Busy, null>, action: () => Promise<void>) {
@@ -111,13 +119,14 @@ export function DeviceDrawer({
 
   return (
     <>
-      <div className="axi-scrim" onClick={() => busy === null && onClose()} />
+      <div className="axi-scrim" onClick={() => canClose && onClose()} />
       <aside className="axi-drawer" role="dialog" aria-label={device.name}>
         <div className="axi-drawer__head">
           <h2>{device.name}</h2>
           <button
             type="button"
             className="axi-drawer__close"
+            disabled={!canClose}
             onClick={onClose}
             aria-label="Close"
           >
@@ -149,7 +158,14 @@ export function DeviceDrawer({
 
           {!online && <p className="axi-ink-dim">This machine is not answering.</p>}
 
-          {online && moonlightAvailable && !paired && (
+          {/* Not knowing is not "not paired": a host that answered only on
+              its plain port this tick says nothing either way, and offering
+              to pair with one already paired ends in an error. */}
+          {online && moonlightAvailable && pairing === "unknown" && busy !== "pairing" && (
+            <p className="axi-ink-dim">Checking whether this machine is paired.</p>
+          )}
+
+          {online && moonlightAvailable && (pairing === "notPaired" || busy === "pairing") && (
             <PairPanel
               name={device.name}
               pin={pin}
@@ -296,7 +312,8 @@ function PairPanel({
         <p>{name} is in use. Pairing will finish when it&rsquo;s free.</p>
         <p className="axi-ink-dim">
           {name} has already said yes. It just can&rsquo;t take a new machine
-          while it&rsquo;s streaming.
+          while it&rsquo;s streaming. You can close this; the card will show
+          Ready when it&rsquo;s done.
         </p>
       </div>
     );

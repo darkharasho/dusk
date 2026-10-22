@@ -196,7 +196,14 @@ async fn serve(
     effects: mpsc::UnboundedSender<Effect>,
     mut outgoing: mpsc::UnboundedReceiver<ToClient>,
 ) -> io::Result<()> {
-    let stream = accept(listener).await?;
+    // A client that never connects (a stock one, or a fork that failed
+    // before it got here) must not leave this waiting with the listener
+    // open for the life of the process, once per stream. The session's
+    // end is the effects receiver going away.
+    let stream = tokio::select! {
+        stream = accept(listener) => stream?,
+        _ = effects.closed() => return Ok(()),
+    };
     let (reader, mut writer) = tokio::io::split(stream);
     let mut lines = BufReader::new(reader).lines();
     let mut conversation = Conversation::new(token);
@@ -317,6 +324,28 @@ mod tests {
         // The channel closes without ever yielding an effect, rather than
         // the action going through.
         assert_eq!(effects.recv().await, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_nobody_connected_to_stops_listening_when_it_ends() {
+        let token = token();
+        let (endpoint, path) = endpoint(&token[..8]);
+        let listener = bind(&endpoint, path.as_deref()).await.expect("listening");
+        let (effects_tx, effects_rx) = mpsc::unbounded_channel();
+        let (_outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
+        let serving = tokio::spawn(serve(listener, token, effects_tx, outgoing_rx));
+
+        // The stream ends without any client having connected.
+        drop(effects_rx);
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(2), serving).await;
+        assert!(
+            matches!(ended, Ok(Ok(Ok(())))),
+            "the listener task must end with the session, not with the process: {ended:?}"
+        );
+        if let Some(path) = path {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[cfg(unix)]

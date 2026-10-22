@@ -73,13 +73,21 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>) {
                     }
 
                     let name = instance_name(info.get_fullname());
-                    {
+                    let changed = {
                         let mut registry = state.registry.write().await;
-                        registry.upsert_mdns(&name, &addresses, info.get_port());
-                    }
+                        registry
+                            .upsert_mdns_noting_change(&name, &addresses, info.get_port())
+                            .1
+                    };
                     // A newly seen machine should be probed now rather than at
-                    // the next tick, so its card lights up immediately.
-                    state.request_refresh();
+                    // the next tick, so its card lights up immediately. A
+                    // re-resolution of one already on the grid is not that:
+                    // every host re-announces on its TTL, and a tick for each
+                    // would have the poller opening connections to every
+                    // machine far more often than its five seconds.
+                    if changed {
+                        state.request_refresh();
+                    }
                 }
                 ServiceEvent::SearchStopped(_) => break,
                 _ => {}

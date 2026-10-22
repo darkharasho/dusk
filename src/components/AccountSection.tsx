@@ -120,12 +120,27 @@ export function AccountSection() {
           )}
           {/* A lapsed sign-in looks exactly like your machines not being
               yours, so it gets a notice rather than a dim line. */}
-          {account.expired && (
+          {account.expired && !code && (
             <div className="axi-notice axi-notice--danger">
               <span className="axi-notice__icon" aria-hidden="true">
                 !
               </span>
-              <p>{account.expired}</p>
+              <div className="axi-stack">
+                <p>{account.expired}</p>
+                {/* The notice says "sign in again", so the button is here.
+                    Signing in as yourself keeps this machine's place on the
+                    account; nobody should have to sign out first. */}
+                <div className="axi-row">
+                  <button
+                    type="button"
+                    className="axi-btn axi-btn--primary axi-btn--sm"
+                    disabled={busy}
+                    onClick={start}
+                  >
+                    {busy ? "Starting" : "Sign in again"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
           {!account.persistent && (
@@ -171,7 +186,11 @@ export function AccountSection() {
           <p>Enter this code on GitHub to finish signing in.</p>
           <p className="dusk-pin">{code.userCode}</p>
           <div className="axi-row">
-            <button type="button" className="axi-btn" onClick={() => openSignInPage()}>
+            <button
+              type="button"
+              className="axi-btn"
+              onClick={() => openSignInPage().catch((e) => setError(String(e)))}
+            >
               Open GitHub
             </button>
             <button type="button" className="axi-btn axi-btn--ghost" onClick={stop}>

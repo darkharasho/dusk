@@ -343,9 +343,25 @@ impl Moonlight {
     ) -> Result<(), MoonlightError> {
         let drain = child.stderr.take().map(|stderr| {
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
+                // Read bytes, not lines-as-strings: a `Lines` reader stops
+                // at the first line that is not UTF-8, and then nobody
+                // services the pipe. The client blocks on its next write
+                // to stderr and the stream freezes with no error at all.
+                // FFmpeg and SDL echo raw bytes, so that line does come.
+                let mut reader = BufReader::new(stderr);
+                let mut buf = Vec::new();
                 let mut tail: VecDeque<String> = VecDeque::with_capacity(STDERR_TAIL);
-                while let Ok(Some(line)) = lines.next_line().await {
+                loop {
+                    buf.clear();
+                    match reader.read_until(b'\n', &mut buf).await {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        // A read error is not end of file; keep draining
+                        // until the pipe closes.
+                        Err(_) => continue,
+                    }
+                    let line = String::from_utf8_lossy(&buf);
+                    let line = line.trim_end_matches(['\n', '\r']).to_string();
                     if let Some(log) = &log {
                         log.line(&line);
                     }
@@ -1004,6 +1020,27 @@ mod tests {
             .next()
             .unwrap()
             .ends_with(" Video stream is 3440x1440"));
+    }
+
+    /// A line that is not UTF-8 must not stop the drain: with nobody reading
+    /// the pipe the client blocks on its next write and the stream freezes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_line_that_is_not_utf8_does_not_stop_the_drain() {
+        let mut child = a_child_that(
+            "printf 'before\\n\\377\\376 raw bytes\\n' 1>&2; \
+             awk 'BEGIN { while (i++ < 3000) print \"FFmpeg: chatter after\" }' 1>&2; \
+             echo 'last line' 1>&2; exit 1",
+        );
+        let err = Moonlight::wait_for_session(&mut child, None)
+            .await
+            .expect_err("exit 1 is a failure");
+        // The quoted reason comes from after the bad line, so the drain kept
+        // going (and the child was never blocked on a full pipe).
+        assert!(
+            matches!(&err, MoonlightError::Failed(m) if m.contains("last line")),
+            "{err:?}"
+        );
     }
 
     #[test]

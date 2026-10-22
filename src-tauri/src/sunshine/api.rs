@@ -384,14 +384,13 @@ impl SunshineApi {
 
     /// Restart Sunshine so changed settings take effect.
     ///
-    /// The connection usually dies mid-request because the process goes away
-    /// while answering, so a transport error here is the expected outcome
-    /// rather than a failure.
+    /// The connection usually dies mid-request because the process goes
+    /// away while answering, and that counts as taken. Nothing listening,
+    /// or an error status, does not: saying "restarted" then had the
+    /// virtual-display setup wait on a restart that never happened and
+    /// blame the person's machine for it.
     pub async fn restart(&self, credentials: &Credentials) -> Result<(), ApiError> {
-        match self.restart_checked(credentials).await {
-            Err(ApiError::Unauthorized) => Err(ApiError::Unauthorized),
-            _ => Ok(()),
-        }
+        self.restart_checked(credentials).await
     }
 
     /// Restart Sunshine, and say so only if it took the request: a 2xx, or

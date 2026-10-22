@@ -6,6 +6,72 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
+**Unreleased, on `harden-sync-and-auth`: a stability pass over sync, auth
+and pairing**, from a full read of the code against the complaints of
+"endless errors with sync and auth". What changed, and why each one bit:
+
+- *Account.* The machine list was read once per run, so a machine signed in
+  after launch was never "yours" until Dusk restarted. It is re-read every
+  five minutes from the poll tick (`account::refresh_if_stale`, never
+  reading the keystore, never while GitHub has refused the token) and on
+  Refresh (spawned, so an unreachable GitHub does not stall the button). A
+  token GitHub refused (401) was only a log line while the Account screen
+  said signed in; it is now `Cached::rejected`, shown with the same notice
+  as expiry, and the notice carries a **Sign in again** button, since the
+  signed-in branch had only Sign out.
+- *Vouching.* `vouch_for` answers `Vouched` / `NotOnAccount` /
+  `CouldNotCheck(reason)`. Before, a host whose sign-in had lapsed or that
+  could not reach GitHub told the other person "sign in to that account on
+  X too", which was wrong and cost real time. Now it says the host could
+  not check, and what to do there. GitHub transport errors no longer carry
+  reqwest's URL-and-socket text.
+- *Keystore.* `CredentialStore::try_load` tells "nothing stored" from "the
+  keystore would not answer". `start_hosting` and `install_host` provisioned
+  on `load().is_none()`, so a locked keyring **rotated the host's password
+  and restarted it**. They now refuse with "could not open the system
+  keystore" instead.
+- *Registry.* `rekey` dropped `machine_id`/`mine`, so an account placeholder
+  folded into an mDNS card was re-made every tick (a flickering duplicate).
+  A plain-port probe (`pairing() == Unknown`, routine after an aborted TLS
+  handshake) overwrote a settled Paired verdict for a tick; it no longer
+  does. One missed probe took an online card Offline; it now takes
+  `OFFLINE_AFTER_MISSES` (2) in a row.
+- *Poll rate.* Discovery requested a tick on every mDNS re-resolution, i.e.
+  every host's TTL refresh. Only a new card or address does now
+  (`upsert_mdns_noting_change`). The ~108 `CLOSE_WAIT` sockets were most
+  likely this rate rather than a leak; worth re-measuring.
+- *Stream.* The stderr drain used `Lines`, which stops at the first
+  non-UTF-8 line; the pipe then fills and the client blocks on its next
+  write, which looks exactly like an unexplained freeze. It reads bytes
+  now, lossily. The session channel's accept is cancelled when the session
+  ends, instead of holding a listener per stream for the life of the
+  process. `SunshineApi::restart` no longer reports success for "nothing
+  listening".
+- *Settings file.* A `devices.json` that would not parse was replaced on
+  the next save, losing the pairing bookkeeping. It is moved to
+  `devices.json.corrupt-<secs>` beside the original.
+- *Window.* A failed first snapshot read showed the masthead forever; it
+  now shows the reason and Try again. A stream that died after the drawer
+  closed was reported nowhere; a dismissible notice above the grid now
+  names it. The drawer can be closed while a busy host finishes pairing
+  (the only part of pairing that can take hours), and no longer offers to
+  pair on an Unknown verdict. The pair prompt's buttons disable while an
+  answer is on its way. The hand-typed PIN (`accept_pin`) retries like the
+  peer path instead of failing once with "no device is waiting yet".
+
+Found and **not** done, in rough order of value: an owed restart the host
+cannot do (wrong port, rotated password) is invisible and tells the other
+machine "try again in a minute" forever (`reconcile.rs`); a restart that
+`came_back` does not observe is issued again, up to three in ~45 s; the
+new password is written to Sunshine before Dusk saves it, so a failed
+restart in `provision::run` strands it; `SunshineApi` builds a client per
+call without `pool_max_idle_per_host(0)`; the stream child has no quit
+policy when Dusk exits; `REPLY_TIMEOUT` (120 s) can be shorter than the
+host's vouch + `PIN_WINDOW`; a corrupt or locked keystore still reads as
+"signed out" on the Account screen; every `setError(String(err))` shows
+raw backend text; the CLI's `virtual_screen` write is overwritten by the
+running window's next save.
+
 **v0.3.33 is released**, all three platforms, from `main` (PR #6), still
 carrying the client's `dusk-v0.2.5`. Each stream's client log is now kept on
 disk and survives a freeze (see "keeps no log file" under Landmines); it was
@@ -127,7 +193,8 @@ pins `dusk-v0.2.5`, so v0.3.29 is the first packaged Dusk that carries
   `QSettings`, not the flush thread's write. A read-back verify before the
   release would close it.
 - Closing the drawer does not cancel a pairing in progress; a second Pair
-  starts a second loop (harmless, the host is idempotent).
+  starts a second loop (harmless, the host is idempotent). The drawer can
+  now be closed while the host is busy, by design; the rest still holds.
 - The Windows `config_dir` (`%ProgramFiles%\Sunshine\config`) is a guess until
   the Windows spike. Wrong means PIN fallback, not breakage.
 

@@ -63,6 +63,16 @@ export function cardState(device: Device): CardState {
   }
 }
 
+/**
+ * What Dusk knows about being paired with a machine, for anything that
+ * offers to pair. The card can call an unknown verdict "Online", which is
+ * true; the drawer must not offer to pair on it, since pairing a host that
+ * is already paired fails in a way that only confuses.
+ */
+export function pairingOf(device: Device): "paired" | "notPaired" | "unknown" {
+  return device.pairing.kind;
+}
+
 export function originLabel(device: Device): string | null {
   const { mdns, manual, moonlight } = device.source;
   // Being found on the network is the ordinary case, so on its own it earns

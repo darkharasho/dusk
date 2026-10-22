@@ -76,12 +76,11 @@ its own half:
   fetched, or the list does not name this machine. Unknown keeps every
   pairing.
 
-*Fork and release.* The `add-host` action lives on the local fork branch
-`dusk-add-host` at commit `4a59931`. It is **not merged, pushed, tagged or
-released.** The owner's steps: merge, tag `dusk-v0.2.5`, wait for the release,
-then bump `CLIENT_TAG` in `.github/workflows/release.yml`. Until then a
-packaged build ships `dusk-v0.2.4`, which has no `add-host`, so **packaged
-builds always use the PIN.**
+*Fork and release.* The `add-host` action (fork commit `4a59931`) is merged
+into the fork's `master` (darkharasho/moonlight-qt#1, merge `ded3c2f1`) and
+released as `dusk-v0.2.5`. `CLIENT_TAG` in `.github/workflows/release.yml`
+now pins `dusk-v0.2.5`, so the next packaged Dusk carries `add-host` and pairs
+your own machines by certificate.
 
 *Owner-deferred checks* (they need machines this was not built on):
 
@@ -549,12 +548,12 @@ Two repositories, side by side. Several things assume they are siblings.
 ```
 <parent>/
 ├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28
-└── moonlight-qt/    master @ 7b39d282  tags dusk-v0.1.0 … dusk-v0.2.4
+└── moonlight-qt/    master @ ded3c2f1  tags dusk-v0.1.0 … dusk-v0.2.5
 ```
 
 The fork builds and publishes a client; Dusk downloads a pinned one at
 release time. That pin is one line — `CLIENT_TAG` in
-`.github/workflows/release.yml`, currently `dusk-v0.2.4`. Bumping the client
+`.github/workflows/release.yml`, currently `dusk-v0.2.5`. Bumping the client
 means tagging `dusk-v*` in the fork, waiting for its release, and editing
 that line.
 

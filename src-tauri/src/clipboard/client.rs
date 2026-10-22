@@ -116,9 +116,11 @@ async fn plain_line(tcp: &mut TcpStream) -> io::Result<Wire> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "not a message"))
 }
 
-/// Relay until the stream ends (`from_window` closes), the host goes away,
-/// or `sharing_on` turns false. Nothing is sent before the host's first line,
-/// and this side's `Hello` only if that line is the host's.
+/// Relay until the stream ends (`from_window` closes, which also ends the
+/// wait for the host's answer), the host goes away, or `sharing_on` turns
+/// false. Nothing is sent before the host's first line, and this side's
+/// `Hello` only if that line is the host's; the latest copy made before then
+/// follows it.
 pub async fn run<S, F, Fut>(
     stream: S,
     to_window: Control,
@@ -134,8 +136,28 @@ where
     let (tx, mut rx) = mpsc::channel(4);
     let reader = tokio::spawn(read_lines(read, tx));
 
-    let ended = match tokio::time::timeout(ADMITTED, rx.recv()).await {
-        Ok(Some(Ok(Incoming::Message(Wire::Hello { .. })))) => {
+    // Copies made while connecting wait for the host's answer, and only the
+    // latest of them is kept: it is the one on the clipboard.
+    let mut pending = None;
+    while let Ok(text) = from_window.try_recv() {
+        pending = Some(text);
+    }
+    // The stream can end while the host is still deciding, and then there
+    // is nothing left to wait for.
+    let deadline = Instant::now() + ADMITTED;
+    let first = loop {
+        tokio::select! {
+            incoming = rx.recv() => break incoming,
+            copied = from_window.recv() => match copied {
+                Some(text) => pending = Some(text),
+                None => break None,
+            },
+            _ = tokio::time::sleep_until(deadline) => break None,
+        }
+    };
+
+    let ended = match first {
+        Some(Ok(Incoming::Message(Wire::Hello { .. }))) => {
             if send(&mut write, &Wire::Hello { version: VERSION })
                 .await
                 .is_err()
@@ -146,13 +168,14 @@ where
                     &mut write,
                     &to_window,
                     &mut from_window,
+                    pending,
                     &mut rx,
                     &mut sharing_on,
                 )
                 .await
             }
         }
-        Ok(Some(Ok(Incoming::Message(Wire::Declined { reason })))) => Ended::Declined(reason),
+        Some(Ok(Incoming::Message(Wire::Declined { reason }))) => Ended::Declined(reason),
         _ => Ended::Closed,
     };
 
@@ -165,6 +188,7 @@ async fn relay<W, F, Fut>(
     write: &mut W,
     to_window: &Control,
     from_window: &mut mpsc::UnboundedReceiver<String>,
+    mut pending: Option<String>,
     rx: &mut mpsc::Receiver<io::Result<Incoming>>,
     sharing_on: &mut F,
 ) -> Ended
@@ -183,16 +207,26 @@ where
             ToHost(String),
             ToWindow(ToClient),
         }
-        let forward = tokio::select! {
+        let from_copy = |text: String| {
+            if fits(&text) {
+                Forward::ToHost(text)
+            } else {
+                Forward::ToWindow(ToClient::Notice {
+                    text: TOO_BIG_NOTICE.into(),
+                })
+            }
+        };
+        // A copy made before the host admitted this goes first.
+        let forward = if let Some(text) = pending.take() {
+            from_copy(text)
+        } else {
+            tokio::select! {
             copied = from_window.recv() => match copied {
                 None => {
                     let _ = send(write, &Wire::Bye).await;
                     return Ended::Closed;
                 }
-                Some(text) if !fits(&text) => {
-                    Forward::ToWindow(ToClient::Notice { text: TOO_BIG_NOTICE.into() })
-                }
-                Some(text) => Forward::ToHost(text),
+                Some(text) => from_copy(text),
             },
             incoming = rx.recv() => match incoming {
                 None | Some(Err(_)) | Some(Ok(Incoming::End))
@@ -220,6 +254,7 @@ where
                     return Ended::Closed;
                 }
                 continue;
+            }
             }
         };
 
@@ -332,6 +367,41 @@ mod tests {
             Ended::Declined(Decline::SharingOff)
         ));
         assert_eq!(rig.host.next().await, None, "nothing at all was sent");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_stream_ending_before_the_host_answers_ends_the_run_at_once() {
+        let Rig {
+            mut host,
+            copies,
+            task,
+            ..
+        } = open();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let started = Instant::now();
+        drop(copies);
+        let ended = tokio::time::timeout(ADMITTED, task).await;
+        assert!(matches!(ended.expect("ended").unwrap(), Ended::Closed));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(host.next().await, None, "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn only_the_latest_copy_made_while_connecting_is_sent() {
+        let mut rig = open();
+        rig.copies.send("first".into()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        rig.copies.send("second".into()).unwrap();
+        rig.host.say(Wire::Hello { version: 1 }).await;
+        assert_eq!(rig.host.next().await, Some(Wire::Hello { version: 1 }));
+        assert_eq!(
+            rig.host.next().await,
+            Some(Wire::Clip {
+                format: "text".into(),
+                text: "second".into()
+            })
+        );
+        assert!(rig.host.silent_for(Duration::from_millis(200)).await);
     }
 
     #[tokio::test]

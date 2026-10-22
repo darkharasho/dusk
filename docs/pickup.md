@@ -940,11 +940,18 @@ build cross-checks clean, and none has run end to end yet.
     only party; there is still nothing Dusk hosts.
 - **Own titlebar.** `components/Titlebar.tsx`. Windows and Linux have no
   native frame (`decorations: false`), so the strip draws the buttons and is
-  the drag region (`data-tauri-drag-region`, which does not reach children).
-  macOS keeps its traffic lights over the strip (`tauri.macos.conf.json`,
-  `titleBarStyle: Overlay`). The page under it is `.dusk-body`, the one
-  scrolling region; drawers start below the strip. Top-layer `<dialog>`s
-  still cover it. Not yet seen on a real Windows or macOS window.
+  the drag region (`data-tauri-drag-region="deep"`: anything in the strip
+  that is not a control drags; buttons block it on their own). Tauri's own
+  drag script also maximizes on a double-click, on mousedown for Windows and
+  Linux and on mouseup for macOS, so the component must not answer the
+  double-click itself: it used to, and the two toggles cancelled. The strip
+  dims when the window loses focus (`onFocusChanged`) and reads maximized
+  and full screen off `onResized`. macOS keeps its traffic lights over the
+  strip (`tauri.macos.conf.json`, `titleBarStyle: Overlay`); the padding
+  that clears them drops away in native full screen, where they hide. The
+  page under it is `.dusk-body`, the one scrolling region; drawers start
+  below the strip (`--dusk-titlebar-height`). Top-layer `<dialog>`s still
+  cover it. Not yet seen on a real Windows or macOS window.
 - **Self-update.** `src/updates.ts`, `tauri-plugin-updater`. Checks 10s after
   launch and every 6 hours, downloads in the background, then shows **Restart
   to update** in the titlebar and in Settings › About. Never restarts on its

@@ -211,7 +211,7 @@ function Body() {
       </Masthead>
 
       {failure && (
-        <div className="axi-page dusk-page" style={{ paddingBottom: 0 }}>
+        <div className="axi-page dusk-page dusk-banner">
           <div className="axi-notice axi-notice--danger">
             <span className="axi-notice__icon" aria-hidden="true">
               !
@@ -270,7 +270,7 @@ function Body() {
                   {/* Rule 11: an indicator of work animates a composited
                       property, so a stalled main thread cannot freeze it
                       into a lie about the app having crashed. */}
-                  <span className="axi-spinner" style={{ "--axi-spinner-size": "12px" } as React.CSSProperties} />
+                  <span className="axi-spinner" />
                   Looking for machines
                 </span>
               )}
@@ -306,7 +306,7 @@ function Body() {
                 </button>
               </div>
             ) : (
-              <div className="axi-grid" style={{ "--axi-grid-min": "260px" } as React.CSSProperties}>
+              <div className="axi-grid dusk-grid">
                 {listed.map((device) => (
                   <DeviceCard
                     key={device.id}
@@ -330,7 +330,7 @@ function Body() {
                   <span className="dusk-count">{others.length}</span>
                 </h2>
               </div>
-              <div className="axi-grid" style={{ "--axi-grid-min": "260px" } as React.CSSProperties}>
+              <div className="axi-grid dusk-grid">
                 {others.map((device) => (
                   <DeviceCard
                     key={device.id}

@@ -221,7 +221,7 @@ export function DeviceDrawer({
               {device.apps.length === 0 ? (
                 <p className="axi-ink-dim">Reading the app list.</p>
               ) : (
-                <div className="axi-stack" style={{ "--axi-stack-gap": "8px" } as React.CSSProperties}>
+                <div className="axi-stack dusk-list">
                   {device.apps.map((app) => (
                     <div className="axi-panel axi-panel--tile axi-row" key={app.id}>
                       <span>{app.name}</span>

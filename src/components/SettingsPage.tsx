@@ -113,8 +113,8 @@ function About() {
           Dusk&rsquo;s hosting and streaming are built on Sunshine and on a
           fork of Moonlight, both free software under the GNU General Public
           License, version 3. They run as separate programs alongside Dusk.
-          Their licence and an offer of their source code are in the
-          <code className="axi-code"> licenses </code> folder inside Dusk&rsquo;s
+          Their licence and an offer of their source code are in the{" "}
+          <code className="axi-code">licenses</code> folder inside Dusk&rsquo;s
           installation.
         </p>
       </details>

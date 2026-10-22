@@ -66,6 +66,10 @@ pub struct AppState {
     /// Each carries the way to talk to that stream's client, for the
     /// controls in Dusk's own window.
     sessions: RwLock<HashMap<DeviceId, Running>>,
+    /// How many times clipboard sharing has been turned off here, bumped
+    /// under the store lock. A copy held for the next clipboard connection,
+    /// or a connection started earlier, belongs to the count it began at.
+    pub clipboard_turned_off: AtomicU64,
     /// Set once quitting has begun, so the exit the clean-up itself asks
     /// for is not taken as another request to clean up.
     pub quitting: AtomicBool,
@@ -241,6 +245,7 @@ impl AppState {
             reconciler: crate::cert_pairing::reconcile::Reconciler::new(account_changed),
             repairs: Default::default(),
             sessions: RwLock::new(HashMap::new()),
+            clipboard_turned_off: AtomicU64::new(0),
             quitting: AtomicBool::new(false),
             browsing: AtomicBool::new(false),
             discovering: AtomicBool::new(false),

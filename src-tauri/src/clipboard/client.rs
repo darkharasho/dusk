@@ -96,6 +96,33 @@ impl LastEnd {
     }
 }
 
+/// A copy from the stream window made while no connection was up, kept for
+/// the next one: the latest only, and only while this side's sharing has
+/// not been turned off since it was made. `offs` is how many times sharing
+/// had been turned off here when the copy was made. Never logged.
+#[derive(Default)]
+pub struct Held {
+    copy: Option<(String, u64)>,
+}
+
+impl Held {
+    /// Keeps `text` in place of any earlier copy.
+    pub fn keep(&mut self, text: String, offs: u64) {
+        self.copy = Some((text, offs));
+    }
+
+    pub fn clear(&mut self) {
+        self.copy = None;
+    }
+
+    /// The copy to send on a new connection, if sharing is on now and has
+    /// not been turned off since the copy was made. Empty afterwards.
+    pub fn take(&mut self, sharing_on: bool, offs: u64) -> Option<String> {
+        let (text, made_at) = self.copy.take()?;
+        (sharing_on && made_at == offs).then_some(text)
+    }
+}
+
 /// Whether to connect again, `since` the last connection ended, with this
 /// side's sharing setting as it is now.
 pub fn should_reconnect(last: &LastEnd, since: Duration, sharing_on: bool) -> bool {
@@ -493,6 +520,31 @@ mod tests {
                 "{last:?} {since:?} {sharing_on}"
             );
         }
+    }
+
+    #[test]
+    fn a_copy_made_while_disconnected_waits_for_the_next_connection() {
+        let mut held = Held::default();
+        held.keep("first".into(), 0);
+        held.keep("second".into(), 0);
+        assert_eq!(
+            held.take(true, 0).as_deref(),
+            Some("second"),
+            "the latest only"
+        );
+        assert_eq!(held.take(true, 0), None, "sent once");
+    }
+
+    #[test]
+    fn a_held_copy_is_not_sent_once_sharing_was_turned_off_here() {
+        let mut held = Held::default();
+        held.keep("before".into(), 0);
+        assert_eq!(held.take(false, 1), None, "off now");
+        held.keep("before".into(), 0);
+        assert_eq!(held.take(true, 1), None, "turned off and on again since");
+        held.keep("before".into(), 0);
+        held.clear();
+        assert_eq!(held.take(true, 0), None);
     }
 
     #[test]

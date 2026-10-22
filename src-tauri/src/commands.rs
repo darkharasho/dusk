@@ -452,6 +452,7 @@ fn start_clipboard(
     device_id: String,
     config: Arc<rustls::ClientConfig>,
     address: String,
+    offs: u64,
 ) -> ClipboardRun {
     use crate::clipboard::{client, Decline};
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -460,9 +461,11 @@ fn start_clipboard(
     tauri::async_runtime::spawn(async move {
         let ended = match client::connect(&address, config).await {
             Ok(stream) => {
+                // Turned off since this began counts as off, even if it is
+                // on again: the run ends, and the next one starts afresh.
                 let sharing_on = move || {
                     let state = state.clone();
-                    async move { state.store.lock().await.clipboard_sharing.is_on() }
+                    async move { clipboard_sharing(&state).await == (true, offs) }
                 };
                 client::run(stream, control, rx, sharing_on).await
             }
@@ -486,6 +489,16 @@ fn start_clipboard(
     (tx, done_rx)
 }
 
+/// Whether clipboard sharing is on here, and how many times it has been
+/// turned off, read together.
+async fn clipboard_sharing(state: &AppState) -> (bool, u64) {
+    let store = state.store.lock().await;
+    let offs = state
+        .clipboard_turned_off
+        .load(std::sync::atomic::Ordering::SeqCst);
+    (store.clipboard_sharing.is_on(), offs)
+}
+
 /// How often a stream without a clipboard connection checks whether to
 /// make one.
 const CLIPBOARD_TICK: std::time::Duration = std::time::Duration::from_secs(5);
@@ -502,6 +515,8 @@ struct ClipboardLink {
     /// Whether the stream is up: nothing is connected before.
     up: bool,
     live: Option<ClipboardRun>,
+    /// The latest copy made while no connection was up.
+    held: crate::clipboard::client::Held,
     last: crate::clipboard::client::LastEnd,
     ended_at: tokio::time::Instant,
 }
@@ -522,6 +537,7 @@ impl ClipboardLink {
             address,
             up: false,
             live: None,
+            held: Default::default(),
             // Nothing tried yet: connect as soon as sharing is on.
             last: crate::clipboard::client::LastEnd::OwnSetting,
             ended_at: tokio::time::Instant::now(),
@@ -553,7 +569,11 @@ impl ClipboardLink {
                 Err(TryRecvError::Empty) => {}
             }
         }
-        let sharing = self.state.store.lock().await.clipboard_sharing.is_on();
+        let (sharing, offs) = clipboard_sharing(&self.state).await;
+        if !sharing {
+            // A copy from before sharing went off is never sent.
+            self.held.clear();
+        }
         if self.live.is_some() {
             if !sharing {
                 self.ended(LastEnd::OwnSetting, tokio::time::Instant::now());
@@ -565,27 +585,42 @@ impl ClipboardLink {
         }
         match clipboard_tls(&self.state, &self.device_id, &self.address).await {
             Some(config) => {
-                self.live = Some(start_clipboard(
+                let (tx, done) = start_clipboard(
                     &self.app,
                     self.state.clone(),
                     self.control.clone(),
                     self.device_id.clone(),
                     config,
                     self.address.clone(),
-                ));
+                    offs,
+                );
+                // Sent once the host admits it, if sharing is still on then.
+                if let Some(text) = self.held.take(sharing, offs) {
+                    let _ = tx.send(text);
+                }
+                self.live = Some((tx, done));
             }
             // Already logged; it will not appear during this stream.
-            None => self.ended(LastEnd::GiveUp, tokio::time::Instant::now()),
+            None => {
+                self.held.clear();
+                self.ended(LastEnd::GiveUp, tokio::time::Instant::now());
+            }
         }
     }
 
     /// A copy from the stream window: sent on, over a connection made for
-    /// it if the rules allow one now. A connection on its way sends the
-    /// latest copy once the host admits it.
+    /// it if the rules allow one now. Otherwise the latest copy is held for
+    /// the next connection, as long as sharing stays on here.
     async fn copied(&mut self, text: String) {
         self.tend().await;
         if let Some((tx, _)) = &self.live {
             let _ = tx.send(text);
+            return;
+        }
+        let (sharing, offs) = clipboard_sharing(&self.state).await;
+        // Nothing is held for a stream that will not connect again.
+        if sharing && self.up && self.last != crate::clipboard::client::LastEnd::GiveUp {
+            self.held.keep(text, offs);
         }
     }
 }
@@ -1037,6 +1072,10 @@ pub async fn set_clipboard_sharing(
         store.clipboard_sharing = if on {
             ClipboardSharing::On
         } else {
+            // Under the store lock, so it is read together with the setting.
+            state
+                .clipboard_turned_off
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             ClipboardSharing::Off
         };
         store.save(&state.store_path)?;

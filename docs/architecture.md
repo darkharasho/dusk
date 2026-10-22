@@ -179,7 +179,9 @@ setting every 5 s, and A checks its own setting, so turning sharing off on
 either side ends the connection. A reconnects during the stream: as soon as
 its own setting is back on, 30 s after B declined for now or closed, and not
 again on that stream once B said it cannot share or never answered. It checks
-every 5 s, and at once when a copy is made with no connection up. B polls its
+every 5 s, and at once when a copy is made with no connection up. The
+latest copy made while disconnected is held and sent once the next
+connection is up, unless sharing was turned off on A in between. B polls its
 clipboard every 500 ms; on Windows and macOS it reads the text only when the
 system's change counter moved, and each clipboard call may take 5 s before
 the connection is ended. Admission only uses a host password already

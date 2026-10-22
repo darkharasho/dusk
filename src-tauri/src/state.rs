@@ -521,12 +521,33 @@ mod tests {
 
     /// A client that never hears the ask, as a stock client does not, is
     /// stopped; and Dusk stops waiting once its watcher has let go.
-    #[cfg(unix)]
+    /// A stand-in for a client that ignores the disconnect it is sent: a
+    /// process that sits for half a minute unless something stops it. Picked
+    /// per platform so the test reaches `terminate`'s SIGTERM on Unix and its
+    /// `taskkill` on Windows, which CI's Windows runner is the only thing
+    /// that exercises.
+    fn a_stream_that_ignores_disconnect() -> tokio::process::Command {
+        #[cfg(unix)]
+        {
+            let mut command = tokio::process::Command::new("/bin/sh");
+            command.args(["-c", "sleep 30"]);
+            command
+        }
+        #[cfg(windows)]
+        {
+            // Under cmd, so that `/T` has a child to take with it: Dusk's
+            // client spawns helpers of its own, and a kill that left them
+            // behind would pass a test that only watched the parent.
+            let mut command = tokio::process::Command::new("cmd");
+            command.args(["/C", "ping -n 31 127.0.0.1 >nul"]);
+            command
+        }
+    }
+
     #[tokio::test]
     async fn quitting_stops_a_stream_that_does_not_end_when_asked() {
         let state = Arc::new(state());
-        let mut child = tokio::process::Command::new("/bin/sh")
-            .args(["-c", "sleep 30"])
+        let mut child = a_stream_that_ignores_disconnect()
             .kill_on_drop(true)
             .spawn()
             .unwrap();

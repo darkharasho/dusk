@@ -93,8 +93,10 @@ A second pass closed everything the first one found and left:
   each poll tick (`Store::adopt_external_changes`, by mtime and length)
   instead of answering peers from its stale copy and overwriting the file.
 
-Still open after that: the Windows `terminate` (`taskkill`) path and the
-`ExitRequested` hold have only been exercised on Linux; `adopt_external_changes`
+Still open after that: the Windows `terminate` (`taskkill`) path is covered
+by `quitting_stops_a_stream_that_does_not_end_when_asked` on CI's Windows
+runner (ci.yml runs `cargo test` on all three OSes), but the `ExitRequested`
+hold in `lib.rs` has only been exercised by hand on Linux; `adopt_external_changes`
 takes only `virtual_screen`, so a second CLI-written setting would need
 adding there; and `undo` in `provision.rs` cannot tell "file written,
 restart failed" from "nothing written" when the host is up with the old

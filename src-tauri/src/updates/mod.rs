@@ -93,3 +93,12 @@ pub fn ensure_self_executable() {
         }
     }
 }
+
+/// Called just before the relaunch that finishes an update, so the new Dusk
+/// opens its window: see [`crate::startup::mark_show_next_launch`].
+#[tauri::command]
+pub fn prepare_restart(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    crate::startup::mark_show_next_launch(&dir)
+}

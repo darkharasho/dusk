@@ -215,7 +215,8 @@ pub fn run() {
             // unless this is a sign-in launch that should stay in the tray.
             // Hiding it after the fact would flash it on screen first.
             app.manage(startup::Live::new(&store.startup));
-            if startup::starts_hidden(std::env::args(), &store.startup) {
+            let restarted = startup::take_show_marker(&config_dir);
+            if !restarted && startup::starts_hidden(std::env::args(), &store.startup) {
                 // Already hidden; this takes the dock icon with it.
                 tray::hide_window(&handle);
             } else {
@@ -365,6 +366,7 @@ pub fn run() {
             updates::download_deb_update,
             updates::install_deb_update,
             updates::ensure_self_executable,
+            updates::prepare_restart,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Dusk");

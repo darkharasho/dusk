@@ -11,6 +11,7 @@
 //! rather than mirrored, so removing it from the system's own settings is
 //! reflected in Dusk's.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,27 @@ pub fn starts_hidden(args: impl IntoIterator<Item = String>, prefs: &Prefs) -> b
     prefs.start_in_background && args.into_iter().any(|a| a == BACKGROUND_ARG)
 }
 
+/// Left by a Dusk restarting into an update, for the Dusk it starts.
+///
+/// The restart passes on the command line it was given, so a Dusk that
+/// opened at sign-in hands `--background` to its replacement, which then
+/// starts in the tray: to the person who just pressed "Restart to update",
+/// Dusk closed and never came back. The marker says this launch is that
+/// restart, and is taken by the launch that reads it.
+const SHOW_MARKER: &str = "show-after-restart";
+
+/// Ask the next launch to show its window whatever its command line says.
+pub fn mark_show_next_launch(config_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    std::fs::write(config_dir.join(SHOW_MARKER), b"").map_err(|e| e.to_string())
+}
+
+/// Whether a restart asked this launch to show its window. Taken, so only
+/// the launch straight after it does.
+pub fn take_show_marker(config_dir: &Path) -> bool {
+    std::fs::remove_file(config_dir.join(SHOW_MARKER)).is_ok()
+}
+
 pub fn view(app: &AppHandle, prefs: Prefs) -> StartupView {
     StartupView {
         open_at_login: app.autolaunch().is_enabled().unwrap_or(false),
@@ -146,6 +168,17 @@ mod tests {
             ..Prefs::default()
         };
         assert!(!starts_hidden(args(&["dusk", BACKGROUND_ARG]), &prefs));
+    }
+
+    #[test]
+    fn the_launch_after_a_restart_shows_its_window_once() {
+        let dir = std::env::temp_dir().join(format!("dusk-show-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!take_show_marker(&dir));
+        mark_show_next_launch(&dir).unwrap();
+        assert!(take_show_marker(&dir));
+        assert!(!take_show_marker(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

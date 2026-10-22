@@ -170,6 +170,9 @@ export async function restartToUpdate() {
   set({ kind: "installing", version });
   try {
     await channel.install();
+    // So the new Dusk opens its window even if this one was started in the
+    // tray at sign-in: the restart hands on the same command line.
+    await invoke("prepare_restart");
     await relaunch();
   } catch (err) {
     set({ kind: "error", message: describe(err) });

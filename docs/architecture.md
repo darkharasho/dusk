@@ -148,6 +148,31 @@ guarded against is a Sunshine whose configuration keys have moved out from
 under `sunshineSchema.ts` — the schema degrades gracefully by design, but a
 host that silently lost half its settings screen is still a bad day.
 
+## Clipboard while streaming
+
+Text copied on either machine can be pasted on the other for as long as a
+stream runs. The stream window on the client (A) reads and writes A's
+clipboard, since it has focus and so works on every platform; it talks to
+A's Dusk over the control socket. A's Dusk keeps one connection to B's Dusk
+for the stream.
+
+```
+A (client)                                  B (host)
+stream window ⇄ Dusk ═══ TLS, port 47851 ═══ Dusk ⇄ B's clipboard
+   ⇄ A's clipboard   (control socket)
+```
+
+The connection has its own port, 47851 (`clipboard::PORT`), apart from the
+peer port, 47850. It is mutual TLS with no CA: each side pins the other's
+certificate as recorded at pairing (A presents its client identity, B its
+host certificate), and resumption is off so the pin is checked every time.
+B admits a connection only while sharing is on, its desktop is supported
+(not GNOME on Wayland) and it is hosting a stream, which it rechecks every
+5 s. A plain `Declined` or `Hello` line precedes the handshake, so an older
+Dusk with nothing listening just means no sync. Text only, up to 1 MB;
+nothing from before the stream is sent, and clipboard text is never logged
+or stored. See `src-tauri/src/clipboard/`.
+
 ## What this deliberately is not
 
 The project rules out accounts, rendezvous services, and NAT traversal. So the

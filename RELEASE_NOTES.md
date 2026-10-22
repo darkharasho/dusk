@@ -6,6 +6,9 @@ Fewer sync, sign-in and pairing errors, and a title bar that behaves the same on
 
 ## Changes
 
+- **Your clipboard follows you through a stream.** Text you copy on either
+  machine can be pasted on the other while a stream is running. It is on by
+  default and can be turned off with **Share clipboard while streaming**.
 - **Your machines show up without a restart.** A machine signed in after
   Dusk opened was not counted as yours until Dusk was started again. The
   list is now re-read every few minutes and whenever you press Refresh.

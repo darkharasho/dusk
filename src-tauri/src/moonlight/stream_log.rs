@@ -74,7 +74,7 @@ impl StreamLog {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn create_in_for_tests(dir: &Path) -> Self {
         Self::create_in(dir, PART_BYTES).unwrap()
     }

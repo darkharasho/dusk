@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::state::AppState;
 use github::{Entry, Poll, User};
@@ -85,6 +85,18 @@ pub struct AccountMachine {
     pub id: String,
     pub name: String,
     pub addresses: Vec<String>,
+}
+
+/// What this machine knows of the account's machine list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Membership {
+    /// Not known: no list fetched yet, a list without this machine on it,
+    /// or a sign-in that could not be read or used. Never acted on as if
+    /// nobody were on the account.
+    Unknown,
+    SignedOut,
+    /// The ids of the machines the account lists.
+    Machines(std::collections::HashSet<String>),
 }
 
 /// What a signed pairing request carries.
@@ -169,6 +181,9 @@ struct Cached {
     read: bool,
     account: Option<Account>,
     persistent: bool,
+    /// Something is stored but cannot be used. Behaves as signed out for
+    /// anything that degrades, but is not a sign-out: see [`Membership`].
+    unusable: bool,
 }
 
 #[derive(Default)]
@@ -193,6 +208,9 @@ pub struct AccountState {
     signing_in: Mutex<Option<tokio::task::AbortHandle>>,
     reader: Reader,
     writer: Writer,
+    /// Told whenever the machine list is read afresh, so whatever depends
+    /// on who is on the account can catch up.
+    changed: Arc<Notify>,
 }
 
 impl Default for AccountState {
@@ -206,6 +224,7 @@ impl Default for AccountState {
                 Some(s) => write_keystore(s),
                 None => clear_keystore(),
             }),
+            changed: Arc::default(),
         }
     }
 }
@@ -249,6 +268,15 @@ pub struct AccountEvent {
 }
 
 impl AccountState {
+    /// An account state that tells `changed` each time the machine list is
+    /// read afresh.
+    pub fn nudging(changed: Arc<Notify>) -> Self {
+        Self {
+            changed,
+            ..Default::default()
+        }
+    }
+
     /// Best-effort: `None` covers both "nothing stored" and "could not tell".
     ///
     /// Fine for anything that degrades — a grid that shows signed-out, a
@@ -286,10 +314,15 @@ impl AccountState {
                 // never open a box addressed to any of them. So a minted key
                 // is written back here, once, before anything uses it.
                 let minted = stored.as_ref().is_some_and(|s| s.box_key.is_none());
+                cached.unusable = false;
                 cached.account = stored.and_then(|s| match Account::from_stored(s) {
                     Ok(account) => Some(account),
                     Err(err) => {
-                        eprintln!("dusk: the stored sign-in is unusable ({err}); signed out");
+                        eprintln!(
+                            "dusk: the stored sign-in is unusable ({err}); \
+                             treated as signed out, but not as a sign-out"
+                        );
+                        cached.unusable = true;
                         None
                     }
                 });
@@ -332,6 +365,7 @@ impl AccountState {
             }
         };
         cached.account = account;
+        cached.unusable = false;
         cached.read = true;
     }
 
@@ -548,10 +582,11 @@ impl AccountState {
         let mut cached = self.cached.write().await;
         cached.read = false;
         cached.account = None;
+        cached.unusable = false;
     }
 
     async fn refresh_list(&self, http: &reqwest::Client) -> Result<(), String> {
-        match self.fetch_list(http).await {
+        let fetched = match self.fetch_list(http).await {
             // Not a retry for its own sake: the token being refused is
             // exactly the case where the keystore may already hold a better
             // one. Once only, so a genuinely dead sign-in still ends as an
@@ -561,7 +596,13 @@ impl AccountState {
                 self.fetch_list(http).await
             }
             other => other,
+        };
+        // Only a list that was actually read: a failed fetch leaves the old
+        // one in place, and nothing should act as though it changed.
+        if fetched.is_ok() {
+            self.changed.notify_one();
         }
+        fetched
     }
 
     async fn fetch_list(&self, http: &reqwest::Client) -> Result<(), String> {
@@ -632,17 +673,28 @@ impl AccountState {
 
     /// Sign this pairing request, if this machine is signed in.
     pub async fn proof(&self, pin: &str) -> Option<Proof> {
+        self.sign(&keys::pair_message(pin)).await
+    }
+
+    /// Sign `message` as this machine, if it is signed in.
+    pub async fn sign(&self, message: &[u8]) -> Option<Proof> {
         let account = self.load().await?;
         Some(Proof {
             account: account.user.id,
             machine: account.key.id.clone(),
-            signature: account.key.sign_pair(pin),
+            signature: account.key.sign(message),
         })
     }
 
     /// Whether `proof` shows the request comes from another machine on this
     /// machine's own account.
     pub async fn vouches(&self, http: &reqwest::Client, proof: &Proof, pin: &str) -> bool {
+        self.vouches_for(http, proof, &keys::pair_message(pin))
+            .await
+    }
+
+    /// [`Self::vouches`] over any signed message, not only a PIN.
+    pub async fn vouches_for(&self, http: &reqwest::Client, proof: &Proof, message: &[u8]) -> bool {
         let Some(account) = self.load().await else {
             return false;
         };
@@ -661,16 +713,77 @@ impl AccountState {
                 eprintln!("dusk: could not read the account's machine list: {err}");
             }
         }
-        vouch(account.user.id, &self.list.read().await.entries, proof, pin)
+        vouch(
+            account.user.id,
+            &self.list.read().await.entries,
+            proof,
+            message,
+        )
+    }
+
+    /// [`Self::membership`] from what this run already knows, never reading
+    /// the keystore: for background work, which must not be what puts a
+    /// keystore prompt on screen. Nothing known yet is `Unknown`.
+    pub async fn known_membership(&self) -> Membership {
+        let own = {
+            let cached = self.cached.read().await;
+            if !cached.read || cached.unusable {
+                return Membership::Unknown;
+            }
+            match &cached.account {
+                Some(account) => account.key.id.clone(),
+                None => return Membership::SignedOut,
+            }
+        };
+        self.listed(&own).await
+    }
+
+    /// Which machines the account lists, as last fetched. A list that was
+    /// never fetched is `Unknown`, not empty: the two must not be confused.
+    pub async fn membership(&self) -> Membership {
+        // Only a keystore that answers "nothing stored" means signed out. One
+        // that will not answer is unknown, or a locked keyring would read as
+        // a sign-out and unpair every machine.
+        // A stored sign-in that cannot be used is unknown for the same
+        // reason.
+        let own = match self.stored().await {
+            Ok(Some(account)) => account.key.id,
+            Ok(None) => {
+                // Asked again rather than trusted from the read above, so a
+                // reread in between can only make it unknown.
+                let cached = self.cached.read().await;
+                let signed_out = cached.read && cached.account.is_none() && !cached.unusable;
+                return if signed_out {
+                    Membership::SignedOut
+                } else {
+                    Membership::Unknown
+                };
+            }
+            Err(_) => return Membership::Unknown,
+        };
+        self.listed(&own).await
+    }
+
+    /// The list as last fetched, if it is one this machine can believe.
+    ///
+    /// This machine is always on its own account's list, so a list without
+    /// it is not an answer: the wrong list, an emptied one, or a misread.
+    /// Taken at its word it would say none of your machines are yours.
+    async fn listed(&self, own: &str) -> Membership {
+        let list = self.list.read().await;
+        if list.fetched.is_none() || !list.entries.contains_key(own) {
+            return Membership::Unknown;
+        }
+        Membership::Machines(list.entries.keys().cloned().collect())
     }
 }
 
 /// The check itself, with nothing to fetch.
-fn vouch(own_account: u64, list: &HashMap<String, Entry>, proof: &Proof, pin: &str) -> bool {
+fn vouch(own_account: u64, list: &HashMap<String, Entry>, proof: &Proof, message: &[u8]) -> bool {
     proof.account == own_account
         && list
             .get(&proof.machine)
-            .is_some_and(|entry| keys::verify_pair(&entry.key, pin, &proof.signature))
+            .is_some_and(|entry| keys::verify(&entry.key, message, &proof.signature))
 }
 
 /// Start signing in. Returns the code to show; the rest happens in the
@@ -798,6 +911,11 @@ pub async fn sign_out(state: &AppState) -> Result<(), String> {
     }
     state.account.save(None).await;
     *state.account.list.write().await = MachineList::default();
+    // After the sign-in is cleared, never before: the reconciler asks for
+    // the membership, which only reads as signed out once the stored
+    // account is gone. Nudged earlier, it could still see the old list and
+    // keep every pairing until the next tick.
+    state.reconciler.nudge();
     Ok(())
 }
 
@@ -867,6 +985,17 @@ mod identity_tests {
             // which would delete the developer's own sign-in.
             writer: Arc::new(|_| Ok(())),
             ..Default::default()
+        }
+    }
+
+    fn entry() -> Entry {
+        Entry {
+            name: "Desk".into(),
+            key: String::new(),
+            addresses: Vec::new(),
+            box_key: None,
+            sealed: None,
+            updated: None,
         }
     }
 
@@ -1051,6 +1180,116 @@ mod identity_tests {
     }
 
     #[tokio::test]
+    async fn membership_is_unknown_until_a_list_has_been_fetched() {
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        assert_eq!(state.membership().await, Membership::Unknown);
+
+        let signed_out = with_keystore(|| Ok(None));
+        assert_eq!(signed_out.membership().await, Membership::SignedOut);
+    }
+
+    #[tokio::test]
+    async fn known_membership_never_reads_the_keystore() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let stored = an_account(42);
+        let state = with_keystore(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(stored.clone()))
+        });
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+
+        // Once read, it answers as the full one does, still without a read.
+        assert_eq!(state.membership().await, Membership::Unknown);
+        let own = state.machine_id().await.unwrap();
+        {
+            let mut list = state.list.write().await;
+            list.entries.insert(own.clone(), entry());
+            list.fetched = Some(Instant::now());
+        }
+        assert_eq!(
+            state.known_membership().await,
+            Membership::Machines(std::collections::HashSet::from([own]))
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+
+        let failing = with_keystore(|| Err("keyring is locked".into()));
+        assert_eq!(failing.membership().await, Membership::Unknown);
+        assert_eq!(failing.known_membership().await, Membership::Unknown);
+    }
+
+    #[tokio::test]
+    async fn a_keystore_it_cannot_read_is_unknown_not_signed_out() {
+        let state = with_keystore(|| Err("keyring is locked".into()));
+        assert_eq!(state.membership().await, Membership::Unknown);
+    }
+
+    #[tokio::test]
+    async fn membership_lists_the_machines_once_fetched() {
+        let stored = an_account(42);
+        let own = stored.machine.clone();
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        {
+            let mut list = state.list.write().await;
+            list.entries.insert("aa".into(), entry());
+            list.entries.insert(own.clone(), entry());
+            // Any age counts: an old list still says who was on the account.
+            list.fetched = Some(Instant::now());
+        }
+        assert_eq!(
+            state.membership().await,
+            Membership::Machines(std::collections::HashSet::from(["aa".to_string(), own]))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_list_without_this_machine_is_unknown() {
+        // This machine is always on its own account's list. A list without
+        // it is the wrong list, an emptied one, or a misread, and taking it
+        // at its word would unpair every machine.
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        {
+            let mut list = state.list.write().await;
+            list.entries.insert("aa".into(), entry());
+            list.fetched = Some(Instant::now());
+        }
+        assert_eq!(state.membership().await, Membership::Unknown);
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+
+        state.list.write().await.entries.clear();
+        assert_eq!(state.membership().await, Membership::Unknown);
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+    }
+
+    #[tokio::test]
+    async fn a_stored_sign_in_it_cannot_use_is_unknown_not_signed_out() {
+        let mut broken = an_account(42);
+        broken.key = "not a key".into();
+        let state = with_keystore(move || Ok(Some(broken.clone())));
+        assert_eq!(state.membership().await, Membership::Unknown);
+        assert_eq!(state.known_membership().await, Membership::Unknown);
+        // Still nothing to sign with: everything else degrades as before.
+        assert!(state.load().await.is_none());
+
+        // Signing out on purpose is a sign-out.
+        state.save(None).await;
+        assert_eq!(state.membership().await, Membership::SignedOut);
+        assert_eq!(state.known_membership().await, Membership::SignedOut);
+    }
+
+    #[tokio::test]
+    async fn signing_a_message_is_what_a_pin_proof_signs() {
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        let by_pin = state.proof("1234").await.unwrap();
+        let by_message = state.sign(&keys::pair_message("1234")).await.unwrap();
+        assert_eq!(by_pin, by_message);
+    }
+
+    #[tokio::test]
     async fn load_still_flattens_for_callers_that_degrade() {
         // `load` is deliberately lossy and that is fine for a grid showing
         // signed-out or a pairing falling back to a PIN. The point is that
@@ -1089,13 +1328,23 @@ mod tests {
     #[test]
     fn a_listed_machine_on_the_same_account_is_vouched_for() {
         let key = MachineKey::generate().unwrap();
-        assert!(vouch(7, &listed(&key), &proof(&key, 7, "1234"), "1234"));
+        assert!(vouch(
+            7,
+            &listed(&key),
+            &proof(&key, 7, "1234"),
+            &keys::pair_message("1234")
+        ));
     }
 
     #[test]
     fn another_account_is_not_vouched_for_even_with_a_good_signature() {
         let key = MachineKey::generate().unwrap();
-        assert!(!vouch(7, &listed(&key), &proof(&key, 8, "1234"), "1234"));
+        assert!(!vouch(
+            7,
+            &listed(&key),
+            &proof(&key, 8, "1234"),
+            &keys::pair_message("1234")
+        ));
     }
 
     #[test]
@@ -1106,9 +1355,14 @@ mod tests {
             7,
             &listed(&key),
             &proof(&stranger, 7, "1234"),
-            "1234"
+            &keys::pair_message("1234")
         ));
         // A signature lifted from one pairing does not cover another PIN.
-        assert!(!vouch(7, &listed(&key), &proof(&key, 7, "1234"), "9999"));
+        assert!(!vouch(
+            7,
+            &listed(&key),
+            &proof(&key, 7, "1234"),
+            &keys::pair_message("9999")
+        ));
     }
 }

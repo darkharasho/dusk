@@ -40,6 +40,10 @@ pub struct AppState {
     /// The GitHub sign-in that lets this machine's own other machines pair
     /// without being asked.
     pub account: crate::account::AccountState,
+    /// Keeps the host's list of paired machines in line with the account.
+    pub reconciler: crate::cert_pairing::reconcile::Reconciler,
+    /// Pairing again with machines of yours whose certificate changed.
+    pub repairs: crate::poller::RePairs,
     /// Devices this Dusk currently has a Moonlight session open with.
     ///
     /// The host cannot tell us this: Sunshine reports that *a* session
@@ -183,8 +187,12 @@ pub fn tls_client(identity: &ClientIdentity) -> Option<reqwest::Client> {
 
     config.resumption = rustls::client::Resumption::disabled();
 
+    // `tls_info` keeps the certificate the host presented on each response,
+    // which is how the poller notices a host that minted a new one. reqwest
+    // honours it for a preconfigured rustls config as for its own.
     client_builder()
         .use_preconfigured_tls(config)
+        .tls_info(true)
         .build()
         .map_err(|err| eprintln!("dusk: could not build TLS client: {err}"))
         .ok()
@@ -200,6 +208,9 @@ impl AppState {
         tls: Option<reqwest::Client>,
         moonlight: Option<Moonlight>,
     ) -> Self {
+        // Shared, so a change to the account wakes the reconciler without
+        // the account knowing anything about it.
+        let account_changed = Arc::new(Notify::new());
         Self {
             registry: RwLock::new(registry),
             host,
@@ -210,7 +221,9 @@ impl AppState {
             moonlight,
             credentials: CredentialStore::default(),
             peer: Default::default(),
-            account: Default::default(),
+            account: crate::account::AccountState::nudging(account_changed.clone()),
+            reconciler: crate::cert_pairing::reconcile::Reconciler::new(account_changed),
+            repairs: Default::default(),
             sessions: RwLock::new(HashMap::new()),
             browsing: AtomicBool::new(false),
             discovering: AtomicBool::new(false),

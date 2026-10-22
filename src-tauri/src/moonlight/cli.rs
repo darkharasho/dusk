@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::OnceCell;
 
 /// Pairing waits on a person walking to another machine and typing four
 /// digits, so it gets a generous budget.
@@ -46,6 +47,10 @@ pub enum MoonlightError {
     TimedOut,
     #[error("{0}")]
     Failed(String),
+    /// Another copy of the client is open and holds its settings, so nothing
+    /// can be written to them until it closes.
+    #[error("Close the stream window to finish pairing.")]
+    ClientOpen,
 }
 
 /// Which Moonlight Dusk ended up driving.
@@ -79,6 +84,9 @@ pub enum ClientKind {
 pub struct Moonlight {
     binary: PathBuf,
     kind: ClientKind,
+    /// Whether this client can record a host it never paired with itself,
+    /// once it has answered. See [`Moonlight::supports_add_host`].
+    add_host: OnceCell<bool>,
 }
 
 /// Stream settings Dusk passes through. Everything omitted is left to
@@ -140,9 +148,14 @@ impl Moonlight {
     /// what establishes the [`ClientKind`].
     #[cfg(test)]
     pub fn at(binary: PathBuf) -> Self {
+        Self::new(binary, ClientKind::Unknown)
+    }
+
+    fn new(binary: PathBuf, kind: ClientKind) -> Self {
         Self {
             binary,
-            kind: ClientKind::Unknown,
+            kind,
+            add_host: OnceCell::new(),
         }
     }
 
@@ -180,10 +193,7 @@ impl Moonlight {
                 // Deliberately not claimed as either one. Someone pointing
                 // Dusk at a binary may be pointing it at the fork or at a
                 // packaged stock build, and the UI should not assert which.
-                return Some(Self {
-                    binary: path,
-                    kind: ClientKind::Unknown,
-                });
+                return Some(Self::new(path, ClientKind::Unknown));
             }
             eprintln!("dusk: DUSK_MOONLIGHT_BIN is set but {path:?} is not a file");
         }
@@ -194,20 +204,14 @@ impl Moonlight {
         // overlay is simply absent, which reads as a bug in Dusk.
         if let Some(path) = dusk_client(resources).into_iter().find(|p| p.is_file()) {
             eprintln!("dusk: using Dusk's Moonlight client at {path:?}");
-            return Some(Self {
-                binary: path,
-                kind: ClientKind::Dusk,
-            });
+            return Some(Self::new(path, ClientKind::Dusk));
         }
 
         let found = candidates().into_iter().find(|p| p.is_file());
         if let Some(path) = &found {
             eprintln!("dusk: using system Moonlight at {path:?}; the in-stream overlay will be unavailable");
         }
-        found.map(|binary| Self {
-            binary,
-            kind: ClientKind::System,
-        })
+        found.map(|binary| Self::new(binary, ClientKind::System))
     }
 
     /// Pair with a host, sending the PIN the user was shown.
@@ -218,6 +222,63 @@ impl Moonlight {
         self.run(&["pair", host, "--pin", pin], PAIR_TIMEOUT)
             .await
             .map(drop)
+    }
+
+    /// Whether this client can record a host Dusk paired it with, so pairing
+    /// needs no PIN. Only Dusk's own fork can, and only a fork new enough to
+    /// say so on `--version`; asked once per run.
+    ///
+    /// A stock client is never asked. It has no such action, and an
+    /// argument it does not know starts its whole interface.
+    pub async fn supports_add_host(&self) -> bool {
+        if self.kind != ClientKind::Dusk {
+            return false;
+        }
+        // Only an answer is kept. A client that could not be asked, timed
+        // out or would not start, is asked again next time.
+        let answer = self
+            .add_host
+            .get_or_try_init(|| async {
+                let stdout = self.run(&["--version"], ACTION_TIMEOUT).await?;
+                Ok::<_, MoonlightError>(advertises_add_host(&stdout))
+            })
+            .await;
+        match answer {
+            Ok(supported) => *supported,
+            Err(err) => {
+                eprintln!("dusk: could not ask the client what it supports: {err}");
+                false
+            }
+        }
+    }
+
+    /// Record a host as paired, under the certificate it gave Dusk.
+    ///
+    /// `address` may carry the host's HTTP port, which is passed on as one.
+    /// The certificate goes through a file of its own for the length of the
+    /// call, because that is how the client takes one.
+    pub async fn add_host(
+        &self,
+        address: &str,
+        uuid: &str,
+        name: &str,
+        server_cert_pem: &str,
+    ) -> Result<(), MoonlightError> {
+        let cert = CertFile::write(server_cert_pem)
+            .map_err(|e| MoonlightError::Failed(format!("could not stage the certificate: {e}")))?;
+        let args = add_host_args(address, uuid, name, &cert.0);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = self.output(&args, ACTION_TIMEOUT).await?;
+        if output.status.success() {
+            return Ok(());
+        }
+        // 2 is the fork saying another copy of the client is open.
+        if output.status.code() == Some(2) {
+            return Err(MoonlightError::ClientOpen);
+        }
+        Err(MoonlightError::Failed(clean_stderr(
+            &String::from_utf8_lossy(&output.stderr),
+        )))
     }
 
     /// Ask the host to end whatever session is running.
@@ -309,6 +370,21 @@ impl Moonlight {
     }
 
     async fn run(&self, args: &[&str], budget: Duration) -> Result<String, MoonlightError> {
+        let output = self.output(args, budget).await?;
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        }
+
+        Err(MoonlightError::Failed(clean_stderr(
+            &String::from_utf8_lossy(&output.stderr),
+        )))
+    }
+
+    async fn output(
+        &self,
+        args: &[&str],
+        budget: Duration,
+    ) -> Result<std::process::Output, MoonlightError> {
         // kill_on_drop matters here: on timeout the future below is dropped,
         // which drops the child, and without this the process would be left
         // running — which is exactly the hang we are guarding against.
@@ -321,21 +397,87 @@ impl Moonlight {
             .spawn()
             .map_err(|e| MoonlightError::Spawn(e.to_string()))?;
 
-        let output = match tokio::time::timeout(budget, child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => return Err(MoonlightError::Spawn(e.to_string())),
-            Err(_) => return Err(MoonlightError::TimedOut),
-        };
-
-        if output.status.success() {
-            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        match tokio::time::timeout(budget, child.wait_with_output()).await {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(e)) => Err(MoonlightError::Spawn(e.to_string())),
+            Err(_) => Err(MoonlightError::TimedOut),
         }
-
-        Err(MoonlightError::Failed(clean_stderr(
-            &String::from_utf8_lossy(&output.stderr),
-        )))
     }
 }
+
+/// The command line that records a paired host. `add-host` comes first,
+/// because the client picks its action from the first word it knows, and a
+/// host named `list` must not be read as one.
+fn add_host_args(address: &str, uuid: &str, name: &str, cert: &Path) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "add-host".into(),
+        crate::peer::host_part(address).into(),
+        "--uuid".into(),
+        uuid.into(),
+        "--name".into(),
+        name.into(),
+        "--server-cert".into(),
+        cert.to_string_lossy().into_owned(),
+    ];
+    if let Some(port) = port_part(address) {
+        args.push("--port".into());
+        args.push(port.to_string());
+    }
+    args
+}
+
+/// The port an address names, if it names one: `10.0.0.5:47989` and
+/// `[fe80::1]:47989` do, `10.0.0.5` and a bare `fe80::1` do not.
+fn port_part(address: &str) -> Option<u16> {
+    let port = match address.strip_prefix('[') {
+        Some(rest) => rest.split_once("]:")?.1,
+        None if address.matches(':').count() == 1 => address.split_once(':')?.1,
+        None => return None,
+    };
+    port.parse().ok()
+}
+
+/// A server certificate written out for the client to read, removed again
+/// when this is dropped.
+struct CertFile(PathBuf);
+
+impl CertFile {
+    fn write(pem: &str) -> std::io::Result<Self> {
+        use std::io::Write;
+        let mut id = [0u8; 8];
+        getrandom::getrandom(&mut id).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let path = std::env::temp_dir().join(format!(
+            "dusk-server-cert-{}.pem",
+            crate::install::download::hex(&id)
+        ));
+        // A fresh name, never an existing file: the temp directory is shared.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        // Owned before writing, so a failed write still removes the file.
+        let cert = CertFile(path);
+        file.write_all(pem.as_bytes())?;
+        Ok(cert)
+    }
+}
+
+impl Drop for CertFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// What the fork prints on `--version`, on stdout, when it has `add-host`.
+const ADD_HOST_MARKER: &str = "Dusk fork: add-host available";
+
+fn advertises_add_host(stdout: &str) -> bool {
+    stdout.lines().any(|line| line.trim() == ADD_HOST_MARKER)
+}
+
+/// The fork announces itself on stderr when it starts, ahead of anything
+/// that went wrong. Those lines are never the reason.
+const FORK_BANNER: &str = "Qt Info: Dusk fork:";
 
 const NO_REASON: &str = "The stream failed but gave no reason.";
 
@@ -356,10 +498,9 @@ fn clean_stderr(stderr: &str) -> String {
 /// plumbing, the last is the reason. Failing that, the log file the banner
 /// points at, which is where a stream's failures actually go.
 fn reason(stderr: &str) -> Option<String> {
-    let last = stderr
-        .lines()
-        .map(str::trim)
-        .rfind(|line| !line.is_empty() && !line.starts_with(LOG_BANNER));
+    let last = stderr.lines().map(str::trim).rfind(|line| {
+        !line.is_empty() && !line.starts_with(LOG_BANNER) && !line.contains(FORK_BANNER)
+    });
     if let Some(line) = last {
         return Some(line.to_string());
     }
@@ -911,11 +1052,167 @@ mod tests {
             (ClientKind::Unknown, None),
         ];
         for (kind, expected) in kinds {
-            let client = Moonlight {
-                binary: PathBuf::from("/nowhere"),
-                kind,
-            };
+            let client = Moonlight::new(PathBuf::from("/nowhere"), kind);
             assert_eq!(client.overlay(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stock_client_is_never_asked_to_add_a_host() {
+        // Only Dusk's fork has the action. A stock client handed one would
+        // start its whole interface instead, so it is not even asked.
+        let client = Moonlight::new(a_real_file(), ClientKind::System);
+        assert!(!client.supports_add_host().await);
+        assert!(client.add_host.get().is_none(), "the client was run");
+    }
+
+    #[test]
+    fn the_capability_line_is_found_in_version_output() {
+        // Captured from the fork's `--version`.
+        assert!(advertises_add_host(
+            "Moonlight 6.1.0\nDusk fork: add-host available\n"
+        ));
+        assert!(advertises_add_host(
+            "Moonlight 6.1.0\r\nDusk fork: add-host available\r\n"
+        ));
+        // A stock client, or a fork from before the action.
+        assert!(!advertises_add_host("Moonlight 6.1.0\n"));
+        assert!(!advertises_add_host(""));
+    }
+
+    #[test]
+    fn add_host_comes_first_and_a_port_is_passed_as_one() {
+        let cert = Path::new("/tmp/c.pem");
+        assert_eq!(
+            add_host_args("10.0.0.5:47989", "HOST-ID", "Desk", cert),
+            [
+                "add-host",
+                "10.0.0.5",
+                "--uuid",
+                "HOST-ID",
+                "--name",
+                "Desk",
+                "--server-cert",
+                "/tmp/c.pem",
+                "--port",
+                "47989"
+            ]
+        );
+        assert_eq!(add_host_args("10.0.0.5", "H", "D", cert).len(), 8);
+        assert_eq!(port_part("[fe80::1]:48000"), Some(48000));
+        assert_eq!(port_part("fe80::1"), None);
+        assert_eq!(port_part("gaming-pc.local"), None);
+    }
+
+    #[test]
+    fn the_forks_startup_lines_are_not_the_reason() {
+        let stderr = "00:00:00 - Qt Info: Dusk fork: in-stream overlay menu available\n\
+                      00:00:00 - Qt Info: Dusk fork: add-host available\n\
+                      Not a PEM certificate: /tmp/x.pem\n";
+        assert_eq!(clean_stderr(stderr), "Not a PEM certificate: /tmp/x.pem");
+    }
+
+    /// An executable script at a fresh path in the temp directory.
+    ///
+    /// Copied into place by a child process, so this process never holds the
+    /// file open for writing. Writing it here, even under another name and
+    /// renamed, lost a race: another test forking while the write was open
+    /// hands its child a copy of that descriptor, and until the child execs,
+    /// running the script fails with "text file busy". A rename keeps the
+    /// same file, so it does not help; a copy made elsewhere does.
+    #[cfg(unix)]
+    fn a_script(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("dusk-fake-client-{name}-{}", std::process::id()));
+        let source = dir.join(format!(
+            "dusk-fake-client-{name}-{}.source",
+            std::process::id()
+        ));
+        std::fs::write(&source, body).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let installed = std::process::Command::new("install")
+            .args(["-m", "0755"])
+            .arg(&source)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(installed.success(), "could not install {}", path.display());
+        let _ = std::fs::remove_file(&source);
+        path
+    }
+
+    /// A stand-in client: a script that checks it was handed a certificate
+    /// file and then exits with `code`, saying `says` on stderr.
+    #[cfg(unix)]
+    fn a_client_exiting(name: &str, code: i32, says: &str) -> Moonlight {
+        let path = a_script(
+            name,
+            &format!(
+                "#!/bin/sh\n\
+                 [ \"$1\" = add-host ] && [ -f \"$8\" ] || exit 9\n\
+                 echo '00:00:00 - Qt Info: Dusk fork: add-host available' 1>&2\n\
+                 echo '{says}' 1>&2\n\
+                 exit {code}\n"
+            ),
+        );
+        Moonlight::new(path, ClientKind::Dusk)
+    }
+
+    /// A client that could not be asked is asked again next time, rather
+    /// than taken for one without the action until Dusk restarts.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_version_check_is_not_remembered() {
+        let ready =
+            std::env::temp_dir().join(format!("dusk-fake-client-ready-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ready);
+        let path = a_script(
+            "version",
+            &format!(
+                "#!/bin/sh\n\
+                 [ -f '{}' ] || exit 1\n\
+                 echo 'Moonlight 6.1.0'\n\
+                 echo 'Dusk fork: add-host available'\n",
+                ready.display()
+            ),
+        );
+        let client = Moonlight::new(path.clone(), ClientKind::Dusk);
+
+        assert!(!client.supports_add_host().await);
+        assert!(client.add_host.get().is_none(), "a failure was cached");
+
+        std::fs::write(&ready, b"").unwrap();
+        assert!(client.supports_add_host().await);
+        assert_eq!(client.add_host.get(), Some(&true));
+
+        let _ = std::fs::remove_file(&ready);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_open_client_is_told_apart_from_a_failure() {
+        let cert = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+
+        let client = a_client_exiting("stored", 0, "");
+        assert!(client.add_host("10.0.0.5", "H", "D", cert).await.is_ok());
+
+        let client = a_client_exiting("open", 2, "Another Dusk Stream client is running");
+        assert!(matches!(
+            client.add_host("10.0.0.5", "H", "D", cert).await,
+            Err(MoonlightError::ClientOpen)
+        ));
+
+        let client = a_client_exiting("failed", 1, "Cannot write the client settings");
+        assert!(matches!(
+            client.add_host("10.0.0.5", "H", "D", cert).await,
+            Err(MoonlightError::Failed(m)) if m == "Cannot write the client settings"
+        ));
+        for name in ["stored", "open", "failed"] {
+            let _ = std::fs::remove_file(
+                std::env::temp_dir()
+                    .join(format!("dusk-fake-client-{name}-{}", std::process::id())),
+            );
         }
     }
 }

@@ -15,6 +15,12 @@
 //! out, the person already said yes by signing both machines in, and
 //! nothing is asked. See [`crate::account`].
 //!
+//! Between two machines on the same account, a certificate pairing comes
+//! first: each sends the other its certificate, signed for the receiver, and
+//! no PIN is involved (see [`crate::cert_pairing`]). The PIN flow below is
+//! what everything else uses, and what a certificate pairing falls back to
+//! when the other side is too old, declines, or does not finish.
+//!
 //! Anyone else is turned away, unless this machine has Let other devices
 //! pair on ([`crate::store::Store::allow_other_devices`]). Then the host
 //! asks instead: one Allow press, showing which machine is asking — the
@@ -39,6 +45,20 @@
 //!                     {"type":"accepted"}           the PIN is in Sunshine
 //!                     {"type":"declined","reason":"..."}
 //! ```
+//!
+//! A signed-in machine can instead pair with no PIN at all, by trading
+//! certificates:
+//!
+//! ```text
+//! connecting → host   {"type":"pair_cert","name":"Mac mini","cert":"-----BEGIN…",
+//!                      "proof":{"account":1,"machine":"…","signature":"…"}}
+//! host → connecting   {"type":"paired","server_cert":"-----BEGIN…","uniqueid":"…",
+//!                      "ready":true,"proof":{"account":1,"machine":"…","signature":"…"}}
+//!                     {"type":"declined","reason":"..."}
+//! ```
+//!
+//! A Dusk too old to know `pair_cert` declines it like any other request it
+//! does not understand.
 //!
 //! A connection refused means no Dusk is listening there, and the
 //! connecting side falls back to showing the PIN.
@@ -79,8 +99,16 @@ pub const PORT: u16 = 47850;
 /// timeout, so the client is still waiting when the answer comes.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// A request line is a few dozen bytes; anything long is not one.
-const MAX_LINE: usize = 1024;
+/// How long the connecting side waits on an answer: the host's own wait,
+/// and time on top for whatever it does once allowed. A pairing by
+/// certificate needs the room too, since the host may restart before it
+/// replies.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(ANSWER_TIMEOUT.as_secs() + 30);
+
+/// The longest line read from a peer, 16 KiB. A request is small, but a
+/// certificate pairing carries PEM certificates and a signature; some reads
+/// allow a multiple of this.
+const MAX_LINE: usize = 16 * 1024;
 
 pub const PAIR_REQUEST_EVENT: &str = "dusk://pair-request";
 pub const PAIR_REQUEST_ENDED_EVENT: &str = "dusk://pair-request-ended";
@@ -95,6 +123,21 @@ pub enum Message {
         /// the PIN, which lets a machine on the same account skip the prompt.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proof: Option<crate::account::Proof>,
+    },
+    /// Pair by certificate, with no PIN: the asking machine's certificate and
+    /// a signature proving it speaks for the account. Only ever sent signed in.
+    PairCert {
+        name: String,
+        cert: String,
+        proof: crate::account::Proof,
+    },
+    /// The host's side of a certificate pairing: its own certificate, the id
+    /// to pair under, whether it is ready to be streamed from, and its proof.
+    Paired {
+        server_cert: String,
+        uniqueid: String,
+        ready: bool,
+        proof: crate::account::Proof,
     },
     Waiting,
     Accepted,
@@ -243,6 +286,10 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
                 }
                 None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
             }
+        }
+        Ok(Message::PairCert { name, cert, proof }) => {
+            let name = clean_name(&name).unwrap_or_else(|| address.clone());
+            crate::cert_pairing::host::handle(&state, &address, name, cert, proof).await
         }
         Ok(Message::Identify) => Message::Identity {
             machine: state.account.machine_id().await,
@@ -498,8 +545,7 @@ async fn ask_at(
     let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
     let mut on_waiting = Some(on_waiting);
     loop {
-        let next =
-            tokio::time::timeout(ANSWER_TIMEOUT + Duration::from_secs(30), lines.next_line());
+        let next = tokio::time::timeout(REPLY_TIMEOUT, lines.next_line());
         let line = match next.await {
             Ok(Ok(Some(line))) => line,
             // Something answered on the port and then went away without a
@@ -518,6 +564,64 @@ async fn ask_at(
             _ if on_waiting.is_some() => return Outcome::NoPeer,
             _ => return Outcome::Declined("The other machine answered something odd.".into()),
         }
+    }
+}
+
+/// How asking another Dusk to pair by certificate went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CertOutcome {
+    /// No Dusk there, or one that could not take the request. Fall back to
+    /// the PIN.
+    NoPeer,
+    /// The host trusts this machine's certificate now. `ready` is false
+    /// while it waits for a stream to end before it can stream to us.
+    Paired {
+        server_cert: String,
+        uniqueid: String,
+        ready: bool,
+        proof: crate::account::Proof,
+    },
+    Declined(String),
+}
+
+/// Ask the Dusk at `address` to pair by certificate, with `request` a
+/// [`Message::PairCert`].
+///
+/// Only a refusal the host put into words is `Declined`. Everything else is
+/// `NoPeer`: a Dusk too old to know the request reads only part of a line
+/// this long and may reset the connection before it says anything.
+pub async fn ask_cert(address: &str, request: Message) -> CertOutcome {
+    ask_cert_at(address, PORT, request).await
+}
+
+async fn ask_cert_at(address: &str, port: u16, request: Message) -> CertOutcome {
+    let connect = TcpStream::connect((address, port));
+    let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), connect).await else {
+        return CertOutcome::NoPeer;
+    };
+    let (read, mut write) = stream.into_split();
+    if send(&mut write, &request).await.is_err() {
+        return CertOutcome::NoPeer;
+    }
+
+    let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
+    let Ok(Ok(Some(line))) = tokio::time::timeout(REPLY_TIMEOUT, lines.next_line()).await else {
+        return CertOutcome::NoPeer;
+    };
+    match serde_json::from_str::<Message>(&line) {
+        Ok(Message::Paired {
+            server_cert,
+            uniqueid,
+            ready,
+            proof,
+        }) => CertOutcome::Paired {
+            server_cert,
+            uniqueid,
+            ready,
+            proof,
+        },
+        Ok(Message::Declined { reason }) => CertOutcome::Declined(reason),
+        _ => CertOutcome::NoPeer,
     }
 }
 
@@ -793,6 +897,110 @@ mod tests {
         assert_eq!(serde_json::from_str::<Old>(&line).unwrap(), Old::Display);
     }
 
+    fn sample_proof() -> crate::account::Proof {
+        crate::account::Proof {
+            account: 1,
+            machine: "ab".repeat(16),
+            signature: "cd".repeat(32),
+        }
+    }
+
+    fn crlf_pem() -> String {
+        let body =
+            "MIIDXTCCAkWgAwIBAgIJAKoK/heBjcOuMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV\r\n".repeat(30);
+        format!("-----BEGIN CERTIFICATE-----\r\n{body}-----END CERTIFICATE-----\r\n")
+    }
+
+    #[test]
+    fn a_pair_cert_line_with_a_crlf_certificate_fits_and_round_trips() {
+        let cert = crlf_pem();
+        assert!(cert.len() >= 2000);
+        let ask = Message::PairCert {
+            name: "Mac mini".into(),
+            cert,
+            proof: sample_proof(),
+        };
+        let line = serde_json::to_string(&ask).unwrap();
+        assert!(line.len() < MAX_LINE);
+        assert_eq!(serde_json::from_str::<Message>(&line).unwrap(), ask);
+
+        let reply = Message::Paired {
+            server_cert: crlf_pem(),
+            uniqueid: "0123456789ABCDEF".into(),
+            ready: true,
+            proof: sample_proof(),
+        };
+        let line = serde_json::to_string(&reply).unwrap();
+        assert!(line.len() < MAX_LINE);
+        assert_eq!(serde_json::from_str::<Message>(&line).unwrap(), reply);
+    }
+
+    #[test]
+    fn an_older_dusk_reads_pair_cert_as_something_it_declines() {
+        // Every message as 0.3.x declared it; `serve` declines whatever
+        // does not parse as one of these.
+        #[derive(Debug, Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum Old {
+            Pair {
+                pin: String,
+                name: String,
+            },
+            Waiting,
+            Accepted,
+            Declined {
+                reason: String,
+            },
+            Display,
+            DisplaySize {
+                width: u32,
+                height: u32,
+            },
+            Identify,
+            Identity {
+                machine: Option<String>,
+                name: String,
+            },
+        }
+        let line = serde_json::to_string(&Message::PairCert {
+            name: "Mac mini".into(),
+            cert: crlf_pem(),
+            proof: sample_proof(),
+        })
+        .unwrap();
+        assert!(serde_json::from_str::<Old>(&line).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_host_too_old_for_pair_cert_declines_over_the_wire() {
+        let port = host_expecting(
+            |m| matches!(m, Message::PairCert { .. }),
+            r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
+        )
+        .await;
+        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (read, mut write) = stream.into_split();
+        send(
+            &mut write,
+            &Message::PairCert {
+                name: "Mac mini".into(),
+                cert: crlf_pem(),
+                proof: sample_proof(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
+        let line = lines.next_line().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Message>(&line).unwrap(),
+            Message::Declined {
+                reason: "Dusk did not understand that request.".into()
+            }
+        );
+    }
+
     /// A stand-in host that answers one request with `reply`, checking that
     /// what it was asked matches `expect`.
     async fn host_expecting(expect: fn(&Message) -> bool, reply: &'static str) -> u16 {
@@ -934,5 +1142,88 @@ mod tests {
         let outcome = ask_at("127.0.0.1", port, "1234", None, || waited = true).await;
         assert_eq!(outcome, Outcome::Accepted);
         assert!(waited);
+    }
+
+    fn pair_cert_request() -> Message {
+        Message::PairCert {
+            name: "Mac mini".into(),
+            cert: crlf_pem(),
+            proof: sample_proof(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_paired_reply_travels_back_over_the_wire() {
+        let port = host_expecting(
+            |m| matches!(m, Message::PairCert { .. }),
+            r#"{"type":"paired","server_cert":"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n","uniqueid":"HOST-ID","ready":false,"proof":{"account":1,"machine":"abab","signature":"cdcd"}}"#,
+        )
+        .await;
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::Paired {
+                server_cert: "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+                    .into(),
+                uniqueid: "HOST-ID".into(),
+                ready: false,
+                proof: crate::account::Proof {
+                    account: 1,
+                    machine: "abab".into(),
+                    signature: "cdcd".into(),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_declined_and_anything_else_is_no_peer() {
+        let port = host_expecting(
+            |m| matches!(m, Message::PairCert { .. }),
+            r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
+        )
+        .await;
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::Declined("Dusk did not understand that request.".into())
+        );
+
+        let port = host_expecting(|m| matches!(m, Message::PairCert { .. }), "garbage").await;
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::NoPeer
+        );
+    }
+
+    #[tokio::test]
+    async fn a_host_that_hangs_up_on_a_long_line_is_no_peer() {
+        // An older Dusk reads only so much of a request and closes, which
+        // may reset the connection before any answer.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut first = [0u8; 64];
+            let _ = stream.read(&mut first).await;
+            drop(stream);
+        });
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::NoPeer
+        );
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        assert_eq!(
+            ask_cert_at("127.0.0.1", port, pair_cert_request()).await,
+            CertOutcome::NoPeer
+        );
+    }
+
+    #[test]
+    fn the_client_waits_out_a_host_that_restarts_before_answering() {
+        // The host may restart itself before it replies, which takes up to
+        // about forty seconds.
+        assert!(REPLY_TIMEOUT >= Duration::from_secs(45));
     }
 }

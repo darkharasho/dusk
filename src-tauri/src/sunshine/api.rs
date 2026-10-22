@@ -362,22 +362,25 @@ impl SunshineApi {
     /// while answering, so a transport error here is the expected outcome
     /// rather than a failure.
     pub async fn restart(&self, credentials: &Credentials) -> Result<(), ApiError> {
-        let sent = self
-            .client
-            .post(self.url("/api/restart"))
-            .basic_auth(&credentials.username, Some(&credentials.password))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&serde_json::json!({}))
-            .timeout(TIMEOUT)
-            .send()
-            .await;
-
-        match sent {
-            Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => {
-                Err(ApiError::Unauthorized)
-            }
+        match self.restart_checked(credentials).await {
+            Err(ApiError::Unauthorized) => Err(ApiError::Unauthorized),
             _ => Ok(()),
         }
+    }
+
+    /// Restart Sunshine, and say so only if it took the request: a 2xx, or
+    /// the connection dying after the request went out. Refused, an error
+    /// status, no answer at all, or nothing listening are all `Err`. Taking
+    /// the request is still not proof it restarted; see
+    /// `cert_pairing::reconcile` for how that is confirmed.
+    pub async fn restart_checked(&self, credentials: &Credentials) -> Result<(), ApiError> {
+        post_restart(
+            &self.client,
+            &self.url("/api/restart"),
+            credentials,
+            TIMEOUT,
+        )
+        .await
     }
 
     /// Check a username and password without changing anything.
@@ -443,6 +446,40 @@ impl SunshineApi {
         changes.insert(TRAY_KEY.to_string(), serde_json::json!(wanted));
         self.save_config(credentials, changes).await?;
         Ok(true)
+    }
+}
+
+async fn post_restart(
+    client: &reqwest::Client,
+    url: &str,
+    credentials: &Credentials,
+    timeout: Duration,
+) -> Result<(), ApiError> {
+    let sent = client
+        .post(url)
+        .basic_auth(&credentials.username, Some(&credentials.password))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&serde_json::json!({}))
+        .timeout(timeout)
+        .send()
+        .await;
+
+    match sent {
+        Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => {
+            Err(ApiError::Unauthorized)
+        }
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(ApiError::Failed(format!(
+            "The hosting service answered {}",
+            response.status()
+        ))),
+        // Never reached it, or it never answered: nothing says it restarted.
+        Err(e) if e.is_connect() || e.is_timeout() || e.is_builder() => {
+            Err(ApiError::Unreachable(e.to_string()))
+        }
+        // The request went out and the connection died under the answer,
+        // which is the process going away while it replies.
+        Err(_) => Ok(()),
     }
 }
 
@@ -612,6 +649,86 @@ mod tests {
 
         let without = pin_body("1234", "Michaels-Mini", None);
         assert!(without.get("pairing_id").is_none());
+    }
+
+    /// A stand-in for the host's restart endpoint on loopback, over plain
+    /// HTTP, that does `answer` with each request once it has read it.
+    async fn restart_against(
+        answer: Option<&'static str>,
+        timeout: Duration,
+    ) -> Result<(), ApiError> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}/api/restart", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 1024];
+            // Headers and the two-byte `{}` body.
+            while !seen.ends_with(b"{}") {
+                let n = socket.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    return;
+                }
+                seen.extend_from_slice(&buf[..n]);
+            }
+            match answer {
+                Some(reply) => socket.write_all(reply.as_bytes()).await.unwrap(),
+                // Sunshine going away while answering.
+                None => drop(socket),
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        let credentials = Credentials {
+            username: "u".into(),
+            password: "p".into(),
+        };
+        let out = post_restart(&reqwest::Client::new(), &url, &credentials, timeout).await;
+        server.abort();
+        out
+    }
+
+    const LONG: Duration = Duration::from_secs(5);
+
+    #[tokio::test]
+    async fn a_restart_counts_only_when_the_host_took_it() {
+        let ok = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}";
+        assert!(restart_against(Some(ok), LONG).await.is_ok());
+        // Gone mid-reply is what a restart usually looks like.
+        assert!(restart_against(None, LONG).await.is_ok());
+
+        let refused = "HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n";
+        assert!(restart_against(Some(refused), LONG).await.is_err());
+        let broken = "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n\r\n";
+        assert!(restart_against(Some(broken), LONG).await.is_err());
+        let unauthorised = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n";
+        assert!(matches!(
+            restart_against(Some(unauthorised), LONG).await,
+            Err(ApiError::Unauthorized)
+        ));
+        // Never answering is not a restart either.
+        let silent = "HTTP/1.1 200 OK\r\n";
+        assert!(restart_against(Some(silent), Duration::from_millis(300))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_host_that_is_not_there_was_not_restarted() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let url = format!("http://{}/api/restart", listener.local_addr().unwrap());
+        drop(listener);
+        let credentials = Credentials {
+            username: "u".into(),
+            password: "p".into(),
+        };
+        assert!(
+            post_restart(&reqwest::Client::new(), &url, &credentials, LONG)
+                .await
+                .is_err()
+        );
     }
 
     #[test]

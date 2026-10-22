@@ -295,18 +295,17 @@ have to be granted by hand because no installer can script a TCC prompt. The UI
 flags this rather than promising parity. Streaming *to* a Mac is unaffected and
 first-class.
 
-**moonlight-common-c is GPL-3.0, not LGPL.** The plan recorded here — embed it
-later and keep the shell unencumbered — cannot be done: linking it relicenses
-Dusk. Nor would it save much work, because it is the streaming protocol only.
-`Limelight.h` has no pairing function at all; pairing lives in moonlight-qt's
-`NvPairingManager`, along with the decoders, audio and input.
+**moonlight-common-c is GPL-3.0, not LGPL.** Dusk is GPL-3.0-or-later too, so
+embedding it later would be allowed, but it would not save much work: it is the
+streaming protocol only. `Limelight.h` has no pairing function at all; pairing
+lives in moonlight-qt's `NvPairingManager`, along with the decoders, audio and
+input.
 
 So the client stays a **separate process**, and the in-stream overlay lives in
-a GPL-3.0 fork of moonlight-qt rather than in Dusk. Arm's-length IPC — CLI
-arguments today, a local socket once the overlay reports back — is aggregation
-rather than a derivative work, which is what keeps the boundary real. The line
-to hold is that they stay separate programs: pipes and sockets are fine,
-linking and shared in-memory structures are not.
+a GPL-3.0 fork of moonlight-qt rather than in Dusk. The reasons are
+engineering ones: a crashed stream must not take the window down, and video
+does not belong in the webview. Dusk talks to the client over CLI arguments
+today, and a local socket once the overlay reports back.
 
 Most of that overlay is already built upstream. `overlaymanager.{h,cpp}` keeps
 one `SDL_Surface` per overlay type and **every renderer already composites
@@ -317,9 +316,11 @@ manager happens to draw today. An interactive overlay is a new overlay type, a
 centred rect per renderer, input interception while it is open, and a hotkey
 beside the existing combos in `input/keyboard.cpp`.
 
-**Sunshine is not bundled.** It gets fetched and verified at first run (M5).
-That keeps Dusk out of GPL-3.0 conveying obligations, lets Sunshine ship security
-updates without a Dusk release, and defers to the distro package on Linux.
+**Sunshine is bundled, and runs as its own process.** Dusk is GPL-3.0-or-later,
+as are Sunshine and the client, so shipping them together is fine; the licence
+text and a source offer travel with the app. They stay separate programs because
+a crashed stream must not take the window down, not because of licensing (see
+`docs/architecture.md`, "Three programs, one face").
 
 **Two separate things broke TLS to a host, and one hid the other.** The
 symptom was the same for both — an app list that failed most ticks and a

@@ -8,39 +8,35 @@ what it deliberately does not try to be.
 It is a design document, not a record of what is built. The phase table at the
 end says where the work actually stands.
 
-## The constraint everything else bends around
+## Three programs, one face
 
 Sunshine and moonlight-qt — and moonlight-common-c underneath it — are
-**GPL-3.0**. Dusk's shell is not. Linking any of them into Dusk relicenses
-Dusk, and `moonlight-common-c` is not LGPL, so there is no quiet way around
-it.
+**GPL-3.0**, and so is Dusk (GPL-3.0-or-later). Licensing does not force the
+shape of the app.
 
-So invisibility cannot come from embedding. It has to come from
-**process-level integration**: three programs, one face.
+The shape comes from engineering: three programs, one face. A crashed stream
+must not take the window down, and video does not belong in the webview.
+Sunshine already runs as its own service. So the client and host stay separate
+processes, and the person using Dusk never needs to know.
 
-That is not the compromise it first looks like. Parsec is a single process
-because it owns its protocol; Dusk is three because it borrows two mature
-ones and gets a working product years sooner. The person using it never needs
-to know the difference. But every decision below exists because that boundary
-is load-bearing and has to stay real: pipes and sockets are fine, linking and
-shared in-memory structures are not.
+Parsec is a single process because it owns its protocol; Dusk is three because
+it borrows two mature ones and gets a working product years sooner.
 
 ## Target shape
 
 ```
 Dusk.app / Dusk.exe / dusk              the only thing anyone sees
-├─ dusk                shell: grid, orchestration, IPC hub   (Dusk's licence)
+├─ dusk                shell: grid, orchestration, IPC hub   (GPL-3.0-or-later)
 ├─ Helpers/
 │  ├─ DuskStream       moonlight-qt fork, renamed            (GPL-3.0)
 │  └─ DuskHost         Sunshine, service-registered          (GPL-3.0)
 └─ Resources/licenses/ GPL text and a written source offer for both
 ```
 
-Three binaries, one visible application. This is mere aggregation on a
-distribution medium, so Dusk's own licence is unaffected; the obligation is to
-carry each GPL component's licence text and an offer of its corresponding
-source. Both forks are public, so that is a link and a text file rather than a
-burden.
+Three binaries, one visible application. The obligation is to carry each GPL
+component's licence text and an offer of its corresponding source; there is no
+longer a licence boundary to protect. Both forks are public, so that is a
+link and a text file rather than a burden.
 
 Note that this **reversed** the reasoning once written into
 `install/release.rs`, which avoided bundling Sunshine specifically to stay out

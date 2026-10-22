@@ -311,6 +311,8 @@ mod tests {
         );
     }
 
+    // Windows has no $HOME and nothing to seal to; there it is the keystore.
+    #[cfg(not(windows))]
     #[test]
     fn the_sealed_directory_sits_under_the_data_home() {
         let dir = sealed_dir().expect("a home directory");

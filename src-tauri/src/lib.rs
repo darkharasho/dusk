@@ -5,6 +5,7 @@
 
 mod account;
 mod applist;
+mod cert_pairing;
 mod cli;
 mod commands;
 mod discovery;
@@ -304,11 +305,15 @@ pub fn run() {
                 // After, not alongside: two keystore prompts at once on
                 // macOS is one too many to make sense of.
                 primed.account.prime(&primed.http).await;
+                // The reconciler's first pass, now that both sign-ins are
+                // known: see `Reconciler::spawn`.
+                primed.reconciler.nudge();
             });
 
             if !mock_mode() {
                 discovery::spawn(handle.clone(), state.clone());
                 peer::spawn(handle.clone(), state.clone());
+                cert_pairing::reconcile::Reconciler::spawn(state.clone());
                 poller::spawn(handle, state);
             }
 

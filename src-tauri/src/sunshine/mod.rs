@@ -8,6 +8,7 @@
 pub mod api;
 pub mod credentials;
 pub mod provision;
+pub mod state_file;
 
 pub use api::{ApiError, SunshineApi};
 pub use credentials::{CredentialStore, Credentials, Known};

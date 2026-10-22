@@ -25,8 +25,16 @@ fn addr_key(address: &str, port: u16) -> DeviceId {
     format!("addr:{}:{}", address.trim().to_ascii_lowercase(), port)
 }
 
+const UID_PREFIX: &str = "sunshine:";
+
 fn uid_key(unique_id: &str) -> DeviceId {
-    format!("sunshine:{unique_id}")
+    format!("{UID_PREFIX}{unique_id}")
+}
+
+/// The host's own id, for a device keyed by it: one that has answered
+/// `serverinfo` at least once.
+pub fn unique_id_of(id: &str) -> Option<&str> {
+    id.strip_prefix(UID_PREFIX).filter(|uid| !uid.is_empty())
 }
 
 /// Sunshine's TLS port sits five below its HTTP port. Only assume that when
@@ -298,6 +306,15 @@ impl Registry {
         if let Some(device) = self.devices.get_mut(id) {
             device.machine_id = machine_id;
             device.mine = mine;
+        }
+    }
+
+    /// Show a device as unpaired whatever its probe said, and drop the app
+    /// list that belonged to the pairing, as a probe saying so would.
+    pub fn withhold_pairing(&mut self, id: &str) {
+        if let Some(device) = self.devices.get_mut(id) {
+            device.pairing = PairingState::NotPaired;
+            device.apps.clear();
         }
     }
 
@@ -829,6 +846,7 @@ mod tests {
             rtt_ms: 7,
             authenticated: false,
             status_code: crate::serverinfo::STATUS_OK,
+            server_cert: None,
         }
     }
 
@@ -950,6 +968,7 @@ mod tests {
             addresses: vec![address.into()],
             port: DEFAULT_HTTP_PORT,
             uuid: uuid.map(str::to_string),
+            server_cert: None,
         }
     }
 

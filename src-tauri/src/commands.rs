@@ -439,6 +439,13 @@ fn pinned_cert<'a>(
         .and_then(|h| h.server_cert.as_deref())
 }
 
+/// A clipboard connection that is up or on its way: copies go in the
+/// sender, and how it ended, and when, comes back on the receiver.
+type ClipboardRun = (
+    tokio::sync::mpsc::UnboundedSender<String>,
+    tokio::sync::oneshot::Receiver<(crate::clipboard::client::LastEnd, tokio::time::Instant)>,
+);
+
 /// Share the clipboard with the host for as long as the returned sender
 /// lives and the setting stays on. Dropping it ends the connection.
 fn start_clipboard(
@@ -448,9 +455,10 @@ fn start_clipboard(
     device_id: String,
     config: Arc<rustls::ClientConfig>,
     address: String,
-) -> tokio::sync::mpsc::UnboundedSender<String> {
+) -> ClipboardRun {
     use crate::clipboard::{client, Decline};
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let ended = match client::connect(&address, config).await {
@@ -463,6 +471,7 @@ fn start_clipboard(
             }
             Err(ended) => ended,
         };
+        let _ = done_tx.send((client::LastEnd::of(&ended), tokio::time::Instant::now()));
         match ended {
             client::Ended::Declined(Decline::Unsupported { detail }) => {
                 let _ = app.emit(
@@ -477,7 +486,111 @@ fn start_clipboard(
             other => eprintln!("dusk: clipboard sharing ended: {other:?}"),
         }
     });
-    tx
+    (tx, done_rx)
+}
+
+/// How often a stream without a clipboard connection checks whether to
+/// make one.
+const CLIPBOARD_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// One stream's clipboard connection, made once the stream is up and made
+/// again when it drops, by the rules in
+/// [`crate::clipboard::client::should_reconnect`].
+struct ClipboardLink {
+    app: AppHandle,
+    state: Arc<AppState>,
+    control: crate::session::Control,
+    device_id: String,
+    address: String,
+    /// Whether the stream is up: nothing is connected before.
+    up: bool,
+    live: Option<ClipboardRun>,
+    last: crate::clipboard::client::LastEnd,
+    ended_at: tokio::time::Instant,
+}
+
+impl ClipboardLink {
+    fn new(
+        app: AppHandle,
+        state: Arc<AppState>,
+        control: crate::session::Control,
+        device_id: String,
+        address: String,
+    ) -> Self {
+        Self {
+            app,
+            state,
+            control,
+            device_id,
+            address,
+            up: false,
+            live: None,
+            // Nothing tried yet: connect as soon as sharing is on.
+            last: crate::clipboard::client::LastEnd::OwnSetting,
+            ended_at: tokio::time::Instant::now(),
+        }
+    }
+
+    fn ended(&mut self, last: crate::clipboard::client::LastEnd, at: tokio::time::Instant) {
+        self.live = None;
+        self.last = last;
+        self.ended_at = at;
+    }
+
+    /// Notes a connection that ended since last looked, connects when the
+    /// rules allow, and drops the connection when sharing was turned off
+    /// here, which ends it.
+    async fn tend(&mut self) {
+        use crate::clipboard::client::{should_reconnect, LastEnd};
+        use tokio::sync::oneshot::error::TryRecvError;
+        if !self.up {
+            return;
+        }
+        if let Some((_, done)) = &mut self.live {
+            match done.try_recv() {
+                Ok((last, at)) => self.ended(last, at),
+                // Ended without saying how: treated as the host going.
+                Err(TryRecvError::Closed) => {
+                    self.ended(LastEnd::HostSide, tokio::time::Instant::now())
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        let sharing = self.state.store.lock().await.clipboard_sharing.is_on();
+        if self.live.is_some() {
+            if !sharing {
+                self.ended(LastEnd::OwnSetting, tokio::time::Instant::now());
+            }
+            return;
+        }
+        if !should_reconnect(&self.last, self.ended_at.elapsed(), sharing) {
+            return;
+        }
+        match clipboard_tls(&self.state, &self.device_id, &self.address).await {
+            Some(config) => {
+                self.live = Some(start_clipboard(
+                    &self.app,
+                    self.state.clone(),
+                    self.control.clone(),
+                    self.device_id.clone(),
+                    config,
+                    self.address.clone(),
+                ));
+            }
+            // Already logged; it will not appear during this stream.
+            None => self.ended(LastEnd::GiveUp, tokio::time::Instant::now()),
+        }
+    }
+
+    /// A copy from the stream window: sent on, over a connection made for
+    /// it if the rules allow one now. A connection on its way sends the
+    /// latest copy once the host admits it.
+    async fn copied(&mut self, text: String) {
+        self.tend().await;
+        if let Some((tx, _)) = &self.live {
+            let _ = tx.send(text);
+        }
+    }
 }
 
 /// Start streaming an app, and watch the session for the card's sake.
@@ -548,8 +661,13 @@ pub async fn launch_app(
     // with it.
     let overlay_app = app.clone();
     let stats_device = id.clone();
-    let clipboard_state = inner.clone();
-    let clipboard_address = address.clone();
+    let mut clipboard = ClipboardLink::new(
+        app.clone(),
+        inner.clone(),
+        session.control(),
+        id.clone(),
+        address.clone(),
+    );
     // Whether Dusk stepped aside for this stream, so the watcher below knows
     // to bring it back. Shared because the two halves are separate tasks.
     let stepped_aside = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -557,10 +675,22 @@ pub async fn launch_app(
     tauri::async_runtime::spawn(async move {
         let session = session;
         let mut effects = effects;
-        // Held for as long as the stream is: when this loop ends the sender
-        // drops, which ends the clipboard connection.
-        let mut clipboard: Option<tokio::sync::mpsc::UnboundedSender<String>> = None;
-        while let Some(effect) = effects.recv().await {
+        // The clipboard link is held for as long as the stream is: when this
+        // loop ends its sender drops, which ends the clipboard connection.
+        let mut tick =
+            tokio::time::interval_at(tokio::time::Instant::now() + CLIPBOARD_TICK, CLIPBOARD_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            let effect = tokio::select! {
+                effect = effects.recv() => match effect {
+                    Some(effect) => effect,
+                    None => break,
+                },
+                _ = tick.tick() => {
+                    clipboard.tend().await;
+                    continue;
+                }
+            };
             match effect {
                 // Logged because nothing else shows the channel is in use:
                 // the overlay's Disconnect ends the stream either way.
@@ -578,34 +708,13 @@ pub async fn launch_app(
                     aside.store(true, std::sync::atomic::Ordering::Relaxed);
                     crate::tray::hide_window(&overlay_app);
 
-                    let sharing = clipboard_state.store.lock().await.clipboard_sharing.is_on();
-                    if sharing && clipboard.is_none() {
-                        if let Some(config) =
-                            clipboard_tls(&clipboard_state, &stats_device, &clipboard_address).await
-                        {
-                            clipboard = Some(start_clipboard(
-                                &overlay_app,
-                                clipboard_state.clone(),
-                                session.control(),
-                                stats_device.clone(),
-                                config,
-                                clipboard_address.clone(),
-                            ));
-                        }
-                    }
+                    clipboard.up = true;
+                    clipboard.tend().await;
                 }
-                crate::session::Effect::Clipboard(text) => {
-                    // Turned off mid-stream: the connection goes with the
-                    // sender, and nothing more is passed on.
-                    if clipboard.is_some()
-                        && !clipboard_state.store.lock().await.clipboard_sharing.is_on()
-                    {
-                        clipboard = None;
-                    }
-                    if let Some(clipboard) = &clipboard {
-                        let _ = clipboard.send(text);
-                    }
-                }
+                // Sent on, over a new connection if none is up and the
+                // rules allow one. Sharing turned off here mid-stream: the
+                // connection goes, and nothing more is passed on.
+                crate::session::Effect::Clipboard(text) => clipboard.copied(text).await,
                 crate::session::Effect::Overlay(action) => match action {
                     // Asked rather than killed: a client that is told to go
                     // can tear its stream down cleanly, and the watcher

@@ -60,6 +60,51 @@ pub enum Ended {
     Declined(Decline),
     /// The stream ended, or the host left.
     Closed,
+    /// This side's own sharing setting was turned off.
+    SharingOff,
+}
+
+/// How long after the host said no for now, or went away, before trying
+/// again during the same stream.
+pub const RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// How the last connection of a stream ended, as far as reconnecting goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LastEnd {
+    /// This side's own setting went off, or nothing was tried yet: connect
+    /// as soon as sharing is on.
+    OwnSetting,
+    /// The host turned it down for now (sharing off there, not streaming)
+    /// or closed the connection: try again after [`RETRY_AFTER`].
+    HostSide,
+    /// The host cannot share at all, or never answered: not again during
+    /// this stream.
+    GiveUp,
+}
+
+impl LastEnd {
+    pub fn of(ended: &Ended) -> Self {
+        match ended {
+            Ended::SharingOff => LastEnd::OwnSetting,
+            Ended::Closed | Ended::Declined(Decline::SharingOff | Decline::NotStreaming) => {
+                LastEnd::HostSide
+            }
+            Ended::Refused | Ended::Declined(Decline::Unsupported { .. } | Decline::NotPaired) => {
+                LastEnd::GiveUp
+            }
+        }
+    }
+}
+
+/// Whether to connect again, `since` the last connection ended, with this
+/// side's sharing setting as it is now.
+pub fn should_reconnect(last: &LastEnd, since: Duration, sharing_on: bool) -> bool {
+    sharing_on
+        && match last {
+            LastEnd::OwnSetting => true,
+            LastEnd::HostSide => since >= RETRY_AFTER,
+            LastEnd::GiveUp => false,
+        }
 }
 
 /// Connect to the host's Dusk at `address` (its host part, on [`PORT`]).
@@ -251,7 +296,7 @@ where
             _ = check.tick() => {
                 if !sharing_on().await {
                     let _ = send(write, &Wire::Bye).await;
-                    return Ended::Closed;
+                    return Ended::SharingOff;
                 }
                 continue;
             }
@@ -260,7 +305,7 @@ where
 
         if !sharing_on().await {
             let _ = send(write, &Wire::Bye).await;
-            return Ended::Closed;
+            return Ended::SharingOff;
         }
         match forward {
             Forward::ToWindow(message) => to_window.send(message),
@@ -424,6 +469,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn how_a_connection_ended_decides_when_to_reconnect() {
+        use LastEnd::*;
+        let (now, soon, later) = (Duration::ZERO, Duration::from_secs(29), RETRY_AFTER);
+        for (last, since, sharing_on, expected) in [
+            // Sharing is off here: never, however it ended.
+            (OwnSetting, later, false, false),
+            (HostSide, later, false, false),
+            // This side's own setting turned off, and is on again.
+            (OwnSetting, now, true, true),
+            // The host said no for now, or went: not for 30 s.
+            (HostSide, now, true, false),
+            (HostSide, soon, true, false),
+            (HostSide, later, true, true),
+            // The host cannot do it at all: never on this stream.
+            (GiveUp, now, true, false),
+            (GiveUp, later * 100, true, false),
+        ] {
+            assert_eq!(
+                should_reconnect(&last, since, sharing_on),
+                expected,
+                "{last:?} {since:?} {sharing_on}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_ending_maps_to_a_retry_rule() {
+        assert_eq!(LastEnd::of(&Ended::SharingOff), LastEnd::OwnSetting);
+        assert_eq!(LastEnd::of(&Ended::Closed), LastEnd::HostSide);
+        assert_eq!(
+            LastEnd::of(&Ended::Declined(Decline::SharingOff)),
+            LastEnd::HostSide
+        );
+        assert_eq!(
+            LastEnd::of(&Ended::Declined(Decline::NotStreaming)),
+            LastEnd::HostSide
+        );
+        assert_eq!(
+            LastEnd::of(&Ended::Declined(Decline::Unsupported { detail: None })),
+            LastEnd::GiveUp
+        );
+        assert_eq!(
+            LastEnd::of(&Ended::Declined(Decline::NotPaired)),
+            LastEnd::GiveUp
+        );
+        assert_eq!(LastEnd::of(&Ended::Refused), LastEnd::GiveUp);
+    }
+
     #[tokio::test]
     async fn turning_sharing_off_ends_the_run_without_forwarding() {
         let mut rig = start().await;
@@ -434,7 +528,7 @@ mod tests {
                 text: "from the host".into(),
             })
             .await;
-        assert!(matches!(rig.task.await.unwrap(), Ended::Closed));
+        assert!(matches!(rig.task.await.unwrap(), Ended::SharingOff));
         assert_eq!(rig.host.next().await, Some(Wire::Bye));
         assert_eq!(rig.host.next().await, None);
         assert_eq!(rig.window.recv().await, None, "nothing reached the window");
@@ -445,7 +539,7 @@ mod tests {
         let mut rig = start().await;
         rig.sharing.store(false, Ordering::SeqCst);
         rig.copies.send("secret".into()).unwrap();
-        assert!(matches!(rig.task.await.unwrap(), Ended::Closed));
+        assert!(matches!(rig.task.await.unwrap(), Ended::SharingOff));
         assert_eq!(rig.host.next().await, Some(Wire::Bye));
         assert_eq!(rig.host.next().await, None);
     }
@@ -457,7 +551,7 @@ mod tests {
         let ended = tokio::time::timeout(Duration::from_secs(6), rig.task).await;
         assert!(matches!(
             ended.expect("ended on the tick").unwrap(),
-            Ended::Closed
+            Ended::SharingOff
         ));
         assert_eq!(rig.host.next().await, Some(Wire::Bye));
     }

@@ -127,6 +127,20 @@ pub fn bind(bound: &mut Bound, key: Option<&str>, client: &Fingerprint) -> Resul
     }
 }
 
+/// The last step of admission, once the clipboard was opened (or not): a
+/// client is bound only when it is admitted, so one declined for any
+/// reason, its clipboard failing to open included, never holds the stream.
+pub fn after_open<C>(
+    bound: &mut Bound,
+    key: Option<&str>,
+    client: &Fingerprint,
+    opened: Result<C, ()>,
+) -> Result<C, Decline> {
+    let clipboard = opened.map_err(|()| Decline::Unsupported { detail: None })?;
+    bind(bound, key, client)?;
+    Ok(clipboard)
+}
+
 fn fingerprint(tls: &TlsStream<TcpStream>) -> Option<Fingerprint> {
     let leaf = tls.get_ref().1.peer_certificates()?.first()?;
     Some(Sha256::digest(leaf.as_ref()).into())
@@ -484,27 +498,36 @@ async fn admission(
 
     let tls = acceptor.accept(stream).await?;
 
-    let sharing_on = state.store.lock().await.clipboard_sharing.is_on();
-    let (hosting, key) = hosting_stream(state).await;
-    let decision = admit(sharing_on, &support(), hosting == Hosting::Yes)
-        .and_then(|()| claim(live))
-        .and_then(|permit| {
-            // Pinned mutual TLS always has a client certificate by now.
-            let client = fingerprint(&tls).ok_or(Decline::NotPaired)?;
-            let mut bound = bound.lock().map_err(|_| Decline::NotStreaming)?;
-            bind(&mut bound, key.as_deref(), &client)?;
-            Ok(permit)
-        });
-    let outcome = match decision {
-        Ok(permit) => tokio::task::spawn_blocking(System::open)
-            .await
-            .map_err(|_| ())
-            .and_then(|opened| opened.map_err(|_| ()))
-            .map(|clipboard| (clipboard, permit))
-            .map_err(|_| Decline::Unsupported { detail: None }),
-        Err(decline) => Err(decline),
-    };
+    let outcome = decide(state, &tls, live, bound).await;
     Ok(Some((tls, outcome)))
+}
+
+/// The admission decision for a connection through TLS. The slot is
+/// claimed before the stream is looked at, so the stream key is read while
+/// no other connection can bind, and it is held (dropped on every decline)
+/// until the connection ends.
+async fn decide(
+    state: &AppState,
+    tls: &TlsStream<TcpStream>,
+    live: &Arc<Semaphore>,
+    bound: &Mutex<Bound>,
+) -> Result<(System, OwnedSemaphorePermit), Decline> {
+    let sharing_on = state.store.lock().await.clipboard_sharing.is_on();
+    let support = support();
+    // The checks that need nothing from the host come first.
+    admit(sharing_on, &support, true)?;
+    let permit = claim(live)?;
+    let (hosting, key) = hosting_stream(state).await;
+    admit(sharing_on, &support, hosting == Hosting::Yes)?;
+    // Pinned mutual TLS always has a client certificate by now.
+    let client = fingerprint(tls).ok_or(Decline::NotPaired)?;
+    let opened = tokio::task::spawn_blocking(System::open)
+        .await
+        .map_err(|_| ())
+        .and_then(|opened| opened.map_err(|_| ()));
+    let mut bound = bound.lock().map_err(|_| Decline::NotStreaming)?;
+    let clipboard = after_open(&mut bound, key.as_deref(), &client, opened)?;
+    Ok((clipboard, permit))
 }
 
 async fn serve(
@@ -946,6 +969,29 @@ mod tests {
         bind(&mut bound, Some("s1"), &[1; 32]).unwrap();
         assert_eq!(bind(&mut bound, Some("s2"), &[2; 32]), Ok(()));
         assert_eq!(bound, Some(("s2".to_string(), [2; 32])));
+    }
+
+    #[test]
+    fn a_client_whose_clipboard_did_not_open_is_not_bound() {
+        let mut bound = None;
+        assert_eq!(
+            after_open::<()>(&mut bound, Some("s1"), &[1; 32], Err(())),
+            Err(Decline::Unsupported { detail: None })
+        );
+        assert_eq!(bound, None, "declined, so not bound");
+        // Another client on the same stream is then admitted and binds.
+        assert_eq!(after_open(&mut bound, Some("s1"), &[2; 32], Ok(7)), Ok(7));
+        assert_eq!(bound, Some(("s1".to_string(), [2; 32])));
+    }
+
+    #[test]
+    fn a_client_declined_for_the_binding_leaves_it_alone() {
+        let mut bound = Some(("s1".to_string(), [1; 32]));
+        assert_eq!(
+            after_open(&mut bound, Some("s1"), &[2; 32], Ok(())),
+            Err(Decline::NotStreaming)
+        );
+        assert_eq!(bound, Some(("s1".to_string(), [1; 32])));
     }
 
     #[test]

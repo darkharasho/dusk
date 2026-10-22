@@ -877,7 +877,11 @@ mod tests {
         assert!(!ready(out));
     }
 
-    #[tokio::test]
+    // Paused time: the host is "down" for a count of probes, and on a runner
+    // whose sleep rounds a millisecond up to fifteen, those probes took
+    // longer than the patience allowed and the test failed for the clock's
+    // reasons, not the reconciler's.
+    #[tokio::test(start_paused = true)]
     async fn a_host_slow_to_come_back_is_not_restarted_twice() {
         // The host went down for the restart and is taking its time coming
         // back. Asking again would restart the new process the moment it

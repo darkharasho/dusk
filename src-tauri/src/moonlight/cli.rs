@@ -408,20 +408,21 @@ impl Moonlight {
 /// The command line that records a paired host. `add-host` comes first,
 /// because the client picks its action from the first word it knows, and a
 /// host named `list` must not be read as one.
+///
+/// Each value is joined to its option with `=`. On Linux, Qt's X11 plugin
+/// takes `--name <value>` as its own option and removes both words before
+/// the client sees them, which failed every pairing there with "--name not
+/// provided". It leaves `--name=<value>` alone.
 fn add_host_args(address: &str, uuid: &str, name: &str, cert: &Path) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "add-host".into(),
         crate::peer::host_part(address).into(),
-        "--uuid".into(),
-        uuid.into(),
-        "--name".into(),
-        name.into(),
-        "--server-cert".into(),
-        cert.to_string_lossy().into_owned(),
+        format!("--uuid={uuid}"),
+        format!("--name={name}"),
+        format!("--server-cert={}", cert.to_string_lossy()),
     ];
     if let Some(port) = port_part(address) {
-        args.push("--port".into());
-        args.push(port.to_string());
+        args.push(format!("--port={port}"));
     }
     args
 }
@@ -1088,17 +1089,13 @@ mod tests {
             [
                 "add-host",
                 "10.0.0.5",
-                "--uuid",
-                "HOST-ID",
-                "--name",
-                "Desk",
-                "--server-cert",
-                "/tmp/c.pem",
-                "--port",
-                "47989"
+                "--uuid=HOST-ID",
+                "--name=Desk",
+                "--server-cert=/tmp/c.pem",
+                "--port=47989"
             ]
         );
-        assert_eq!(add_host_args("10.0.0.5", "H", "D", cert).len(), 8);
+        assert_eq!(add_host_args("10.0.0.5", "H", "D", cert).len(), 5);
         assert_eq!(port_part("[fe80::1]:48000"), Some(48000));
         assert_eq!(port_part("fe80::1"), None);
         assert_eq!(port_part("gaming-pc.local"), None);
@@ -1149,7 +1146,7 @@ mod tests {
             name,
             &format!(
                 "#!/bin/sh\n\
-                 [ \"$1\" = add-host ] && [ -f \"$8\" ] || exit 9\n\
+                 [ \"$1\" = add-host ] && [ -f \"${{5#--server-cert=}}\" ] || exit 9\n\
                  echo '00:00:00 - Qt Info: Dusk fork: add-host available' 1>&2\n\
                  echo '{says}' 1>&2\n\
                  exit {code}\n"

@@ -77,12 +77,17 @@ zbus = "5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"
+# The pasteboard's change count, so the clipboard is read only when it
+# changed. The versions arboard already pulls in.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
-# SetupAPI, to create the device a virtual display driver installs onto.
+# SetupAPI, to create the device a virtual display driver installs onto, and
+# the clipboard sequence number, so the clipboard is read only when it changed.
 # The version the rest of the tree already pulls in.
-windows-sys = { version = "0.59", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_System_DataExchange"] }
 
 # rustls rather than the platform TLS stack: both Sunshine's GameStream port
 # and its config API serve self-signed certificates, and client-certificate

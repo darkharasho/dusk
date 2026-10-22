@@ -1019,6 +1019,8 @@ dependencies = [
  "libc",
  "mdns-sd",
  "minisign-verify",
+ "objc2",
+ "objc2-app-kit",
  "plist",
  "quick-xml 0.36.2",
  "rcgen",

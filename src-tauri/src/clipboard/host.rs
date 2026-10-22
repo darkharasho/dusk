@@ -27,7 +27,7 @@ use tokio_rustls::TlsAcceptor;
 
 use sha2::{Digest, Sha256};
 
-use super::local::{support, LocalClipboard, Support, System, POLL};
+use super::local::{support, LocalClipboard, Support, System, Watched, POLL};
 use super::tls::server_config;
 use super::{fits, line, text_of, Decline, Guard, Wire, MAX_LINE, PORT};
 use crate::cert_pairing::reconcile::client_connected;
@@ -224,17 +224,17 @@ async fn clipboard_call<T: Send + 'static>(
     }
 }
 
-/// `read_text` is `None` for an empty clipboard and for a read that failed;
-/// neither is a change.
+/// `None` for an empty clipboard, a read that failed, and a clipboard whose
+/// change count has not moved ([`Watched::poll`]); none of them is a change.
 async fn read_clipboard<C: LocalClipboard + 'static>(
-    clipboard: &Arc<Mutex<C>>,
+    clipboard: &Arc<Mutex<Watched<C>>>,
 ) -> io::Result<Option<String>> {
     let clipboard = clipboard.clone();
-    clipboard_call(move || clipboard.lock().ok()?.read_text()).await
+    clipboard_call(move || clipboard.lock().ok()?.poll()).await
 }
 
 async fn write_clipboard<C: LocalClipboard + 'static>(
-    clipboard: &Arc<Mutex<C>>,
+    clipboard: &Arc<Mutex<Watched<C>>>,
     text: String,
 ) -> io::Result<()> {
     let clipboard = clipboard.clone();
@@ -264,7 +264,7 @@ where
     G: FnMut() -> GFut,
     GFut: Future<Output = bool>,
 {
-    let clipboard = Arc::new(Mutex::new(clipboard));
+    let clipboard = Arc::new(Mutex::new(Watched::new(clipboard)));
     let baseline = read_clipboard(&clipboard).await?;
     let mut guard = Guard::new(baseline.as_deref());
 
@@ -288,7 +288,7 @@ where
 }
 
 async fn relay<C, W, F, Fut, G, GFut>(
-    clipboard: &Arc<Mutex<C>>,
+    clipboard: &Arc<Mutex<Watched<C>>>,
     guard: &mut Guard,
     write: &mut W,
     rx: &mut mpsc::Receiver<io::Result<Incoming>>,

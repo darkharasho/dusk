@@ -10,6 +10,7 @@ use std::path::PathBuf;
 pub mod cli;
 pub mod hosts;
 pub mod identity;
+pub mod stream_log;
 
 pub use cli::Moonlight;
 pub use identity::ClientIdentity;

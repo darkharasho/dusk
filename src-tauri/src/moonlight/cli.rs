@@ -333,12 +333,22 @@ impl Moonlight {
     /// Only the tail is kept. The reason a stream failed is always at the
     /// end, and a session that ran for an hour would otherwise have us
     /// holding megabytes of FFmpeg trace to quote one line of.
-    pub async fn wait_for_session(child: &mut Child) -> Result<(), MoonlightError> {
+    ///
+    /// All of it goes to `log`, though, which is on disk: a stream that
+    /// freezes the machine never gets to fail, and its tail in memory is lost
+    /// with everything else.
+    pub async fn wait_for_session(
+        child: &mut Child,
+        log: Option<super::stream_log::StreamLog>,
+    ) -> Result<(), MoonlightError> {
         let drain = child.stderr.take().map(|stderr| {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 let mut tail: VecDeque<String> = VecDeque::with_capacity(STDERR_TAIL);
                 while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(log) = &log {
+                        log.line(&line);
+                    }
                     if tail.len() == STDERR_TAIL {
                         tail.pop_front();
                     }
@@ -885,7 +895,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_that_crashes_says_so() {
         let mut child = a_child_that("kill -SEGV $$");
-        let err = Moonlight::wait_for_session(&mut child)
+        let err = Moonlight::wait_for_session(&mut child, None)
             .await
             .expect_err("a crash is a failure");
         assert!(matches!(&err, MoonlightError::Failed(m) if m == "The streaming client crashed."));
@@ -933,7 +943,7 @@ mod tests {
     #[tokio::test]
     async fn a_session_that_fails_reports_why() {
         let mut child = a_child_that("echo 'Host is unreachable' 1>&2; exit 255");
-        let err = Moonlight::wait_for_session(&mut child)
+        let err = Moonlight::wait_for_session(&mut child, None)
             .await
             .expect_err("a non-zero exit is a failure");
         assert!(matches!(&err, MoonlightError::Failed(m) if m == "Host is unreachable"));
@@ -943,7 +953,7 @@ mod tests {
     #[tokio::test]
     async fn a_session_the_person_ended_is_not_an_error() {
         let mut child = a_child_that("exit 0");
-        assert!(Moonlight::wait_for_session(&mut child).await.is_ok());
+        assert!(Moonlight::wait_for_session(&mut child, None).await.is_ok());
     }
 
     /// moonlight-qt writes several lines per decoded frame, so an unread
@@ -956,10 +966,44 @@ mod tests {
             "awk 'BEGIN { while (i++ < 20000) print \"FFmpeg: chatter\" }' 1>&2; \
              echo 'Connection terminated' 1>&2; exit 255",
         );
-        let err = Moonlight::wait_for_session(&mut child)
+        let err = Moonlight::wait_for_session(&mut child, None)
             .await
             .expect_err("still a failure");
         assert!(matches!(&err, MoonlightError::Failed(m) if m == "Connection terminated"));
+    }
+
+    /// Memory holds only the tail, but the disk gets the whole session: the
+    /// stream that froze a machine left nothing behind but its last forty
+    /// lines in a process that no longer existed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_whole_session_goes_to_its_log() {
+        let dir = super::super::stream_log::tests::Dir::new("session-log");
+        let log = super::super::stream_log::StreamLog::create_in_for_tests(dir.path());
+        let path = log.path().to_owned();
+        let mut child = a_child_that(
+            "echo 'Video stream is 3440x1440' 1>&2; \
+             awk 'BEGIN { while (i++ < 500) print \"FFmpeg: chatter\" }' 1>&2; exit 0",
+        );
+        Moonlight::wait_for_session(&mut child, Some(log))
+            .await
+            .expect("a clean exit");
+
+        // The writer finishes on its own once the session lets go of it.
+        let mut text = String::new();
+        for _ in 0..50 {
+            text = std::fs::read_to_string(&path).unwrap();
+            if text.lines().count() == 501 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(text.lines().count(), 501);
+        assert!(text
+            .lines()
+            .next()
+            .unwrap()
+            .ends_with(" Video stream is 3440x1440"));
     }
 
     #[test]

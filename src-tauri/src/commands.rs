@@ -481,7 +481,11 @@ pub async fn launch_app(
     let session_id = id.clone();
     tauri::async_runtime::spawn(async move {
         let mut child = child;
-        let ended = crate::moonlight::Moonlight::wait_for_session(&mut child).await;
+        let log = crate::moonlight::stream_log::StreamLog::create();
+        if let Some(log) = &log {
+            log.line(&format!("dusk: streaming {app_name} from {address}"));
+        }
+        let ended = crate::moonlight::Moonlight::wait_for_session(&mut child, log).await;
 
         // Back where the person left it, however the stream ended — and on a
         // failure even if Dusk never stepped aside, so the reason is seen.

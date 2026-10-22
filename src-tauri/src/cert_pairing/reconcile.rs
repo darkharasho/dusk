@@ -105,6 +105,7 @@ fn client_connected(log: &str) -> bool {
 /// dropped instead of quitting. The next stream resumes that session, and a
 /// resumed one runs none of the host's prep commands. Anything unreadable
 /// answers no.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) async fn session_left_open(http: &reqwest::Client, credentials: &Credentials) -> bool {
     let Ok(info) = crate::serverinfo::query_http(http, "127.0.0.1", DEFAULT_HTTP_PORT).await else {
         return false;

@@ -229,7 +229,7 @@ pub fn store_path(config_dir: &Path) -> PathBuf {
 
 /// This machine's bundle identifier, which is the directory the settings
 /// live under. Pinned here to match `tauri.conf.json`.
-const IDENTIFIER: &str = "dev.dusk.app";
+pub(crate) const IDENTIFIER: &str = "dev.dusk.app";
 
 /// Where the settings live, worked out without asking Tauri.
 ///

@@ -1,5 +1,32 @@
 # Release Notes
 
+Version v0.3.29 — October 21, 2026
+
+Your own machines pair without a PIN.
+
+## Changes
+
+- **Machines signed in to the same GitHub account now pair on their own.**
+  Press Pair and the two exchange certificates, each vouched for by your
+  account, with no code to read off one screen and type into the other. A
+  machine that is in the middle of a stream finishes it first and pairs
+  after. If anything gets in the way — an older Dusk on the other end, a
+  machine that can't be reached, a host that says no — Dusk asks for the
+  PIN exactly as before.
+  - A brand-new install that has never paired anything still needs the PIN
+    once.
+- **A machine you take off your account stops being trusted.** Dusk
+  removes it only once it is certain; a locked keychain or a sign-in it
+  can't use leaves every pairing where it was.
+- **A host whose certificate changes is paired again by itself**, and a
+  card reads paired only when both machines trust each other.
+- **Dusk is now free software under the GPL, version 3 or later.**
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.28 — October 21, 2026
 
 Dusk installed from a `.deb` can now update itself.

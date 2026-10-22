@@ -6,8 +6,9 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**Branch `gpl-and-cert-pairing` (not released): Dusk is GPL-3.0-or-later, and
-your own machines pair without a PIN.** Design:
+**v0.3.29 is released**, all three platforms, from `main` (PR #2), carrying
+the client's `dusk-v0.2.5`. **Dusk is GPL-3.0-or-later, and your own machines
+pair without a PIN.** Design:
 `docs/superpowers/specs/2026-10-21-gpl-and-certificate-pairing-design.md`;
 the measurements it rests on:
 `docs/superpowers/specs/2026-10-21-certificate-pairing-spike.md`.
@@ -79,8 +80,8 @@ its own half:
 *Fork and release.* The `add-host` action (fork commit `4a59931`) is merged
 into the fork's `master` (darkharasho/moonlight-qt#1, merge `ded3c2f1`) and
 released as `dusk-v0.2.5`. `CLIENT_TAG` in `.github/workflows/release.yml`
-now pins `dusk-v0.2.5`, so the next packaged Dusk carries `add-host` and pairs
-your own machines by certificate.
+pins `dusk-v0.2.5`, so v0.3.29 is the first packaged Dusk that carries
+`add-host` and pairs your own machines by certificate.
 
 *Owner-deferred checks* (they need machines this was not built on):
 
@@ -110,8 +111,7 @@ your own machines by certificate.
 - The Windows `config_dir` (`%ProgramFiles%\Sunshine\config`) is a guess until
   the Windows spike. Wrong means PIN fallback, not breakage.
 
-**v0.3.28 is released**, all three platforms, from `main`, carrying the
-client's `dusk-v0.2.4`. It lets a **`.deb` install update itself**, which was
+**v0.3.28**, carrying the client's `dusk-v0.2.4`, lets a **`.deb` install update itself**, which was
 the one format that could not. The plugin handles the other four and cannot
 handle this one — the files belong to dpkg, and writing over them leaves the
 package database describing a version that is no longer there — so
@@ -511,7 +511,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.28>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.29>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -547,7 +547,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29
 └── moonlight-qt/    master @ ded3c2f1  tags dusk-v0.1.0 … dusk-v0.2.5
 ```
 

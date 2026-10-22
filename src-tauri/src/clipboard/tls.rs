@@ -53,13 +53,16 @@ pub fn client_config(
         .map_err(|_| "client key is unreadable".to_string())?
         .ok_or_else(|| "no client key".to_string())?;
 
-    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let mut config = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(|e| e.to_string())?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedServer { pinned, provider }))
         .with_client_auth_cert(chain, key)
         .map_err(|e| e.to_string())?;
+    // A resumed session skips certificate verification, so every connection
+    // does a full handshake and the pin is checked each time.
+    config.resumption = rustls::client::Resumption::disabled();
     Ok(Arc::new(config))
 }
 
@@ -83,12 +86,17 @@ pub fn server_config(
         .filter_map(|pem| leaf_of(pem).ok())
         .collect();
 
-    let config = rustls::ServerConfig::builder_with_provider(provider.clone())
+    let mut config = rustls::ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(|e| e.to_string())?
         .with_client_cert_verifier(Arc::new(PinnedClients { paired, provider }))
         .with_single_cert(chain, key)
         .map_err(|e| e.to_string())?;
+    // A resumed TLS 1.3 session skips `verify_client_cert`, so hand out no
+    // tickets and keep no session state: the pin runs on every connection,
+    // however the config is reused.
+    config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    config.send_tls13_tickets = 0;
     Ok(Arc::new(config))
 }
 
@@ -313,6 +321,46 @@ mod tests {
         run(server, client).await
     }
 
+    // Throwaway RSA-2048 self-signed fixtures (no SAN), generated with openssl
+    // for tests only. The server key is PKCS#1, the client key PKCS#8.
+    const RSA_SERVER_CERT: &str = include_str!("testdata/server_cert.pem");
+    const RSA_SERVER_KEY: &str = include_str!("testdata/server_key_pkcs1.pem");
+    const RSA_CLIENT_CERT: &str = include_str!("testdata/client_cert.pem");
+    const RSA_CLIENT_KEY: &str = include_str!("testdata/client_key_pkcs8.pem");
+
+    #[tokio::test]
+    async fn rsa_pkcs1_and_pkcs8_keys_complete_the_handshake() {
+        assert!(RSA_SERVER_KEY.contains("BEGIN RSA PRIVATE KEY"));
+        assert!(RSA_CLIENT_KEY.contains("BEGIN PRIVATE KEY"));
+        let server = server_config(
+            RSA_SERVER_CERT,
+            RSA_SERVER_KEY,
+            &[RSA_CLIENT_CERT.to_string()],
+        )
+        .unwrap();
+        let client = client_config(
+            &ClientIdentity {
+                cert_pem: RSA_CLIENT_CERT.as_bytes().to_vec(),
+                key_pem: RSA_CLIENT_KEY.as_bytes().to_vec(),
+            },
+            RSA_SERVER_CERT,
+        )
+        .unwrap();
+        run(server, client).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reused_server_config_checks_the_pin_every_time() {
+        let (host, client, stranger) = (make(), make(), make());
+        let server =
+            server_config(&host.cert, &host.key, std::slice::from_ref(&client.cert)).unwrap();
+        let good = client_config(&identity(&client), &host.cert).unwrap();
+        run(server.clone(), good.clone()).await.unwrap();
+        run(server.clone(), good).await.unwrap();
+        let bad = client_config(&identity(&stranger), &host.cert).unwrap();
+        assert!(run(server, bad).await.is_err());
+    }
+
     #[tokio::test]
     async fn pinned_pair_completes_the_handshake() {
         let (host, client) = (make(), make());
@@ -322,7 +370,10 @@ mod tests {
     #[tokio::test]
     async fn an_unpaired_client_is_refused() {
         let (host, client, stranger) = (make(), make(), make());
-        assert!(handshake(&host, &stranger, &[&client]).await.is_err());
+        let server =
+            server_config(&host.cert, &host.key, std::slice::from_ref(&client.cert)).unwrap();
+        let config = client_config(&identity(&stranger), &host.cert).unwrap();
+        assert!(run(server, config).await.is_err());
     }
 
     #[tokio::test]

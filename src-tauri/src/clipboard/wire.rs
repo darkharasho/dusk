@@ -33,7 +33,14 @@ pub enum Wire {
     /// The first line each way, carrying the protocol version.
     Hello { version: u32 },
     /// Clipboard text. `format` is `"text"`; anything else is ignored.
-    Clip { format: String, text: String },
+    /// Missing fields default to empty, so a clip in a format this build
+    /// does not know still parses and is then ignored by [`text_of`].
+    Clip {
+        #[serde(default)]
+        format: String,
+        #[serde(default)]
+        text: String,
+    },
     /// The sender will not take part, and says why.
     Declined { reason: Decline },
     /// The sender is leaving the session.
@@ -74,6 +81,7 @@ pub enum Decline {
     /// The connecting machine is not a paired device.
     NotPaired,
     /// The host's desktop cannot be synced (for example GNOME on Wayland).
+    /// `detail` is a fixed human-readable reason, never clipboard text.
     Unsupported { detail: Option<String> },
 }
 
@@ -124,6 +132,9 @@ mod tests {
     #[test]
     fn a_format_other_than_text_is_ignored() {
         let w: Wire = serde_json::from_str(r#"{"type":"clip","format":"png","text":""}"#).unwrap();
+        assert_eq!(text_of(&w), None);
+        let w: Wire =
+            serde_json::from_str(r#"{"type":"clip","format":"png","data":"AAAA"}"#).unwrap();
         assert_eq!(text_of(&w), None);
     }
 

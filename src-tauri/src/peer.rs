@@ -99,11 +99,25 @@ pub const PORT: u16 = 47850;
 /// timeout, so the client is still waiting when the answer comes.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// How long the connecting side waits on an answer: the host's own wait,
-/// and time on top for whatever it does once allowed. A pairing by
-/// certificate needs the room too, since the host may restart before it
-/// replies.
-const REPLY_TIMEOUT: Duration = Duration::from_secs(ANSWER_TIMEOUT.as_secs() + 30);
+/// How long the connecting side waits on each line of an answer: the most
+/// a host that took the request can take over it. Checking the account
+/// with GitHub and then offering the PIN for as long as the client may take
+/// to send its own request is one path; asking the person and then the
+/// same is the other, and the longer. Not shorter than either, because a
+/// reply that times out is reported as the host having gone, and that
+/// stops the client, which may have been seconds from pairing.
+///
+/// The client's own pairing timeout is what really bounds a pairing: the
+/// ask is dropped the moment the client finishes, however it finishes.
+const REPLY_TIMEOUT: Duration =
+    Duration::from_secs(ANSWER_TIMEOUT.as_secs() + PIN_WINDOW.as_secs() + 10);
+
+/// How long the connecting side waits on a reply to a pairing by
+/// certificate. The host checks the account with GitHub, writes its file
+/// and may restart before it replies, which takes up to about forty
+/// seconds; a host that takes the request and says nothing for longer
+/// than that is not going to, and the PIN path is waiting behind this.
+const CERT_REPLY_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The longest line read from a peer, 16 KiB. A request is small, but a
 /// certificate pairing carries PEM certificates and a signature; some reads
@@ -273,18 +287,21 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
             // A dropped connection means the asking side gave up; the
             // prompt should go with it.
             let gone = async { while let Ok(Some(_)) = lines.next_line().await {} };
+            let strangers_welcome = state.store.lock().await.allow_other_devices
+                || state.credentials.load().await.is_none();
             match pair_for_account(&state, &address, &pin, &name, proof.as_ref()).await {
-                Some(reply) => reply,
+                Answer::Replied(reply) => reply,
                 // A host that is not set up yet gets past this, so that
                 // `handle_pair` can say that instead, which is the real reason.
-                None if !state.store.lock().await.allow_other_devices
-                    && state.credentials.load().await.is_some() =>
-                {
-                    Message::Declined {
-                        reason: not_on_this_account(proof.is_some()),
-                    }
+                Answer::NotVouched | Answer::CouldNotCheck(_) if strangers_welcome => {
+                    handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await
                 }
-                None => handle_pair(&app, &state, &mut write, &address, &pin, &name, gone).await,
+                Answer::CouldNotCheck(reason) => Message::Declined {
+                    reason: could_not_check(&reason),
+                },
+                Answer::NotVouched => Message::Declined {
+                    reason: not_on_this_account(proof.is_some()),
+                },
             }
         }
         Ok(Message::PairCert { name, cert, proof }) => {
@@ -418,28 +435,63 @@ fn host_display(app: &AppHandle) -> Option<(u32, u32)> {
     (size.width > 0 && size.height > 0).then_some((size.width, size.height))
 }
 
+/// How [`pair_for_account`] went.
+enum Answer {
+    /// The request was one of this account's; this is the reply.
+    Replied(Message),
+    /// Not on this account, or no proof at all. Ask as usual.
+    NotVouched,
+    /// Could not find out whether it is on this account; the reason is
+    /// worded for the person at the other machine.
+    CouldNotCheck(String),
+}
+
 /// Pair without asking, when the request is signed by another machine on
 /// this machine's own account: the question the prompt would ask was
-/// answered when both were signed in. `None` means ask as usual.
+/// answered when both were signed in.
 async fn pair_for_account(
     state: &Arc<AppState>,
     address: &str,
     pin: &str,
     name: &str,
     proof: Option<&crate::account::Proof>,
-) -> Option<Message> {
-    let proof = proof?;
-    let credentials = state.credentials.load().await?;
-    if !state.account.vouches(&state.http, proof, pin).await {
-        return None;
+) -> Answer {
+    let Some(proof) = proof else {
+        return Answer::NotVouched;
+    };
+    let Some(credentials) = state.credentials.load().await else {
+        return Answer::NotVouched;
+    };
+    match state
+        .account
+        .vouch_for(&state.http, proof, &crate::account::keys::pair_message(pin))
+        .await
+    {
+        crate::account::Vouch::Vouched => {}
+        crate::account::Vouch::NotOnAccount => return Answer::NotVouched,
+        crate::account::Vouch::CouldNotCheck(reason) => return Answer::CouldNotCheck(reason),
     }
     eprintln!("dusk: {name} is on this account; pairing without asking");
-    Some(match enter_pin(&credentials, address, pin, name).await {
-        Ok(()) => Message::Accepted,
-        Err(err) => Message::Declined {
-            reason: err.to_string(),
+    Answer::Replied(
+        match enter_pin(&credentials, Some(address), pin, name).await {
+            Ok(()) => Message::Accepted,
+            Err(err) => Message::Declined {
+                reason: err.to_string(),
+            },
         },
-    })
+    )
+}
+
+/// Why a signed request could not be checked against this machine's
+/// account, said to the person at the machine that asked. Not the same
+/// as [`not_on_this_account`]: signing in again *there* would not help.
+fn could_not_check(reason: &str) -> String {
+    let host = host_name();
+    let reason = reason.trim_end_matches('.');
+    format!(
+        "{host} couldn't check whether this machine is on its GitHub account ({reason}). \
+         Sign in again on {host}, or turn on Let other devices pair there in Settings › Hosting."
+    )
 }
 
 async fn handle_pair(
@@ -491,7 +543,7 @@ async fn handle_pair(
         };
     }
 
-    match enter_pin(&credentials, address, pin, name).await {
+    match enter_pin(&credentials, Some(address), pin, name).await {
         Ok(()) => Message::Accepted,
         Err(err) => Message::Declined {
             reason: err.to_string(),
@@ -551,9 +603,12 @@ const PIN_WINDOW: Duration =
 /// fail faster on a genuinely wrong PIN. Waiting is the right trade: a wrong
 /// PIN costs thirty seconds before it is reported, where giving up early
 /// cost every pairing on a machine whose client is slow to start.
-async fn enter_pin(
+///
+/// `address` is where the request came from, when a peer carried it; a
+/// PIN typed in by hand has none, and is offered to every waiting pairing.
+pub(crate) async fn enter_pin(
     credentials: &sunshine::Credentials,
-    address: &str,
+    address: Option<&str>,
     pin: &str,
     name: &str,
 ) -> Result<(), sunshine::ApiError> {
@@ -561,7 +616,7 @@ async fn enter_pin(
     let deadline = tokio::time::Instant::now() + PIN_WINDOW;
     let mut last = None;
     while tokio::time::Instant::now() < deadline {
-        match api.submit_pin(credentials, pin, name, Some(address)).await {
+        match api.submit_pin(credentials, pin, name, address).await {
             Ok(()) => return Ok(()),
             Err(sunshine::ApiError::Unauthorized) => return Err(sunshine::ApiError::Unauthorized),
             Err(err) => last = Some(err),
@@ -679,7 +734,8 @@ async fn ask_cert_at(address: &str, port: u16, request: Message) -> CertOutcome 
     }
 
     let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
-    let Ok(Ok(Some(line))) = tokio::time::timeout(REPLY_TIMEOUT, lines.next_line()).await else {
+    let Ok(Ok(Some(line))) = tokio::time::timeout(CERT_REPLY_TIMEOUT, lines.next_line()).await
+    else {
         return CertOutcome::NoPeer;
     };
     match serde_json::from_str::<Message>(&line) {
@@ -1298,6 +1354,16 @@ mod tests {
     fn the_client_waits_out_a_host_that_restarts_before_answering() {
         // The host may restart itself before it replies, which takes up to
         // about forty seconds.
-        assert!(REPLY_TIMEOUT >= Duration::from_secs(45));
+        assert!(CERT_REPLY_TIMEOUT >= Duration::from_secs(45));
+    }
+
+    #[test]
+    fn the_client_outwaits_everything_the_host_may_do_with_a_pin_request() {
+        // A reply that times out is taken as the host having gone, which
+        // stops the client. So it must not time out while the host is still
+        // within its own limits: the person's answer and then the PIN
+        // window, or the GitHub check and then the PIN window.
+        assert!(REPLY_TIMEOUT > ANSWER_TIMEOUT + PIN_WINDOW);
+        assert!(REPLY_TIMEOUT > crate::account::github::TIMEOUT + PIN_WINDOW);
     }
 }

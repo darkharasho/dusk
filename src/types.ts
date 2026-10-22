@@ -192,6 +192,13 @@ export interface Snapshot {
   virtualScreen: boolean;
   /** How this machine could do that, and `"none"` if it cannot. */
   virtualScreenMechanism: ScreenMechanism;
+  /**
+   * Hosting owes a restart to load a change to its paired machines, and why
+   * it has not happened yet. Null when nothing is owed. Until it happens a
+   * machine that paired with this one by account is told to try again in a
+   * minute, so this is the one place that says what is going on.
+   */
+  hostRestart: string | null;
 }
 
 /**
@@ -232,6 +239,12 @@ export interface AccountView {
    * the only other symptom is your own machines appearing not to be yours.
    */
   expired: string | null;
+  /**
+   * Set when the keystore would not say whether this machine is signed in.
+   * Shown instead of the sign-in form: signing in again on a machine that
+   * already is would mint it a second identity.
+   */
+  unreadable: string | null;
 }
 
 export interface SignInCode {

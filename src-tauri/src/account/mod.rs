@@ -184,13 +184,37 @@ struct Cached {
     /// Something is stored but cannot be used. Behaves as signed out for
     /// anything that degrades, but is not a sign-out: see [`Membership`].
     unusable: bool,
+    /// GitHub refused the stored token outright, and the keystore held no
+    /// better one. Until now this was only a log line: the Account screen
+    /// said signed in while every other machine quietly stopped being
+    /// yours — the same failure an aged-out token used to give, from a
+    /// revoked one. Cleared by a new sign-in or a list that reads again.
+    rejected: bool,
 }
 
 #[derive(Default)]
 struct MachineList {
     entries: HashMap<String, Entry>,
     fetched: Option<Instant>,
+    /// When the list was last *asked for*, whether or not that worked, so a
+    /// GitHub that is down is asked again on a timer and not on every tick.
+    asked: Option<Instant>,
 }
+
+/// How old the machine list may get before a background tick reads it
+/// again.
+///
+/// Until this existed the list was read once at launch, so a machine that
+/// joined the account, or moved to a new address, stayed invisible to every
+/// Dusk already running until it was restarted. Twelve reads an hour is
+/// nothing against GitHub's limit of five thousand.
+pub const LIST_MAX_AGE: Duration = Duration::from_secs(5 * 60);
+
+/// What the Account screen says when GitHub has refused the sign-in.
+const REJECTED_NOTICE: &str = "GitHub no longer accepts this machine's sign-in, so it can no \
+                               longer check which machines are yours. Sign in again.";
+const EXPIRED_NOTICE: &str = "Your GitHub sign-in has expired, so this machine can no longer \
+                              check which machines are yours. Sign in again.";
 
 /// How the sign-in is read.
 ///
@@ -243,6 +267,11 @@ pub struct AccountView {
     /// shows this rather than letting the only symptom be other machines
     /// quietly ceasing to be yours.
     pub expired: Option<String>,
+    /// Set when the keystore would not say whether this machine is signed
+    /// in: a locked keyring, a dismissed prompt. Shown instead of the
+    /// sign-in form, which would otherwise invite a second sign-in on a
+    /// machine that already has one.
+    pub unreadable: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -366,6 +395,8 @@ impl AccountState {
         };
         cached.account = account;
         cached.unusable = false;
+        // A fresh sign-in, or a sign-out, is the cure for a refused one.
+        cached.rejected = false;
         cached.read = true;
     }
 
@@ -536,11 +567,10 @@ impl AccountState {
     /// it was signed in the whole time.
     pub async fn expiry_notice(&self) -> Option<String> {
         let account = self.load().await?;
-        account.tokens.expired().then(|| {
-            "Your GitHub sign-in has expired, so this machine can no longer check which \
-             machines are yours. Sign in again."
-                .to_string()
-        })
+        if self.cached.read().await.rejected {
+            return Some(REJECTED_NOTICE.to_string());
+        }
+        account.tokens.expired().then(|| EXPIRED_NOTICE.to_string())
     }
 
     /// An access token GitHub will still accept, or nothing.
@@ -569,6 +599,45 @@ impl AccountState {
         }
     }
 
+    /// Read the machine list again if the last read is older than
+    /// `max_age`, from what this run already knows about the sign-in.
+    ///
+    /// For the poller's tick. Never reads the keystore — background work
+    /// must not be what puts a keystore prompt on screen — and never asks
+    /// again while GitHub has refused the token, since the only cure for
+    /// that is a person signing in, which clears it. A read that fails for
+    /// any other reason (GitHub down, no network) is tried again once it is
+    /// `max_age` old, not on every tick.
+    pub async fn refresh_if_stale(&self, http: &reqwest::Client, max_age: Duration) {
+        {
+            let cached = self.cached.read().await;
+            if !cached.read || cached.rejected || cached.account.is_none() {
+                return;
+            }
+        }
+        let due = {
+            let mut list = self.list.write().await;
+            let due = list.asked.map_or(true, |at| at.elapsed() >= max_age);
+            if due {
+                list.asked = Some(Instant::now());
+            }
+            due
+        };
+        if !due {
+            return;
+        }
+        if let Err(err) = self.refresh_list(http).await {
+            eprintln!("dusk: could not re-read the account's machine list: {err}");
+        }
+    }
+
+    /// Read the machine list again now, however recently it was read.
+    /// For the Refresh button: a person pressing it wants the newest answer.
+    pub async fn refresh_now(&self, http: &reqwest::Client) {
+        self.list.write().await.asked = None;
+        self.refresh_if_stale(http, Duration::ZERO).await;
+    }
+
     /// Forget what was read, so the next read goes to the keystore again.
     ///
     /// The window reads the sign-in once and keeps it for the run, which is
@@ -593,13 +662,21 @@ impl AccountState {
             // error rather than a loop.
             Err(err) if github::is_rejected(&err) => {
                 self.reread().await;
-                self.fetch_list(http).await
+                let again = self.fetch_list(http).await;
+                if again.as_ref().is_err_and(|err| github::is_rejected(err)) {
+                    // Both the token in hand and the one in the keystore
+                    // are refused. Remembered, so the Account screen can
+                    // say so instead of leaving it to be inferred.
+                    self.cached.write().await.rejected = true;
+                }
+                again
             }
             other => other,
         };
         // Only a list that was actually read: a failed fetch leaves the old
         // one in place, and nothing should act as though it changed.
         if fetched.is_ok() {
+            self.cached.write().await.rejected = false;
             self.changed.notify_one();
         }
         fetched
@@ -635,11 +712,21 @@ impl AccountState {
         let mut cached = self.list.write().await;
         cached.entries = entries;
         cached.fetched = Some(Instant::now());
+        cached.asked = cached.fetched;
         Ok(())
     }
 
     pub async fn view(&self) -> AccountView {
-        let account = self.load().await;
+        let (account, unreadable) = match self.stored().await {
+            Ok(account) => (account, None),
+            Err(err) => (
+                None,
+                Some(format!(
+                    "Dusk could not open the system keystore to check whether this machine \
+                     is signed in ({err}). Unlock it and try again."
+                )),
+            ),
+        };
         let own = account.as_ref().map(|a| a.key.id.clone());
         let mut machines: Vec<MachineView> = self
             .list
@@ -657,17 +744,19 @@ impl AccountState {
                 .cmp(&a.this_machine)
                 .then(a.name.cmp(&b.name))
         });
-        let expired = account.as_ref().filter(|a| a.tokens.expired()).map(|_| {
-            "Your GitHub sign-in has expired, so this machine can no longer check which \
-                 machines are yours. Sign in again."
-                .to_string()
-        });
+        // One notice for both ways a sign-in stops working: the person
+        // cannot tell them apart and the cure is the same.
+        let expired = match account {
+            Some(_) => self.expiry_notice().await,
+            None => None,
+        };
         AccountView {
             available: github::client_id().is_some(),
             user: account.map(|a| a.user),
             machines,
             persistent: self.cached.read().await.persistent,
             expired,
+            unreadable,
         }
     }
 
@@ -687,19 +776,22 @@ impl AccountState {
     }
 
     /// Whether `proof` shows the request comes from another machine on this
-    /// machine's own account.
-    pub async fn vouches(&self, http: &reqwest::Client, proof: &Proof, pin: &str) -> bool {
-        self.vouches_for(http, proof, &keys::pair_message(pin))
-            .await
+    /// machine's own account, over any signed message.
+    pub async fn vouches_for(&self, http: &reqwest::Client, proof: &Proof, message: &[u8]) -> bool {
+        self.vouch_for(http, proof, message).await == Vouch::Vouched
     }
 
-    /// [`Self::vouches`] over any signed message, not only a PIN.
-    pub async fn vouches_for(&self, http: &reqwest::Client, proof: &Proof, message: &[u8]) -> bool {
+    /// [`Self::vouches_for`], saying why not when not.
+    ///
+    /// "Not one of yours" and "could not find out" are different answers
+    /// for the person at the other machine: the first means sign in there,
+    /// the second means sign in again *here*, or get this machine online.
+    pub async fn vouch_for(&self, http: &reqwest::Client, proof: &Proof, message: &[u8]) -> Vouch {
         let Some(account) = self.load().await else {
-            return false;
+            return Vouch::NotOnAccount;
         };
         if account.user.id != proof.account {
-            return false;
+            return Vouch::NotOnAccount;
         }
         let known = self.list.read().await.entries.contains_key(&proof.machine);
         let stale = self
@@ -708,17 +800,28 @@ impl AccountState {
             .await
             .fetched
             .map_or(true, |at| at.elapsed() > LIST_REFRESH);
+        let mut could_not_check = None;
         if !known && stale {
             if let Err(err) = self.refresh_list(http).await {
                 eprintln!("dusk: could not read the account's machine list: {err}");
+                could_not_check = Some(err);
             }
         }
-        vouch(
+        if vouch(
             account.user.id,
             &self.list.read().await.entries,
             proof,
             message,
-        )
+        ) {
+            return Vouch::Vouched;
+        }
+        match could_not_check {
+            // Unknown to a list that could not be re-read is not a "no".
+            Some(reason) if !self.list.read().await.entries.contains_key(&proof.machine) => {
+                Vouch::CouldNotCheck(reason)
+            }
+            _ => Vouch::NotOnAccount,
+        }
     }
 
     /// [`Self::membership`] from what this run already knows, never reading
@@ -779,6 +882,19 @@ impl AccountState {
 }
 
 /// The check itself, with nothing to fetch.
+/// How [`AccountState::vouch_for`] answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Vouch {
+    /// Signed by a machine on this machine's own account.
+    Vouched,
+    /// Not on this account, or not signed at all.
+    NotOnAccount,
+    /// The machine is not on the list as last read, and the list could not
+    /// be read again: the sign-in here has lapsed, or GitHub is out of
+    /// reach. Carries the reason, worded for a person.
+    CouldNotCheck(String),
+}
+
 fn vouch(own_account: u64, list: &HashMap<String, Entry>, proof: &Proof, message: &[u8]) -> bool {
     proof.account == own_account
         && list
@@ -1227,6 +1343,20 @@ mod identity_tests {
     }
 
     #[tokio::test]
+    async fn a_keystore_it_cannot_read_is_said_so_on_the_account_screen() {
+        // The screen used to show the sign-in form, as though signed out,
+        // and signing in there would have given the machine a second
+        // identity on the account.
+        let state = with_keystore(|| Err("keyring is locked".into()));
+        let view = state.view().await;
+        assert!(view.user.is_none());
+        let notice = view.unreadable.expect("says the keystore would not answer");
+        assert!(notice.contains("keyring is locked"), "{notice}");
+        let fine = with_keystore(|| Ok(None));
+        assert!(fine.view().await.unreadable.is_none());
+    }
+
+    #[tokio::test]
     async fn membership_lists_the_machines_once_fetched() {
         let stored = an_account(42);
         let own = stored.machine.clone();
@@ -1278,6 +1408,110 @@ mod identity_tests {
         state.save(None).await;
         assert_eq!(state.membership().await, Membership::SignedOut);
         assert_eq!(state.known_membership().await, Membership::SignedOut);
+    }
+
+    #[tokio::test]
+    async fn a_refused_sign_in_is_said_on_the_account_screen() {
+        // A token GitHub refuses used to be a log line and nothing else:
+        // the screen said signed in while every other machine stopped being
+        // yours. The notice is the same one an aged-out token gets, since
+        // the person cannot tell the two apart and the cure is the same.
+        let stored = an_account(42);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        assert!(state.view().await.expired.is_none());
+
+        state.load().await;
+        state.cached.write().await.rejected = true;
+        let view = state.view().await;
+        assert!(
+            view.user.is_some(),
+            "the sign-in is kept, so it can be named"
+        );
+        assert_eq!(view.expired.as_deref(), Some(REJECTED_NOTICE));
+        assert_eq!(
+            state.expiry_notice().await.as_deref(),
+            Some(REJECTED_NOTICE),
+            "and the list read says the same"
+        );
+
+        // Signing in again clears it.
+        state
+            .save(Some(Account::from_stored(an_account(42)).unwrap()))
+            .await;
+        assert!(state.view().await.expired.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_background_re_read_never_reads_the_keystore_or_asks_a_refused_token() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let stored = an_account(42);
+        let state = with_keystore(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(stored.clone()))
+        });
+        let http = reqwest::Client::new();
+
+        // Nothing read yet: the tick must not be what reads the keystore.
+        state.refresh_if_stale(&http, Duration::ZERO).await;
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert!(state.list.read().await.asked.is_none(), "it did not ask");
+
+        // Refused: asking again would only be refused again, and a reread
+        // could put a keystore prompt on screen every five minutes.
+        state.load().await;
+        state.cached.write().await.rejected = true;
+        state.refresh_if_stale(&http, Duration::ZERO).await;
+        assert!(state.list.read().await.asked.is_none(), "it did not ask");
+
+        // Recently asked: left alone until it is old enough.
+        state.cached.write().await.rejected = false;
+        state.list.write().await.asked = Some(Instant::now());
+        state
+            .refresh_if_stale(&http, Duration::from_secs(3600))
+            .await;
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "still only the one read");
+    }
+
+    #[tokio::test]
+    async fn a_list_that_cannot_be_re_read_is_could_not_check_not_a_no() {
+        // The host's sign-in has lapsed. A machine it has not heard of yet
+        // is not "not yours": the host could not find out. Telling the
+        // other person to sign in again on *their* side would send them
+        // in the wrong direction.
+        let mut stored = an_account(42);
+        stored.expires_at = Some(1);
+        let state = with_keystore(move || Ok(Some(stored.clone())));
+        let http = reqwest::Client::new();
+        let other = MachineKey::generate().unwrap();
+        let message = keys::pair_message("1234");
+        let proof = Proof {
+            account: 42,
+            machine: other.id.clone(),
+            signature: other.sign(&message),
+        };
+        assert!(matches!(
+            state.vouch_for(&http, &proof, &message).await,
+            Vouch::CouldNotCheck(reason) if reason.contains("expired")
+        ));
+
+        // Another account is a plain no, whatever the state of the list.
+        let elsewhere = Proof {
+            account: 7,
+            ..proof.clone()
+        };
+        assert_eq!(
+            state.vouch_for(&http, &elsewhere, &message).await,
+            Vouch::NotOnAccount
+        );
+
+        // And a list read within the hour that does not have it is a no
+        // too; the host did look.
+        state.list.write().await.fetched = Some(Instant::now());
+        assert_eq!(
+            state.vouch_for(&http, &proof, &message).await,
+            Vouch::NotOnAccount
+        );
     }
 
     #[tokio::test]

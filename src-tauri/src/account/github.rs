@@ -31,7 +31,7 @@ const SCOPE: &str = "gist";
 /// How Dusk finds its gist among the account's others.
 const GIST_DESCRIPTION: &str = "Dusk machines";
 const FILE_PREFIX: &str = "dusk-machine-";
-const TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The OAuth app's client ID. Public by design — the device flow has no
 /// secret — so it is baked in at build time, with an environment override
@@ -195,6 +195,17 @@ fn api(
 pub const REJECTED: &str = "GitHub no longer accepts this sign-in. Sign in again.";
 
 /// Whether an error is GitHub refusing the token itself.
+/// A request that never got an answer, said without the library's own
+/// text: that names the URL and the socket error, and reaches the screen
+/// as the reason a machine "is not on your account".
+fn unreachable(err: reqwest::Error) -> String {
+    if err.is_timeout() {
+        "GitHub did not answer in time".to_string()
+    } else {
+        "could not reach GitHub".to_string()
+    }
+}
+
 pub fn is_rejected(err: &str) -> bool {
     err == REJECTED
 }
@@ -221,7 +232,7 @@ pub async fn start(http: &reqwest::Client, client_id: &str) -> Result<DeviceCode
         .timeout(TIMEOUT)
         .send()
         .await
-        .map_err(|e| format!("could not reach GitHub: {e}"))?;
+        .map_err(unreachable)?;
     let body = json_of(response).await?;
     if let Some(err) = body["error_description"]
         .as_str()
@@ -280,7 +291,7 @@ pub async fn user(http: &reqwest::Client, token: &str) -> Result<User, String> {
         api(http, reqwest::Method::GET, "/user", token)
             .send()
             .await
-            .map_err(|e| e.to_string())?,
+            .map_err(unreachable)?,
     )
     .await?;
     Ok(User {
@@ -298,7 +309,7 @@ pub async fn find_list(http: &reqwest::Client, token: &str) -> Result<Option<Str
         api(http, reqwest::Method::GET, "/gists?per_page=100", token)
             .send()
             .await
-            .map_err(|e| e.to_string())?,
+            .map_err(unreachable)?,
     )
     .await?;
     Ok(pick_list(&body))
@@ -337,7 +348,7 @@ pub async fn publish(
             "files": files,
         })),
     };
-    let body = json_of(request.send().await.map_err(|e| e.to_string())?).await?;
+    let body = json_of(request.send().await.map_err(unreachable)?).await?;
     body["id"]
         .as_str()
         .map(String::from)
@@ -361,7 +372,7 @@ pub async fn unpublish(
         .json(&json!({ "files": files }))
         .send()
         .await
-        .map_err(|e| e.to_string())?,
+        .map_err(unreachable)?,
     )
     .await
     .map(|_| ())
@@ -377,7 +388,7 @@ pub async fn read_list(
         api(http, reqwest::Method::GET, &format!("/gists/{list}"), token)
             .send()
             .await
-            .map_err(|e| e.to_string())?,
+            .map_err(unreachable)?,
     )
     .await?;
     Ok(parse_list(&body))

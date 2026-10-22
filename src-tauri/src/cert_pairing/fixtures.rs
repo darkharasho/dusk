@@ -99,6 +99,9 @@ pub struct Fake {
     /// down. Otherwise each restart is one unanswered poll and then the
     /// script again.
     pub stays_up: bool,
+    /// How many polls the host goes unanswered for after a restart, when
+    /// it does go down. Zero means one, the usual restart.
+    pub down_for: usize,
 }
 
 impl Fake {
@@ -136,7 +139,10 @@ impl Host for Fake {
             .unwrap()
             .push((self.polls.load(Ordering::SeqCst), held));
         if !self.stays_up {
-            self.script.lock().unwrap().push_front(None);
+            let mut script = self.script.lock().unwrap();
+            for _ in 0..self.down_for.max(1) {
+                script.push_front(None);
+            }
         }
         Ok(())
     }

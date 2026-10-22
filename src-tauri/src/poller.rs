@@ -39,6 +39,16 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>) {
 }
 
 pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
+    // Before the snapshot and before any peer is answered from the store:
+    // `dusk screen` may have written the settings file since the last tick.
+    if state
+        .store
+        .lock()
+        .await
+        .adopt_external_changes(&state.store_path)
+    {
+        eprintln!("dusk: the sized-screen setting was changed from the command line");
+    }
     let targets = state.registry.read().await.probe_targets();
     if targets.is_empty() {
         emit_snapshot(app, state).await;
@@ -146,6 +156,12 @@ async fn fetch_app_lists(app: &AppHandle, state: &Arc<AppState>) {
 /// rather than as the machine being off, and it is the whole reason the
 /// account's list is the better source of truth for "yours".
 async fn hold_the_account_machines(state: &Arc<AppState>) {
+    // Read again now and then, from the cached sign-in only, so a machine
+    // that joined the account or moved address shows up without a restart.
+    state
+        .account
+        .refresh_if_stale(&state.http, crate::account::LIST_MAX_AGE)
+        .await;
     let entries = state.account.machines_on_account().await;
     // Nothing known yet is not the same as owning nothing: before the list
     // is read, leaving the grid as discovery found it is the honest answer.

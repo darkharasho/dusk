@@ -76,17 +76,25 @@ pub fn creds_args(credentials: &Credentials) -> [&str; 3] {
 /// A second implementation of this is the last thing anyone wants: it is the
 /// step that decides whether a host is configurable at all.
 pub async fn run(host: &dyn HostBackend, store: &CredentialStore) -> Result<(), String> {
+    let previous = store.load().await;
     let credentials = generate()?;
-    host.set_credentials(&credentials)
-        .await
-        .map_err(|e| e.to_string())?;
+    let api = SunshineApi::new(super::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
 
-    // Kept before it is checked, not after. From here this is Sunshine's
-    // password whether or not the check below passes, and losing it would
-    // leave a host nobody can configure until this runs again.
+    // Kept before it is handed over, not after. Setting it writes the
+    // host's file and then restarts the service, and a restart that fails
+    // leaves a file the next start will read: from that moment this is the
+    // host's password, and a Dusk that had not kept it yet would be locked
+    // out of a host nobody can configure until this runs again.
     store.save(credentials.clone()).await?;
 
-    let api = SunshineApi::new(super::api::DEFAULT_PORT).map_err(|e| e.to_string())?;
+    if let Err(err) = host.set_credentials(&credentials).await {
+        let api = &api;
+        undo(store, previous, &credentials, |c| async move {
+            api.verify(&c).await.map(|_| ())
+        })
+        .await;
+        return Err(err.to_string());
+    }
     wait_until_accepted(&api, &credentials).await?;
 
     // This is the moment Dusk takes over presenting this host, so it is also
@@ -99,6 +107,46 @@ pub async fn run(host: &dyn HostBackend, store: &CredentialStore) -> Result<(), 
         eprintln!("dusk: could not hide Sunshine's tray icon: {err}");
     }
     Ok(())
+}
+
+/// Setting the credential failed part way, and the error does not say
+/// which part. What the running host still answers to does: one that
+/// still takes the sign-in it had never read the new one (an elevation
+/// prompt declined, the binary not found), so that one is put back. One
+/// that refuses the new sign-in when there was none before is the same
+/// case, and forgetting the new one lets the next start set one again on
+/// its own. A host that is down, or already takes the new one, did read
+/// it, and the new one stays. Every outcome is one that
+/// [`super::ApiError::Unauthorized`] or the next start can recover from;
+/// none loses a password the host knows.
+async fn undo<F, Fut>(
+    store: &CredentialStore,
+    previous: Option<Credentials>,
+    new: &Credentials,
+    verify: F,
+) where
+    F: Fn(Credentials) -> Fut,
+    Fut: std::future::Future<Output = Result<(), super::ApiError>>,
+{
+    match previous {
+        Some(old) => {
+            if verify(old.clone()).await.is_ok() {
+                if let Err(err) = store.save(old).await {
+                    eprintln!("dusk: could not put the host's sign-in back: {err}");
+                }
+            }
+        }
+        None => {
+            if matches!(
+                verify(new.clone()).await,
+                Err(super::ApiError::Unauthorized)
+            ) {
+                if let Err(err) = store.forget().await {
+                    eprintln!("dusk: could not forget a sign-in the host never took: {err}");
+                }
+            }
+        }
+    }
 }
 
 /// Sunshine was just restarted to read the new credential, and takes a few
@@ -137,6 +185,8 @@ async fn hide_tray(api: &SunshineApi, credentials: &Credentials) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sunshine::ApiError;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn a_generated_password_is_long_and_needs_no_quoting() {
@@ -169,6 +219,80 @@ mod tests {
     #[test]
     fn no_randomness_means_no_password() {
         assert!(password_from(|_| Err("none".into())).is_err());
+    }
+
+    fn remembering(
+        initial: Option<Credentials>,
+    ) -> (CredentialStore, Arc<Mutex<Vec<Option<Credentials>>>>) {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let log = writes.clone();
+        let store = CredentialStore::with(
+            Arc::new(move || Ok(initial.clone())),
+            Arc::new(move |c: Option<&Credentials>| {
+                log.lock().unwrap().push(c.cloned());
+                Ok(())
+            }),
+        );
+        (store, writes)
+    }
+
+    fn creds(password: &str) -> Credentials {
+        Credentials {
+            username: USERNAME.into(),
+            password: password.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_host_that_still_takes_the_old_sign_in_gets_it_back() {
+        let (store, writes) = remembering(Some(creds("old")));
+        store.save(creds("new")).await.unwrap();
+        undo(&store, Some(creds("old")), &creds("new"), |c| async move {
+            if c.password == "old" {
+                Ok(())
+            } else {
+                Err(ApiError::Unauthorized)
+            }
+        })
+        .await;
+        assert_eq!(store.load().await, Some(creds("old")));
+        assert_eq!(writes.lock().unwrap().last(), Some(&Some(creds("old"))));
+    }
+
+    #[tokio::test]
+    async fn a_host_that_is_down_keeps_the_new_sign_in() {
+        // Down is what a host part way through a restart looks like, and
+        // the restart is what loads the new sign-in.
+        let (store, _) = remembering(Some(creds("old")));
+        store.save(creds("new")).await.unwrap();
+        undo(&store, Some(creds("old")), &creds("new"), |_| async {
+            Err(ApiError::Unreachable("down".into()))
+        })
+        .await;
+        assert_eq!(store.load().await, Some(creds("new")));
+    }
+
+    #[tokio::test]
+    async fn a_first_sign_in_the_host_refused_is_forgotten() {
+        let (store, writes) = remembering(None);
+        store.save(creds("new")).await.unwrap();
+        undo(&store, None, &creds("new"), |_| async {
+            Err(ApiError::Unauthorized)
+        })
+        .await;
+        assert!(store.load().await.is_none());
+        assert_eq!(writes.lock().unwrap().last(), Some(&None));
+    }
+
+    #[tokio::test]
+    async fn a_first_sign_in_a_down_host_will_read_is_kept() {
+        let (store, _) = remembering(None);
+        store.save(creds("new")).await.unwrap();
+        undo(&store, None, &creds("new"), |_| async {
+            Err(ApiError::Unreachable("down".into()))
+        })
+        .await;
+        assert_eq!(store.load().await, Some(creds("new")));
     }
 
     #[test]

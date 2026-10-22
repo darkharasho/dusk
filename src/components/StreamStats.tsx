@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { leaveStream, onSessionStats, type StreamStats as Stats } from "../api";
+import { describe } from "../errors";
 
 /**
  * Live numbers for the stream running from one machine.
@@ -45,7 +46,7 @@ export function StreamStats({ deviceId }: { deviceId: string }) {
     try {
       await leaveStream(deviceId);
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
       setLeaving(false);
     }
   }

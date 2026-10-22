@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { setBitrate, setCodec, setResolution } from "../api";
 import type { Codec, Resolution, Snapshot } from "../types";
+import { describe } from "../errors";
 
 /** The choices, keyed by what the select holds. */
 const CHOICES: { value: string; label: string; resolution: Resolution }[] = [
@@ -78,7 +79,7 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
     try {
       await change();
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(false);
     }

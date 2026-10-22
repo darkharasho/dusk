@@ -205,10 +205,11 @@ async fn set_screen(on: bool) -> i32 {
             "Streams from here are this machine's own size again."
         }
     );
-    // The window reads the settings when it starts and keeps them, so one
-    // already open is still working from the old value and would write it
-    // back over this. The same trap v0.3.25 fixed for the sign-in.
-    println!("If Dusk's window is open on this machine, restart it to pick this up.");
+    // A window already open takes this on at its next poll tick (see
+    // `Store::adopt_external_changes`), rather than working from its old
+    // copy and writing that back over this. The same trap v0.3.25 fixed
+    // for the sign-in.
+    println!("A Dusk window open on this machine picks this up within a few seconds.");
     0
 }
 

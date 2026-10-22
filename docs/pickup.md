@@ -6,6 +6,102 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
+**Unreleased, on `harden-sync-and-auth`: a stability pass over sync, auth
+and pairing**, from a full read of the code against the complaints of
+"endless errors with sync and auth". What changed, and why each one bit:
+
+- *Account.* The machine list was read once per run, so a machine signed in
+  after launch was never "yours" until Dusk restarted. It is re-read every
+  five minutes from the poll tick (`account::refresh_if_stale`, never
+  reading the keystore, never while GitHub has refused the token) and on
+  Refresh (spawned, so an unreachable GitHub does not stall the button). A
+  token GitHub refused (401) was only a log line while the Account screen
+  said signed in; it is now `Cached::rejected`, shown with the same notice
+  as expiry, and the notice carries a **Sign in again** button, since the
+  signed-in branch had only Sign out.
+- *Vouching.* `vouch_for` answers `Vouched` / `NotOnAccount` /
+  `CouldNotCheck(reason)`. Before, a host whose sign-in had lapsed or that
+  could not reach GitHub told the other person "sign in to that account on
+  X too", which was wrong and cost real time. Now it says the host could
+  not check, and what to do there. GitHub transport errors no longer carry
+  reqwest's URL-and-socket text.
+- *Keystore.* `CredentialStore::try_load` tells "nothing stored" from "the
+  keystore would not answer". `start_hosting` and `install_host` provisioned
+  on `load().is_none()`, so a locked keyring **rotated the host's password
+  and restarted it**. They now refuse with "could not open the system
+  keystore" instead.
+- *Registry.* `rekey` dropped `machine_id`/`mine`, so an account placeholder
+  folded into an mDNS card was re-made every tick (a flickering duplicate).
+  A plain-port probe (`pairing() == Unknown`, routine after an aborted TLS
+  handshake) overwrote a settled Paired verdict for a tick; it no longer
+  does. One missed probe took an online card Offline; it now takes
+  `OFFLINE_AFTER_MISSES` (2) in a row.
+- *Poll rate.* Discovery requested a tick on every mDNS re-resolution, i.e.
+  every host's TTL refresh. Only a new card or address does now
+  (`upsert_mdns_noting_change`). The ~108 `CLOSE_WAIT` sockets were most
+  likely this rate rather than a leak; worth re-measuring.
+- *Stream.* The stderr drain used `Lines`, which stops at the first
+  non-UTF-8 line; the pipe then fills and the client blocks on its next
+  write, which looks exactly like an unexplained freeze. It reads bytes
+  now, lossily. The session channel's accept is cancelled when the session
+  ends, instead of holding a listener per stream for the life of the
+  process. `SunshineApi::restart` no longer reports success for "nothing
+  listening".
+- *Settings file.* A `devices.json` that would not parse was replaced on
+  the next save, losing the pairing bookkeeping. It is moved to
+  `devices.json.corrupt-<secs>` beside the original.
+- *Window.* A failed first snapshot read showed the masthead forever; it
+  now shows the reason and Try again. A stream that died after the drawer
+  closed was reported nowhere; a dismissible notice above the grid now
+  names it. The drawer can be closed while a busy host finishes pairing
+  (the only part of pairing that can take hours), and no longer offers to
+  pair on an Unknown verdict. The pair prompt's buttons disable while an
+  answer is on its way. The hand-typed PIN (`accept_pin`) retries like the
+  peer path instead of failing once with "no device is waiting yet".
+
+A second pass closed everything the first one found and left:
+
+- *Owed restart.* `Snapshot::host_restart` says, on the Hosting panel, that
+  hosting owes a restart and, when it keeps not happening, why
+  (`Reconciler::trouble`, from `Unconfirmed::reason`). Before, a host
+  with a wrong port or a rotated password told every machine that paired
+  with it "try again in a minute", forever, and nothing on the host said
+  anything. `came_back` is three-valued now: a host seen going down is
+  waited for up to three `back_within`s (`STILL_DOWN_PATIENCE`) before the
+  restart is asked for again, so a slow start no longer costs a second
+  restart the moment the first is up.
+- *Provisioning.* `provision::run` keeps the new password before it is
+  handed to the host; on a failure it looks at which sign-in the running
+  host still takes and puts the old one back, forgets the new one
+  (`CredentialStore::forget`, a `None` write), or keeps it, so that every
+  outcome is one `ApiError::Unauthorized` or the next start recovers from.
+- *Host API.* One shared client with `pool_max_idle_per_host(0)` behind
+  every `SunshineApi::new`, instead of a pool per call.
+- *Quitting.* `AppState::end_streams`: quitting ends each stream (asked
+  first over the session channel, then `terminate`d after `QUIT_GRACE`),
+  because the overlay's Disconnect goes through Dusk and a stream left
+  behind had no way out. `RunEvent::ExitRequested` holds the first exit
+  while that runs; `AppState::quitting` lets the second through.
+- *Peer timeouts.* `REPLY_TIMEOUT` is `ANSWER_TIMEOUT + PIN_WINDOW + 10 s`,
+  since a reply that times out is taken as the host having gone and stops
+  the client; `CERT_REPLY_TIMEOUT` (90 s) is separate and shorter.
+- *Account screen.* `AccountView::unreadable`: a keystore that will not
+  answer shows a notice with Try again instead of the sign-in form.
+- *Error text.* `src/errors.ts` `describe(err)` everywhere `String(err)`
+  was, so a plugin's `Error` or object never reads as `[object Object]`.
+- *`dusk screen`.* The window adopts the file's sized-screen setting at
+  each poll tick (`Store::adopt_external_changes`, by mtime and length)
+  instead of answering peers from its stale copy and overwriting the file.
+
+Still open after that: the Windows `terminate` (`taskkill`) path is covered
+by `quitting_stops_a_stream_that_does_not_end_when_asked` on CI's Windows
+runner (ci.yml runs `cargo test` on all three OSes), but the `ExitRequested`
+hold in `lib.rs` has only been exercised by hand on Linux; `adopt_external_changes`
+takes only `virtual_screen`, so a second CLI-written setting would need
+adding there; and `undo` in `provision.rs` cannot tell "file written,
+restart failed" from "nothing written" when the host is up with the old
+sign-in, so that one case still ends in "Set it up again in Settings".
+
 **v0.3.33 is released**, all three platforms, from `main` (PR #6), still
 carrying the client's `dusk-v0.2.5`. Each stream's client log is now kept on
 disk and survives a freeze (see "keeps no log file" under Landmines); it was
@@ -127,7 +223,8 @@ pins `dusk-v0.2.5`, so v0.3.29 is the first packaged Dusk that carries
   `QSettings`, not the flush thread's write. A read-back verify before the
   release would close it.
 - Closing the drawer does not cancel a pairing in progress; a second Pair
-  starts a second loop (harmless, the host is idempotent).
+  starts a second loop (harmless, the host is idempotent). The drawer can
+  now be closed while the host is busy, by design; the rest still holds.
 - The Windows `config_dir` (`%ProgramFiles%\Sunshine\config`) is a guess until
   the Windows spike. Wrong means PIN fallback, not breakage.
 

@@ -72,6 +72,9 @@ pub struct ServerDetails {
     pub local_ip: Option<String>,
 }
 
+/// How many probes in a row must miss before an online card goes Offline.
+pub const OFFLINE_AFTER_MISSES: u8 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Device {
@@ -120,6 +123,12 @@ pub struct Device {
     /// the label someone chose. Internal to the backend.
     #[serde(skip)]
     pub custom_name: Option<String>,
+    /// Probes in a row that did not reach the machine while it was online.
+    /// A card goes Offline only after [`OFFLINE_AFTER_MISSES`] of them, so
+    /// one slow answer (a host busy encoding, a Wi-Fi hiccup) does not flap
+    /// it. Internal to the backend.
+    #[serde(skip)]
+    pub misses: u8,
 }
 
 impl Device {
@@ -143,6 +152,7 @@ impl Device {
             streaming_here: false,
             last_seen_ms: None,
             custom_name: None,
+            misses: 0,
         }
     }
 
@@ -276,6 +286,12 @@ pub struct Snapshot {
     /// watching, and by what means this machine could do it.
     pub virtual_screen: bool,
     pub virtual_screen_mechanism: ScreenMechanism,
+    /// Hosting owes a restart to load a change to its paired machines, and
+    /// why it has not happened yet, in words for the window. `None` when
+    /// nothing is owed. Until it happens, a machine that paired with this
+    /// one by account is told to try again in a minute, so this is the one
+    /// place that says what is really going on.
+    pub host_restart: Option<String>,
 }
 
 /// How a machine can give a stream a screen the size of the device watching.

@@ -13,6 +13,7 @@ import {
   type DownloadProgress,
 } from "../api";
 import type { DownloadPreview, Setup, Step } from "../types";
+import { describe } from "../errors";
 
 /** Bytes as something a person reads, not a number with nine digits. */
 function megabytes(bytes: number): string {
@@ -53,7 +54,7 @@ export function SetupChecklist() {
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
 
   useEffect(() => {
-    getSetup().then(setSetup).catch((e) => setError(String(e)));
+    getSetup().then(setSetup).catch((e) => setError(describe(e)));
   }, []);
 
   useEffect(() => {
@@ -78,7 +79,7 @@ export function SetupChecklist() {
       setPreview(null);
       await refresh();
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(false);
       setProgress(null);
@@ -141,7 +142,7 @@ export function SetupChecklist() {
           await refresh();
       }
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(false);
     }
@@ -170,7 +171,7 @@ export function SetupChecklist() {
         await perform(next);
       }
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
       await refresh().catch(() => {});
     } finally {
       setBusy(false);
@@ -188,7 +189,7 @@ export function SetupChecklist() {
       await installDisplayDriver();
       setConfirmDriver(false);
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(false);
       await refresh().catch(() => {});

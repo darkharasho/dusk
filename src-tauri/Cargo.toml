@@ -99,3 +99,8 @@ features = ["ring", "std", "tls12"]
 
 [dependencies.rustls-pemfile]
 version = "2"
+
+[dev-dependencies]
+# `test-util` for paused time in tests whose timing a slow runner would
+# otherwise decide; adding it here keeps the clock real in the shipped binary.
+tokio = { version = "1", features = ["test-util"] }

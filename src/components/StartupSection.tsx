@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getStartup, setOpenAtLogin, setStartupPrefs } from "../api";
 import type { StartupPrefs, StartupView } from "../types";
+import { describe } from "../errors";
 
 /** Where a hidden Dusk waits, in the words this platform uses for it. */
 const TRAY = /Mac/.test(navigator.userAgent) ? "menu bar" : "tray";
@@ -19,7 +20,7 @@ export function StartupSection() {
   useEffect(() => {
     getStartup()
       .then(setView)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(describe(e)));
   }, []);
 
   async function run(change: () => Promise<StartupView>) {
@@ -28,7 +29,7 @@ export function StartupSection() {
     try {
       setView(await change());
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(false);
     }

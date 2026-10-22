@@ -16,6 +16,7 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -205,6 +206,11 @@ const BACK_OFF_CAP: Duration = Duration::from_secs(60 * 60);
 pub(super) struct Unconfirmed {
     count: u32,
     not_before: Option<Instant>,
+    /// Why the last one did not happen, for the window: an owed restart
+    /// that keeps not happening is otherwise invisible, and every machine
+    /// that pairs with this one is told "try again in a minute" for as
+    /// long as it goes on.
+    reason: Option<String>,
 }
 
 impl Unconfirmed {
@@ -214,8 +220,9 @@ impl Unconfirmed {
 
     /// One more that did not happen. From the limit on, the wait starts at
     /// the tick and doubles with each, up to [`BACK_OFF_CAP`].
-    fn missed(&mut self, now: Instant, timing: &Timing) {
+    fn missed(&mut self, now: Instant, timing: &Timing, reason: String) {
         self.count = self.count.saturating_add(1);
+        self.reason = Some(reason);
         if self.count >= UNCONFIRMED_LIMIT {
             let doublings = (self.count - UNCONFIRMED_LIMIT).min(16);
             let wait = timing.tick.saturating_mul(1 << doublings).min(BACK_OFF_CAP);
@@ -281,21 +288,28 @@ async fn pass(
     }
     if let Err(err) = host.restart().await {
         eprintln!("dusk: could not restart hosting to load paired machines: {err}");
-        lock(misses).missed(Instant::now(), timing);
+        lock(misses).missed(Instant::now(), timing, err);
         return Ok(waiting);
     }
-    if !came_back(host, timing).await {
-        lock(misses).missed(Instant::now(), timing);
+    match came_back(host, timing).await {
+        Observed::CameBack => {}
         // Still owed, so a later pass asks again: the next one, until a few
-        // in a row have gone this way, and then less and less often. A host
-        // that did restart and was only slow to come back costs one restart
-        // more, no more.
-        eprintln!(
-            "dusk: hosting took the restart but was not seen to go down and come back \
-             within {:?}; it is still owed",
-            timing.back_within
-        );
-        return Ok(waiting);
+        // in a row have gone this way, and then less and less often.
+        Observed::NeverWentDown => {
+            let reason = "hosting took the restart request but did not restart".to_string();
+            eprintln!("dusk: {reason}; it is still owed");
+            lock(misses).missed(Instant::now(), timing, reason);
+            return Ok(waiting);
+        }
+        Observed::StillDown => {
+            let reason = format!(
+                "hosting went down for the restart but had not come back after {:?}",
+                timing.back_within.saturating_mul(1 + STILL_DOWN_PATIENCE)
+            );
+            eprintln!("dusk: {reason}; the restart is still owed");
+            lock(misses).missed(Instant::now(), timing, reason);
+            return Ok(waiting);
+        }
     }
     lock(misses).reset();
     // Forgetting to clear it costs one needless restart, no more.
@@ -308,28 +322,62 @@ async fn pass(
     })
 }
 
+/// What watching a restart showed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Observed {
+    /// Seen not answering, then answering again: the new process is up.
+    CameBack,
+    /// Never seen not answering: the request was taken and ignored, or the
+    /// old process is still on its way out. Either way what answers still
+    /// holds the list as it was.
+    NeverWentDown,
+    /// Seen not answering, and still not answering when the watching
+    /// stopped: a slow start, or one that failed.
+    StillDown,
+}
+
+/// How many more `back_within`s a host seen going down is given to come
+/// back, on top of the first. A host that is down is restarting, or has
+/// failed to; asking it again does nothing either way, and asking a slow
+/// one again cost a second restart, right after the first.
+const STILL_DOWN_PATIENCE: u32 = 2;
+
 /// Whether a restart the host was asked for really happened: it is seen not
-/// answering at least once, and then answering again, within `back_within`.
+/// answering at least once, and then answering again, within `back_within`
+/// — or, once seen down, within a few `back_within`s more.
 ///
 /// An answer before it has gone down is the process on its way out — or one
 /// that never left — and counts for nothing: that one still holds the list
 /// as it was. Asked every `probe`, which is far shorter than the time the
 /// host spends down: it stops serving before it exits and only serves again
 /// once the new process has loaded its files.
-async fn came_back(host: &dyn Host, timing: &Timing) -> bool {
-    tokio::time::timeout(timing.back_within, async {
-        let mut gone = false;
+async fn came_back(host: &dyn Host, timing: &Timing) -> Observed {
+    let gone = std::sync::atomic::AtomicBool::new(false);
+    let watch = async {
         loop {
             match host.hosting().await {
-                None => gone = true,
-                Some(_) if gone => return,
+                None => gone.store(true, Ordering::SeqCst),
+                Some(_) if gone.load(Ordering::SeqCst) => return,
                 Some(_) => {}
             }
             tokio::time::sleep(timing.probe).await;
         }
-    })
-    .await
-    .is_ok()
+    };
+    tokio::pin!(watch);
+    if tokio::time::timeout(timing.back_within, &mut watch)
+        .await
+        .is_ok()
+    {
+        return Observed::CameBack;
+    }
+    if !gone.load(Ordering::SeqCst) {
+        return Observed::NeverWentDown;
+    }
+    let more = timing.back_within.saturating_mul(STILL_DOWN_PATIENCE);
+    match tokio::time::timeout(more, &mut watch).await {
+        Ok(()) => Observed::CameBack,
+        Err(_) => Observed::StillDown,
+    }
 }
 
 /// How long the reconciler waits for things.
@@ -402,6 +450,12 @@ impl Reconciler {
     /// Run a pass now rather than at the next tick.
     pub fn nudge(&self) {
         self.nudged.notify_one();
+    }
+
+    /// Why the restart the host owes keeps not happening, if it does, in
+    /// words for the window. `None` while nothing has gone wrong.
+    pub fn trouble(&self) -> Option<String> {
+        lock(&self.unconfirmed).reason.clone()
     }
 
     /// Run passes in the background for as long as Dusk runs.
@@ -823,6 +877,87 @@ mod tests {
         assert!(!ready(out));
     }
 
+    // Paused time: the host is "down" for a count of probes, and on a runner
+    // whose sleep rounds a millisecond up to fifteen, those probes took
+    // longer than the patience allowed and the test failed for the clock's
+    // reasons, not the reconciler's.
+    #[tokio::test(start_paused = true)]
+    async fn a_host_slow_to_come_back_is_not_restarted_twice() {
+        // The host went down for the restart and is taking its time coming
+        // back. Asking again would restart the new process the moment it
+        // is up, right after the first; it is waited for instead.
+        let dir = Dir::new("reconcile-slow-back");
+        let path = dir.state();
+        let store = stored(&[pairing("aa", "D1")]);
+        let reconciler = Reconciler::new(Arc::default());
+        let timing = Timing {
+            back_within: Duration::from_millis(150),
+            ..QUICK
+        };
+        let slow = Fake {
+            down_for: 200,
+            ..Fake::new(&[Some(false)], &path)
+        };
+        let out = reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&["aa"]),
+                async { Some(dir.state()) },
+                &slow,
+                &timing,
+            )
+            .await
+            .unwrap();
+        assert!(out.restarted && !out.pending);
+        assert_eq!(slow.restarts().len(), 1);
+        assert!(!store.lock().await.restart_owed);
+        assert!(reconciler.trouble().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_owed_restart_that_keeps_not_happening_says_why() {
+        let dir = Dir::new("reconcile-trouble");
+        let path = dir.state();
+        let store = stored(&[pairing("aa", "D1")]);
+        let reconciler = Reconciler::new(Arc::default());
+        let at = || async { Some(dir.state()) };
+        let unmoved = Fake {
+            stays_up: true,
+            ..Fake::new(&[Some(false)], &path)
+        };
+        let out = reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&["aa"]),
+                at(),
+                &unmoved,
+                &QUICK,
+            )
+            .await
+            .unwrap();
+        assert!(out.pending);
+        let why = reconciler.trouble().expect("says what went wrong");
+        assert!(why.contains("did not restart"), "{why}");
+
+        // A host that does restart clears it.
+        let idle = Fake::new(&[Some(false)], &path);
+        let out = reconciler
+            .run(
+                &store,
+                &dir.store(),
+                &on_account(&["aa"]),
+                at(),
+                &idle,
+                &QUICK,
+            )
+            .await
+            .unwrap();
+        assert!(out.restarted);
+        assert!(reconciler.trouble().is_none());
+    }
+
     #[tokio::test]
     async fn a_host_that_never_goes_down_is_restarted_three_times_then_less_often() {
         let dir = Dir::new("reconcile-backoff");
@@ -923,15 +1058,15 @@ mod tests {
         let timing = Timing::REAL;
         for _ in 0..UNCONFIRMED_LIMIT {
             assert!(misses.allows(now));
-            misses.missed(now, &timing);
+            misses.missed(now, &timing, String::new());
         }
         assert!(!misses.allows(now));
         assert!(misses.allows(now + Duration::from_secs(60)));
-        misses.missed(now, &timing);
+        misses.missed(now, &timing, String::new());
         assert!(!misses.allows(now + Duration::from_secs(119)));
         assert!(misses.allows(now + Duration::from_secs(120)));
         for _ in 0..20 {
-            misses.missed(now, &timing);
+            misses.missed(now, &timing, String::new());
         }
         assert!(misses.allows(now + Duration::from_secs(3600)));
         misses.reset();
@@ -1123,16 +1258,16 @@ mod tests {
     async fn a_restart_counts_once_the_host_is_seen_down_and_back() {
         let dir = Dir::new("reconcile-came-back");
         let returning = Fake::new(&[None, None, Some(false)], &dir.state());
-        assert!(came_back(&returning, &QUICK).await);
+        assert_eq!(came_back(&returning, &QUICK).await, Observed::CameBack);
         // Answering at first is the old process; only what follows counts.
         let late = Fake::new(&[Some(false), Some(false), None, Some(true)], &dir.state());
-        assert!(came_back(&late, &QUICK).await);
+        assert_eq!(came_back(&late, &QUICK).await, Observed::CameBack);
         // Never down: nothing says it restarted.
         let unmoved = Fake::new(&[Some(false)], &dir.state());
-        assert!(!came_back(&unmoved, &QUICK).await);
+        assert_eq!(came_back(&unmoved, &QUICK).await, Observed::NeverWentDown);
         // Down and never back.
         let gone = Fake::new(&[None], &dir.state());
-        assert!(!came_back(&gone, &QUICK).await);
+        assert_eq!(came_back(&gone, &QUICK).await, Observed::StillDown);
     }
 
     #[test]

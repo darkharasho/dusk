@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { describe } from "../errors";
 
 interface Props {
   onAdd(address: string, name?: string): Promise<void>;
@@ -33,7 +34,7 @@ export function AddDeviceDialog({ onAdd, onClose }: Props) {
       await onAdd(address.trim(), name.trim() || undefined);
       onClose();
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
       setBusy(false);
     }
   }

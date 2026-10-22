@@ -9,6 +9,7 @@ import {
   stopHosting,
 } from "../api";
 import { Toggle } from "./StartupSection";
+import { describe } from "../errors";
 
 interface Props {
   name: string;
@@ -84,7 +85,7 @@ export function HostingPanel({ name, snapshot, onSetup }: Props) {
       if (done) setNote(done);
       setPanel(null);
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(false);
     }
@@ -154,6 +155,15 @@ export function HostingPanel({ name, snapshot, onSetup }: Props) {
           )}
         </div>
       </div>
+
+      {snapshot.hostRestart && (
+        <div className="axi-notice">
+          <span className="axi-notice__icon" aria-hidden="true">
+            !
+          </span>
+          <p>{snapshot.hostRestart}</p>
+        </div>
+      )}
 
       {managed && !snapshot.hostCredentialsPersistent && (
         <p className="axi-ink-dim">

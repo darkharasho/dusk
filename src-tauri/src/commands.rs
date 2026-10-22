@@ -9,7 +9,7 @@ use crate::model::{Device, HostStatus, Snapshot};
 use crate::registry::split_address;
 use crate::startup;
 use crate::state::{emit_snapshot, AppState};
-use crate::store::{Codec, ManualEntry, Resolution, BITRATE_RANGE};
+use crate::store::{ClipboardSharing, Codec, ManualEntry, Resolution, BITRATE_RANGE};
 use crate::sunshine::{self, Credentials, Known, SunshineApi};
 
 #[tauri::command]
@@ -758,6 +758,26 @@ pub async fn set_codec(
     {
         let mut store = state.store.lock().await;
         store.codec = codec;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// Whether text copied during a stream is shared with the other machine.
+#[tauri::command]
+pub async fn set_clipboard_sharing(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.clipboard_sharing = if on {
+            ClipboardSharing::On
+        } else {
+            ClipboardSharing::Off
+        };
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;

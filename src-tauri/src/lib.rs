@@ -339,6 +339,7 @@ pub fn run() {
             commands::set_resolution,
             commands::set_bitrate,
             commands::set_codec,
+            commands::set_clipboard_sharing,
             commands::answer_pair_request,
             commands::get_account,
             commands::sign_in_with_github,

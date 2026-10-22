@@ -41,6 +41,10 @@ pub struct Store {
     /// old name so an existing settings file still reads. See
     /// [`crate::host::virtual_screen`].
     pub virtual_screen: bool,
+    /// Text copied on either machine during a stream can be pasted on the
+    /// other. An enum rather than a `bool` so a missing field, from a fresh
+    /// install or an older settings file, reads as on.
+    pub clipboard_sharing: ClipboardSharing,
     /// What the file looked like when it was last read or written here, so
     /// a change another process made since can be told from this copy's
     /// own. Never in the file.
@@ -91,6 +95,21 @@ pub enum Codec {
     H264,
     Hevc,
     Av1,
+}
+
+/// Whether text copied during a stream is shared with the other machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipboardSharing {
+    #[default]
+    On,
+    Off,
+}
+
+impl ClipboardSharing {
+    pub fn is_on(self) -> bool {
+        self == ClipboardSharing::On
+    }
 }
 
 /// How big a stream asks to be.
@@ -360,6 +379,22 @@ fn config_base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_sharing_is_on_for_an_existing_file_without_it() {
+        let store: Store = serde_json::from_str(r#"{"codec":"auto"}"#).unwrap();
+        assert!(store.clipboard_sharing.is_on());
+    }
+
+    #[test]
+    fn clipboard_sharing_off_survives_a_save() {
+        let store = Store {
+            clipboard_sharing: ClipboardSharing::Off,
+            ..Store::default()
+        };
+        let back: Store = serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+        assert!(!back.clipboard_sharing.is_on());
+    }
 
     #[test]
     fn the_settings_directory_is_named_for_the_bundle() {

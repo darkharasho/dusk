@@ -398,7 +398,15 @@ impl AppState {
         // Copied out under one short lock. Two `lock().await`s in the
         // literal below would deadlock: the first guard lives until the
         // whole expression ends, so the second waits on it forever.
-        let (allow_other_devices, resolution, bitrate_kbps, codec, virtual_screen, restart_owed) = {
+        let (
+            allow_other_devices,
+            resolution,
+            bitrate_kbps,
+            codec,
+            virtual_screen,
+            clipboard_sharing,
+            restart_owed,
+        ) = {
             let store = self.store.lock().await;
             (
                 store.allow_other_devices,
@@ -406,6 +414,7 @@ impl AppState {
                 store.bitrate_kbps,
                 store.codec,
                 store.virtual_screen,
+                store.clipboard_sharing.is_on(),
                 store.restart_owed,
             )
         };
@@ -445,6 +454,7 @@ impl AppState {
             codec,
             virtual_screen,
             virtual_screen_mechanism: crate::host::virtual_screen::mechanism(),
+            clipboard_sharing,
             host_restart,
         }
     }

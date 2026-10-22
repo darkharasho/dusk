@@ -286,6 +286,8 @@ pub struct Snapshot {
     /// watching, and by what means this machine could do it.
     pub virtual_screen: bool,
     pub virtual_screen_mechanism: ScreenMechanism,
+    /// Whether text copied during a stream is shared with the other machine.
+    pub clipboard_sharing: bool,
     /// Hosting owes a restart to load a change to its paired machines, and
     /// why it has not happened yet, in words for the window. `None` when
     /// nothing is owed. Until it happens, a machine that paired with this

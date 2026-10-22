@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { setBitrate, setCodec, setResolution } from "../api";
+import { setBitrate, setClipboardSharing, setCodec, setResolution } from "../api";
+import { Toggle } from "./StartupSection";
 import type { Codec, Resolution, Snapshot } from "../types";
 import { describe } from "../errors";
 
@@ -165,6 +166,15 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
         </div>
         <p className="axi-ink-dim">{codec.detail}</p>
       </div>
+
+      <Toggle
+        id="stream-clipboard"
+        label="Share clipboard while streaming"
+        detail="Text you copy on either machine can be pasted on the other while a stream is running."
+        on={snapshot.clipboardSharing}
+        disabled={busy}
+        onChange={(on) => void save(() => setClipboardSharing(on))}
+      />
       {error && <p className="axi-ink-danger">{error}</p>}
     </div>
   );

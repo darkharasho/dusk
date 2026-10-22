@@ -212,6 +212,11 @@ export function setCodec(codec: Codec): Promise<void> {
   return invoke("set_codec", { codec });
 }
 
+/** Whether text copied during a stream is shared with the other machine. */
+export function setClipboardSharing(on: boolean): Promise<void> {
+  return invoke("set_clipboard_sharing", { on });
+}
+
 export function acceptPin(pin: string, deviceName?: string): Promise<void> {
   return invoke("accept_pin", { pin, deviceName: deviceName ?? null });
 }

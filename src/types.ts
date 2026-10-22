@@ -192,6 +192,8 @@ export interface Snapshot {
   virtualScreen: boolean;
   /** How this machine could do that, and `"none"` if it cannot. */
   virtualScreenMechanism: ScreenMechanism;
+  /** Whether text copied during a stream is shared with the other machine. */
+  clipboardSharing: boolean;
   /**
    * Hosting owes a restart to load a change to its paired machines, and why
    * it has not happened yet. Null when nothing is owed. Until it happens a

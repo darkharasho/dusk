@@ -16,6 +16,7 @@
 //! error string, so a bug report cannot leak what was copied.
 
 pub mod guard;
+pub mod local;
 pub mod tls;
 pub mod wire;
 

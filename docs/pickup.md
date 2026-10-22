@@ -6,9 +6,12 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**Unreleased, on `harden-sync-and-auth`: a stability pass over sync, auth
-and pairing**, from a full read of the code against the complaints of
-"endless errors with sync and auth". What changed, and why each one bit:
+**v0.3.34 is released**, all three platforms, from `main` (PRs #7 and #8),
+still carrying the client's `dusk-v0.2.5`. PR #7 was a stability pass over
+sync, auth and pairing, from a full read of the code against the complaints
+of "endless errors with sync and auth"; PR #8 a UI pass, chiefly the
+titlebar behaving the same on every platform (see "Own titlebar" under the
+window notes). What the stability pass changed, and why each one bit:
 
 - *Account.* The machine list was read once per run, so a machine signed in
   after launch was never "yours" until Dusk restarted. It is re-read every
@@ -636,7 +639,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.33>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.34>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -672,7 +675,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30, v0.3.31, v0.3.32, v0.3.33
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30, v0.3.31, v0.3.32, v0.3.33, v0.3.34
 └── moonlight-qt/    master @ ded3c2f1  tags dusk-v0.1.0 … dusk-v0.2.5
 ```
 

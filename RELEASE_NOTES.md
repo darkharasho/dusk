@@ -1,5 +1,50 @@
 # Release Notes
 
+Version v0.3.34 — October 22, 2026
+
+Fewer sync, sign-in and pairing errors, and a title bar that behaves the same on every platform.
+
+## Changes
+
+- **Your machines show up without a restart.** A machine signed in after
+  Dusk opened was not counted as yours until Dusk was started again. The
+  list is now re-read every few minutes and whenever you press Refresh.
+- **A sign-in GitHub no longer accepts says so.** The Account screen showed
+  signed in while every check quietly failed. It now shows a notice with a
+  **Sign in again** button.
+- **Pairing says what actually went wrong.** A host that could not check
+  your account, because its own sign-in lapsed or GitHub was unreachable,
+  used to tell you to sign in on the other machine. It now says it could
+  not check, and what to do there.
+- **A locked keystore no longer resets hosting.** Turning hosting on while
+  the system keystore would not answer rotated the host's password and
+  restarted it. Dusk now refuses and says the keystore could not be opened.
+- **The device grid stops flickering.** A machine could appear twice for a
+  moment on every refresh, and one missed check sent it Offline. Cards keep
+  their identity, keep a settled pairing state, and go Offline only after
+  two misses in a row.
+- **A stream that stalled on a bad log line no longer freezes.** Unusual
+  text in the stream's output could block it with no error shown.
+- **Hosting tells you when it is waiting on a restart.** If a restart keeps
+  not happening, the Hosting panel says so and why, instead of every
+  pairing machine being told to try again in a minute.
+- **Quitting Dusk ends any running stream** instead of leaving it with no
+  way to disconnect.
+- **The typed PIN retries** like the automatic path, rather than failing
+  once with "no device is waiting yet".
+- **Errors read as sentences.** Some failures showed as "[object Object]".
+- **A corrupt settings file is kept aside** rather than overwritten.
+- **The title bar is the same on every platform.** A double-click on
+  Windows and Linux maximized the window and put it straight back; the
+  update badge sat in a different place on macOS; the bar did not dim when
+  the window was not the active one. All three are fixed, and on macOS the
+  bar no longer leaves space for the traffic lights in full screen.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.33 — October 22, 2026
 
 Each stream now leaves a log behind, even if the computer freezes.

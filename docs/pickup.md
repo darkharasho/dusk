@@ -6,8 +6,10 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.29 is released**, all three platforms, from `main` (PR #2), carrying
-the client's `dusk-v0.2.5`. **Dusk is GPL-3.0-or-later, and your own machines
+**v0.3.30 is released**, all three platforms, from `main` (PR #3), still
+carrying the client's `dusk-v0.2.5`. It fixes certificate pairing from Linux:
+every `add-host` there failed with "--name not provided" (see the client half
+below). **v0.3.29** (PR #2) made **Dusk GPL-3.0-or-later, and your own machines
 pair without a PIN.** Design:
 `docs/superpowers/specs/2026-10-21-gpl-and-certificate-pairing-design.md`;
 the measurements it rests on:
@@ -54,6 +56,12 @@ its own half:
   a lock file and **exits 2 while another client is open**, so Dusk waits
   (the drawer says so). `--version` prints `Dusk fork: add-host available`;
   a client without that line is never offered the new path.
+  **Every value goes as `--option=value`** (`moonlight/cli.rs`,
+  `add_host_args`). On Linux, Qt's X11 plugin takes `--name <value>` as its
+  own option and strips both words from argv before the client parses it;
+  the joined form passes through. Until v0.3.30 this failed every Linux
+  pairing with "This machine couldn't save the pairing", after the host had
+  already trusted the client.
 - **Re-pairing.** When a host's certificate changes, the stored one no longer
   matches what it presents, so the card drops to not paired and the next Pair
   runs again; the host side gives the changed certificate a fresh uuid, since
@@ -511,7 +519,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.29>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.30>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -547,7 +555,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30
 └── moonlight-qt/    master @ ded3c2f1  tags dusk-v0.1.0 … dusk-v0.2.5
 ```
 

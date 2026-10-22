@@ -1,5 +1,21 @@
 # Release Notes
 
+Version v0.3.30 — October 21, 2026
+
+Pairing without a PIN now finishes on Linux.
+
+## Changes
+
+- **A Linux machine pairing with one of your own machines no longer stops at
+  "This machine couldn't save the pairing."** The other machine had already
+  trusted it, but this one failed to record the pairing on its side. It now
+  saves it, and pressing Pair again finishes without a PIN.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.29 — October 21, 2026
 
 Your own machines pair without a PIN.

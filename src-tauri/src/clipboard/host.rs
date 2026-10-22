@@ -6,8 +6,11 @@
 //! relay. Clipboard text only ever travels inside TLS, and is never logged:
 //! not its contents, not its length.
 //!
-//! One connection is admitted at a time. Nothing a connection does before
-//! admission reads the keystore, and all of it is bounded by one timeout.
+//! One connection is admitted at a time, and a stream's slot belongs to the
+//! first client admitted during it: another paired machine is turned away
+//! until the stream changes, even while the first is reconnecting. Nothing a
+//! connection does before admission reads the keystore, and all of it is
+//! bounded by one timeout.
 
 use std::future::Future;
 use std::io;
@@ -21,6 +24,8 @@ use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
+
+use sha2::{Digest, Sha256};
 
 use super::local::{support, LocalClipboard, Support, System, POLL};
 use super::tls::server_config;
@@ -73,6 +78,52 @@ pub fn claim(live: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit, Decline> {
     live.clone()
         .try_acquire_owned()
         .map_err(|_| Decline::NotStreaming)
+}
+
+/// SHA-256 of a client's end-entity certificate, as presented in TLS.
+pub type Fingerprint = [u8; 32];
+
+/// The stream B's clipboard slot was last bound to, by its key, and the
+/// client it was bound to. Shared by every connection.
+pub type Bound = Option<(String, Fingerprint)>;
+
+/// Which stream is running, as far as the host's log says: the whole of the
+/// last line that started one. Its timestamp makes it differ from one
+/// stream to the next, across restarts too. `None` when no stream started.
+pub fn stream_key(log: &str) -> Option<String> {
+    log.lines()
+        .rev()
+        .find(|line| line.contains("New streaming session started"))
+        .map(|line| line.trim_end().to_string())
+}
+
+/// Binds the slot to one client per stream. The host's log carries no
+/// client address, so the client is told apart by its certificate instead.
+/// A different client on the bound stream is declined as though nothing
+/// were streaming; a new stream, or nothing bound yet, binds this client.
+/// Without a key (the log could not be read) nothing is bound or checked.
+pub fn bind(bound: &mut Bound, key: Option<&str>, client: &Fingerprint) -> Result<(), Decline> {
+    let Some(key) = key else {
+        return Ok(());
+    };
+    match bound {
+        Some((stream, owner)) if stream == key => {
+            if owner == client {
+                Ok(())
+            } else {
+                Err(Decline::NotStreaming)
+            }
+        }
+        _ => {
+            *bound = Some((key.to_string(), *client));
+            Ok(())
+        }
+    }
+}
+
+fn fingerprint(tls: &TlsStream<TcpStream>) -> Option<Fingerprint> {
+    let leaf = tls.get_ref().1.peer_certificates()?.first()?;
+    Some(Sha256::digest(leaf.as_ref()).into())
 }
 
 /// Pure admission decision, checked after the TLS handshake.
@@ -296,6 +347,7 @@ pub fn spawn(_app: AppHandle, state: Arc<AppState>) {
         };
         let slots = Arc::new(Semaphore::new(PRE_ADMIT));
         let live = Arc::new(Semaphore::new(1));
+        let bound: Arc<Mutex<Bound>> = Arc::new(Mutex::new(None));
         loop {
             let Ok((stream, _)) = listener.accept().await else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -305,9 +357,9 @@ pub fn spawn(_app: AppHandle, state: Arc<AppState>) {
             let Ok(slot) = slots.clone().try_acquire_owned() else {
                 continue;
             };
-            let (state, live) = (state.clone(), live.clone());
+            let (state, live, bound) = (state.clone(), live.clone(), bound.clone());
             tauri::async_runtime::spawn(async move {
-                if let Err(err) = serve(&state, stream, slot, &live).await {
+                if let Err(err) = serve(&state, stream, slot, &live, &bound).await {
                     // The kind only: never anything that came off the wire.
                     eprintln!("dusk: a clipboard connection ended: {:?}", err.kind());
                 }
@@ -341,16 +393,22 @@ async fn tls_acceptor(state: &AppState) -> Option<TlsAcceptor> {
         .map(TlsAcceptor::from)
 }
 
-/// Whether B's own host is streaming to a client right now. The log is read
-/// only with a password already in memory, never from the keystore.
+/// Whether B's own host is streaming to a client right now.
 async fn hosting(state: &AppState) -> Hosting {
+    hosting_stream(state).await.0
+}
+
+/// Whether B's own host is streaming to a client right now, and which
+/// stream it is when the log says ([`stream_key`]). The log is read only
+/// with a password already in memory, never from the keystore.
+async fn hosting_stream(state: &AppState) -> (Hosting, Option<String>) {
     let busy =
         match crate::serverinfo::query_http(&state.http, "127.0.0.1", DEFAULT_HTTP_PORT).await {
             Ok(info) => matches!(info.activity(), Activity::Hosting { .. }),
-            Err(_) => return Hosting::Unknown,
+            Err(_) => return (Hosting::Unknown, None),
         };
     if !busy {
-        return Hosting::No;
+        return (Hosting::No, None);
     }
     let log = match (
         state.credentials.cached_only(),
@@ -359,7 +417,8 @@ async fn hosting(state: &AppState) -> Hosting {
         (Some(credentials), Ok(api)) => api.get_logs(&credentials).await.ok(),
         _ => None,
     };
-    still_connected(busy, log.as_deref())
+    let key = log.as_deref().and_then(stream_key);
+    (still_connected(busy, log.as_deref()), key)
 }
 
 /// Read and discard until the peer closes, for at most [`DRAIN`].
@@ -384,6 +443,7 @@ async fn admission(
     state: &AppState,
     mut stream: TcpStream,
     live: &Arc<Semaphore>,
+    bound: &Mutex<Bound>,
 ) -> io::Result<Option<Admission>> {
     // The one plain line. It never carries clipboard data.
     let Some(acceptor) = tls_acceptor(state).await else {
@@ -398,8 +458,16 @@ async fn admission(
     let tls = acceptor.accept(stream).await?;
 
     let sharing_on = state.store.lock().await.clipboard_sharing.is_on();
-    let decision = admit(sharing_on, &support(), hosting(state).await == Hosting::Yes)
-        .and_then(|()| claim(live));
+    let (hosting, key) = hosting_stream(state).await;
+    let decision = admit(sharing_on, &support(), hosting == Hosting::Yes)
+        .and_then(|()| claim(live))
+        .and_then(|permit| {
+            // Pinned mutual TLS always has a client certificate by now.
+            let client = fingerprint(&tls).ok_or(Decline::NotPaired)?;
+            let mut bound = bound.lock().map_err(|_| Decline::NotStreaming)?;
+            bind(&mut bound, key.as_deref(), &client)?;
+            Ok(permit)
+        });
     let outcome = match decision {
         Ok(permit) => tokio::task::spawn_blocking(System::open)
             .await
@@ -417,8 +485,9 @@ async fn serve(
     stream: TcpStream,
     slot: OwnedSemaphorePermit,
     live: &Arc<Semaphore>,
+    bound: &Mutex<Bound>,
 ) -> io::Result<()> {
-    let admitted = tokio::time::timeout(ADMISSION, admission(state, stream, live))
+    let admitted = tokio::time::timeout(ADMISSION, admission(state, stream, live, bound))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "admission timed out"))??;
     let Some((mut tls, outcome)) = admitted else {
@@ -731,6 +800,63 @@ mod tests {
             ),
             Err(Decline::NotStreaming)
         );
+    }
+
+    #[test]
+    fn the_stream_key_is_the_last_session_start_line() {
+        let log = "Info: [10:00:00] New streaming session started\n\
+                   Info: CLIENT DISCONNECTED\n\
+                   Info: [10:05:00] New streaming session started\n\
+                   Info: something else";
+        assert_eq!(
+            stream_key(log).as_deref(),
+            Some("Info: [10:05:00] New streaming session started")
+        );
+        assert_eq!(stream_key("Info: nothing here"), None);
+    }
+
+    #[test]
+    fn the_first_client_on_a_stream_binds_it() {
+        let mut bound = None;
+        assert_eq!(bind(&mut bound, Some("s1"), &[1; 32]), Ok(()));
+        assert_eq!(bound, Some(("s1".to_string(), [1; 32])));
+    }
+
+    #[test]
+    fn another_client_on_a_bound_stream_is_declined_even_after_the_first_leaves() {
+        let mut bound = None;
+        bind(&mut bound, Some("s1"), &[1; 32]).unwrap();
+        // The first connection has ended; the binding outlives it.
+        assert_eq!(
+            bind(&mut bound, Some("s1"), &[2; 32]),
+            Err(Decline::NotStreaming)
+        );
+        assert_eq!(bound, Some(("s1".to_string(), [1; 32])));
+    }
+
+    #[test]
+    fn the_bound_client_may_reconnect() {
+        let mut bound = None;
+        bind(&mut bound, Some("s1"), &[1; 32]).unwrap();
+        assert_eq!(bind(&mut bound, Some("s1"), &[1; 32]), Ok(()));
+    }
+
+    #[test]
+    fn a_new_stream_rebinds() {
+        let mut bound = None;
+        bind(&mut bound, Some("s1"), &[1; 32]).unwrap();
+        assert_eq!(bind(&mut bound, Some("s2"), &[2; 32]), Ok(()));
+        assert_eq!(bound, Some(("s2".to_string(), [2; 32])));
+    }
+
+    #[test]
+    fn without_a_key_nothing_is_bound() {
+        let mut bound = None;
+        assert_eq!(bind(&mut bound, None, &[1; 32]), Ok(()));
+        assert_eq!(bound, None);
+        bind(&mut bound, Some("s1"), &[1; 32]).unwrap();
+        assert_eq!(bind(&mut bound, None, &[2; 32]), Ok(()));
+        assert_eq!(bound, Some(("s1".to_string(), [1; 32])), "left as it was");
     }
 
     #[tokio::test(start_paused = true)]

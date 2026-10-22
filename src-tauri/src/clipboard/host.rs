@@ -14,7 +14,7 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_rustls::TlsAcceptor;
 
@@ -30,7 +30,21 @@ use crate::sunshine::{api, SunshineApi};
 const RECHECK: Duration = Duration::from_secs(5);
 /// How long a peer gets to finish the TLS handshake.
 const HANDSHAKE: Duration = Duration::from_secs(10);
+/// How long any one write (or the closing shutdown) may take before the
+/// connection is given up on: a peer that stops reading must not pin it.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Connections that may be between accept and admission at once.
+const PRE_ADMIT: usize = 8;
 const VERSION: u32 = 1;
+
+/// What a hosting check found out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hosting {
+    Yes,
+    No,
+    /// The check itself failed, which says nothing about whether it holds.
+    Unknown,
+}
 
 /// Pure admission decision, checked after the TLS handshake.
 pub fn admit(sharing_on: bool, support: &Support, hosting: bool) -> Result<(), Decline> {
@@ -48,9 +62,24 @@ pub fn admit(sharing_on: bool, support: &Support, hosting: bool) -> Result<(), D
     Ok(())
 }
 
+fn timed_out() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "a clipboard write timed out")
+}
+
 async fn send<W: AsyncWrite + Unpin>(out: &mut W, message: &Wire) -> io::Result<()> {
-    out.write_all(line(message).as_bytes()).await?;
-    out.flush().await
+    let write = async {
+        out.write_all(line(message).as_bytes()).await?;
+        out.flush().await
+    };
+    tokio::time::timeout(WRITE_TIMEOUT, write)
+        .await
+        .map_err(|_| timed_out())?
+}
+
+async fn close<W: AsyncWrite + Unpin>(out: &mut W) -> io::Result<()> {
+    tokio::time::timeout(WRITE_TIMEOUT, out.shutdown())
+        .await
+        .map_err(|_| timed_out())?
 }
 
 enum Incoming {
@@ -119,7 +148,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     C: LocalClipboard + 'static,
     F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
+    Fut: Future<Output = Hosting>,
 {
     let clipboard = Arc::new(Mutex::new(clipboard));
     let baseline = read_clipboard(&clipboard).await;
@@ -139,7 +168,7 @@ where
     )
     .await;
     reader.abort();
-    let _ = write.shutdown().await;
+    let _ = close(&mut write).await;
     result
 }
 
@@ -154,12 +183,14 @@ where
     C: LocalClipboard + 'static,
     W: AsyncWrite + Unpin,
     F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
+    Fut: Future<Output = Hosting>,
 {
     let mut poll = interval_at(Instant::now() + POLL, POLL);
     poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut recheck = interval_at(Instant::now() + RECHECK, RECHECK);
     recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // One failed check is forgiven; a second in a row is not.
+    let mut unknown_in_a_row = 0;
 
     loop {
         tokio::select! {
@@ -185,9 +216,13 @@ where
                 }
             }
             _ = recheck.tick() => {
-                if !still_hosting().await {
-                    send(write, &Wire::Bye).await?;
-                    return Ok(());
+                match still_hosting().await {
+                    Hosting::Yes => unknown_in_a_row = 0,
+                    Hosting::Unknown if unknown_in_a_row == 0 => unknown_in_a_row = 1,
+                    Hosting::No | Hosting::Unknown => {
+                        send(write, &Wire::Bye).await?;
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -207,13 +242,19 @@ pub fn spawn(_app: AppHandle, state: Arc<AppState>) {
                 return;
             }
         };
+        let slots = Arc::new(Semaphore::new(PRE_ADMIT));
         loop {
             let Ok((stream, _)) = listener.accept().await else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            // No free slot: drop the newcomer rather than queue it.
+            let Ok(slot) = slots.clone().try_acquire_owned() else {
                 continue;
             };
             let state = state.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(err) = serve(&state, stream).await {
+                if let Err(err) = serve(&state, stream, slot).await {
                     // The kind only: never anything that came off the wire.
                     eprintln!("dusk: a clipboard connection ended: {:?}", err.kind());
                 }
@@ -231,24 +272,34 @@ async fn tls_acceptor(state: &AppState) -> Option<TlsAcceptor> {
         .get_config(&credentials)
         .await
         .ok()?;
-    let config = Some(&config);
-    let cert = std::fs::read_to_string(state_file::server_cert_path(config)?).ok()?;
-    let key = std::fs::read_to_string(state_file::server_key_path(config)?).ok()?;
-    let paired =
-        state_file::paired_certs(&state_file::read(&state_file::state_path(config)?).ok()?);
+    let (cert, key, paired) = tokio::task::spawn_blocking(move || {
+        let config = Some(&config);
+        let cert = std::fs::read_to_string(state_file::server_cert_path(config)?).ok()?;
+        let key = std::fs::read_to_string(state_file::server_key_path(config)?).ok()?;
+        let state = state_file::read(&state_file::state_path(config)?).ok()?;
+        Some((cert, key, state_file::paired_certs(&state)))
+    })
+    .await
+    .ok()??;
     server_config(&cert, &key, &paired)
         .ok()
         .map(TlsAcceptor::from)
 }
 
-/// B's own host is streaming right now.
-async fn hosting(state: &AppState) -> bool {
-    crate::serverinfo::query_http(&state.http, "127.0.0.1", DEFAULT_HTTP_PORT)
-        .await
-        .is_ok_and(|info| matches!(info.activity(), Activity::Hosting { .. }))
+/// Whether B's own host is streaming right now.
+async fn hosting(state: &AppState) -> Hosting {
+    match crate::serverinfo::query_http(&state.http, "127.0.0.1", DEFAULT_HTTP_PORT).await {
+        Ok(info) if matches!(info.activity(), Activity::Hosting { .. }) => Hosting::Yes,
+        Ok(_) => Hosting::No,
+        Err(_) => Hosting::Unknown,
+    }
 }
 
-async fn serve(state: &Arc<AppState>, mut stream: TcpStream) -> io::Result<()> {
+async fn serve(
+    state: &Arc<AppState>,
+    mut stream: TcpStream,
+    slot: OwnedSemaphorePermit,
+) -> io::Result<()> {
     // The one plain line. It never carries clipboard data.
     let Some(acceptor) = tls_acceptor(state).await else {
         let declined = Wire::Declined {
@@ -263,19 +314,25 @@ async fn serve(state: &Arc<AppState>, mut stream: TcpStream) -> io::Result<()> {
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "the TLS handshake timed out"))??;
 
     let sharing_on = state.store.lock().await.clipboard_sharing.is_on();
-    let decision = admit(sharing_on, &support(), hosting(state).await);
+    let decision = admit(sharing_on, &support(), hosting(state).await == Hosting::Yes);
     let clipboard = match decision {
-        Ok(()) => System::open().map_err(|_| Decline::Unsupported { detail: None }),
+        Ok(()) => tokio::task::spawn_blocking(System::open)
+            .await
+            .map_err(|_| ())
+            .and_then(|opened| opened.map_err(|_| ()))
+            .map_err(|_| Decline::Unsupported { detail: None }),
         Err(decline) => Err(decline),
     };
     let clipboard = match clipboard {
         Ok(clipboard) => clipboard,
         Err(reason) => {
             send(&mut tls, &Wire::Declined { reason }).await?;
-            return tls.shutdown().await;
+            return close(&mut tls).await;
         }
     };
 
+    // Admitted: this connection no longer counts against the pre-admit limit.
+    drop(slot);
     let for_check = state.clone();
     run(tls, clipboard, move || {
         let state = for_check.clone();
@@ -346,7 +403,7 @@ mod tests {
 
     fn start(
         fake: &Fake,
-        hosting: Arc<Mutex<bool>>,
+        hosting: Arc<Mutex<Hosting>>,
     ) -> (Peer, tokio::task::JoinHandle<io::Result<()>>) {
         let (a, b) = tokio::io::duplex(8 * 1024 * 1024);
         let (read, write) = tokio::io::split(a);
@@ -393,7 +450,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn host_sends_a_new_copy_but_not_the_baseline() {
         let fake = Fake::new(Some("old"));
-        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(true)));
+        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         assert_eq!(peer.next().await, Some(Wire::Hello { version: 1 }));
         assert_eq!(peer.hears_within(SEC * 2).await, None);
         fake.set("new");
@@ -403,7 +460,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn host_writes_what_arrives() {
         let fake = Fake::new(None);
-        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(true)));
+        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         peer.next().await;
         peer.say(Wire::Hello { version: 1 }).await;
         peer.say(clip("x")).await;
@@ -415,7 +472,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn host_loop_does_not_echo() {
         let fake = Fake::new(None);
-        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(true)));
+        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         peer.next().await;
         peer.say(clip("x")).await;
         assert_eq!(peer.hears_within(SEC * 2).await, None);
@@ -425,10 +482,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn host_closes_when_streaming_stops() {
         let fake = Fake::new(None);
-        let hosting = Arc::new(Mutex::new(true));
+        let hosting = Arc::new(Mutex::new(Hosting::Yes));
         let (mut peer, task) = start(&fake, hosting.clone());
         peer.next().await;
-        *hosting.lock().unwrap() = false;
+        *hosting.lock().unwrap() = Hosting::No;
         assert_eq!(peer.hears_within(SEC * 6).await, Some(Wire::Bye));
         assert_eq!(peer.next().await, None);
         assert!(task.await.unwrap().is_ok());
@@ -437,9 +494,48 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn one_failed_check_is_forgiven() {
+        let fake = Fake::new(None);
+        let hosting = Arc::new(Mutex::new(Hosting::Unknown));
+        let (mut peer, task) = start(&fake, hosting.clone());
+        peer.next().await;
+        assert_eq!(peer.hears_within(SEC * 6).await, None);
+        *hosting.lock().unwrap() = Hosting::Yes;
+        assert_eq!(peer.hears_within(SEC * 12).await, None);
+        assert!(!task.is_finished());
+        // The forgiven failure was forgotten: one more is forgiven again.
+        *hosting.lock().unwrap() = Hosting::Unknown;
+        assert_eq!(peer.hears_within(SEC * 6).await, None);
+        assert!(!task.is_finished());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn two_failed_checks_in_a_row_close() {
+        let fake = Fake::new(None);
+        let (mut peer, task) = start(&fake, Arc::new(Mutex::new(Hosting::Unknown)));
+        peer.next().await;
+        assert_eq!(peer.hears_within(SEC * 11).await, Some(Wire::Bye));
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_that_stops_reading_does_not_pin_the_connection() {
+        let fake = Fake::new(None);
+        let (a, b) = tokio::io::duplex(64);
+        let (mut read, _write) = tokio::io::split(a);
+        let task = tokio::spawn(run(b, fake.clone(), || async { Hosting::Yes }));
+        // Hello fits in the buffer; read just that and then stop reading.
+        let mut hello = [0u8; 29];
+        read.read_exact(&mut hello).await.unwrap();
+        fake.set(&"a".repeat(100_000));
+        let ended = tokio::time::timeout(WRITE_TIMEOUT + SEC * 2, task).await;
+        assert!(ended.expect("run returned").unwrap().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn host_skips_an_oversized_copy() {
         let fake = Fake::new(None);
-        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(true)));
+        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         peer.next().await;
         fake.set(&"a".repeat(MAX_TEXT_BYTES + 1));
         assert_eq!(peer.hears_within(SEC * 2).await, None);
@@ -448,7 +544,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_failed_read_is_not_a_change() {
         let fake = Fake::new(Some("old"));
-        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(true)));
+        let (mut peer, _task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         peer.next().await;
         *fake.text.lock().unwrap() = None;
         assert_eq!(peer.hears_within(SEC * 2).await, None);
@@ -459,7 +555,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn bye_from_the_peer_ends_the_connection() {
         let fake = Fake::new(None);
-        let (mut peer, task) = start(&fake, Arc::new(Mutex::new(true)));
+        let (mut peer, task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         peer.next().await;
         peer.say(Wire::Bye).await;
         assert!(task.await.unwrap().is_ok());
@@ -468,7 +564,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_line_over_the_cap_closes_the_connection() {
         let fake = Fake::new(None);
-        let (mut peer, task) = start(&fake, Arc::new(Mutex::new(true)));
+        let (mut peer, task) = start(&fake, Arc::new(Mutex::new(Hosting::Yes)));
         peer.next().await;
         let junk = vec![b'a'; MAX_LINE + 10];
         peer.write.write_all(&junk).await.unwrap();

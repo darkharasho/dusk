@@ -100,6 +100,25 @@ fn client_connected(log: &str) -> bool {
     !(last_ended == Some(true) && ends >= starts)
 }
 
+/// Whether this machine's host has a session open that no client is
+/// watching: the app a stream launched is still running and its client
+/// dropped instead of quitting. The next stream resumes that session, and a
+/// resumed one runs none of the host's prep commands. Anything unreadable
+/// answers no.
+pub(crate) async fn session_left_open(http: &reqwest::Client, credentials: &Credentials) -> bool {
+    let Ok(info) = crate::serverinfo::query_http(http, "127.0.0.1", DEFAULT_HTTP_PORT).await else {
+        return false;
+    };
+    if !matches!(info.activity(), Activity::Hosting { .. }) {
+        return false;
+    }
+    let log = match SunshineApi::new(api::DEFAULT_PORT) {
+        Ok(api) => api.get_logs(credentials).await.ok(),
+        Err(_) => None,
+    };
+    log.is_some_and(|log| !client_connected(&log))
+}
+
 /// Where the host keeps the files this needs.
 pub(super) struct Files {
     pub state: PathBuf,

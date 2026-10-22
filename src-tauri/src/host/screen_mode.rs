@@ -38,7 +38,11 @@
 //! - **`undo` goes with the session, not the client.** A client that
 //!   disconnects normally ends the session and the screen comes back; one
 //!   that is killed leaves the session up and the screen resized, which is
-//!   what [`restore_if_left_resized`] is for.
+//!   what [`restore_if_left_resized`] is for. Such a session is also
+//!   *resumed* by the next stream, and resuming runs no prep command at
+//!   all, so the host's Dusk switches the screen itself when that stream
+//!   asks it for a size (`peer::match_screen_for_a_resumed_stream`), and
+//!   puts it back when nobody is watching again.
 //!
 //! Not done: the client's frame rate is ignored, so a mode is chosen by
 //! size and keeps whatever rate `xrandr` picks first for it.
@@ -362,11 +366,18 @@ fn scale_factors(base: (u32, u32), size: (u32, u32)) -> String {
     )
 }
 
-/// Switch the screen to the size the client asked for, remembering what it
-/// was on first so that a switch which only half happens is still
-/// recoverable.
+/// Switch the screen to the size the client asked for.
 fn switch_to_client() -> Result<(), String> {
-    let want = client_size().ok_or("the host did not say what size the client wants")?;
+    switch_to(client_size().ok_or("the host did not say what size the client wants")?)
+}
+
+/// Switch the screen to `want`, remembering what it was on first so that a
+/// switch which only half happens is still recoverable.
+///
+/// What is remembered is the screen before *any* stream changed it: a
+/// record already there is kept, or a second switch would remember the
+/// first one's size and `undo` would put the screen back to that.
+pub fn switch_to(want: (u32, u32)) -> Result<(), String> {
     let (output, limit) = current_screen().ok_or("no single output to resize")?;
     let current = output
         .current
@@ -378,8 +389,10 @@ fn switch_to_client() -> Result<(), String> {
         return Ok(());
     }
 
-    std::fs::write(state_path(), format!("{}\n{}\n", output.name, current.name))
-        .map_err(|e| format!("could not record the screen's mode: {e}"))?;
+    if !state_path().exists() {
+        std::fs::write(state_path(), format!("{}\n{}\n", output.name, current.name))
+            .map_err(|e| format!("could not record the screen's mode: {e}"))?;
+    }
 
     let size = match &plan {
         Plan::Already => return Ok(()),
@@ -604,6 +617,19 @@ pub async fn disable(
     // run, so the screen is put back now rather than at the next stream.
     let _ = restore();
     api.restart(credentials).await.map_err(|e| e.to_string())
+}
+
+/// Whether a stream has the screen resized right now.
+pub fn resized() -> bool {
+    state_path().exists()
+}
+
+/// Put the screen back after a stream whose client has gone.
+pub fn put_back() {
+    match restore() {
+        Ok(()) => eprintln!("dusk: put the screen back after a stream nobody is watching"),
+        Err(err) => eprintln!("dusk: could not put the screen back: {err}"),
+    }
 }
 
 /// Put the screen back if a stream left it resized.

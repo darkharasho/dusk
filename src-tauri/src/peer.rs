@@ -327,7 +327,81 @@ async fn display_answer(
         return own;
     }
     let want = screen.map(|s| (s.width, s.height)).or(own)?;
-    crate::host::virtual_screen::offer_for(want).or(own)
+    let offer = crate::host::virtual_screen::offer_for(want);
+    #[cfg(target_os = "linux")]
+    if let Some(size) = offer {
+        match_screen_for_a_resumed_stream(state, size).await;
+    }
+    offer.or(own)
+}
+
+/// Resize the screen now if the stream about to start will resume a
+/// session nobody is watching.
+///
+/// The screen is matched to the client by the host's `do` hook, and the host
+/// runs that only when it launches an app. A client that dropped instead of
+/// quitting leaves its app running, and every later stream resumes it — at
+/// the size it asks for, captured from a screen still at the host's own
+/// size. This is the one moment the host's Dusk hears of such a stream
+/// before it starts, so the switch is made here. Nothing changes while a
+/// client is still connected: someone is watching that screen.
+///
+/// `undo` puts it back when the resumed session is quit, and
+/// [`watch_for_a_screen_left_resized`] when it is dropped again.
+#[cfg(target_os = "linux")]
+async fn match_screen_for_a_resumed_stream(state: &Arc<AppState>, size: (u32, u32)) {
+    let Some(credentials) = state.credentials.load().await else {
+        return;
+    };
+    if !crate::cert_pairing::reconcile::session_left_open(&state.http, &credentials).await {
+        return;
+    }
+    let switched =
+        tauri::async_runtime::spawn_blocking(move || crate::host::screen_mode::switch_to(size))
+            .await;
+    match switched {
+        Ok(Ok(())) => eprintln!(
+            "dusk: matched the screen to {}x{} for a stream resuming a session",
+            size.0, size.1
+        ),
+        Ok(Err(err)) => eprintln!("dusk: the screen was left as it was: {err}"),
+        Err(err) => eprintln!("dusk: the screen was left as it was: {err}"),
+    }
+}
+
+/// Put the screen back once a stream that resized it has nobody watching.
+///
+/// `undo` comes with the end of the session, and a client that drops
+/// rather than quits leaves the session up — so without this the host's
+/// screen would stay at the client's size until Dusk next started. Two
+/// checks a minute apart, both finding no client, before anything is done:
+/// a stream that is just starting has its screen switched by `do` a moment
+/// before its client shows up in the log.
+#[cfg(target_os = "linux")]
+pub fn watch_for_a_screen_left_resized(state: Arc<AppState>) {
+    tauri::async_runtime::spawn(async move {
+        let mut unwatched = 0u32;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            if !crate::host::screen_mode::resized() {
+                unwatched = 0;
+                continue;
+            }
+            let left_open = match state.credentials.load().await {
+                Some(credentials) => {
+                    crate::cert_pairing::reconcile::session_left_open(&state.http, &credentials)
+                        .await
+                }
+                None => false,
+            };
+            unwatched = if left_open { unwatched + 1 } else { 0 };
+            if unwatched >= 2 {
+                unwatched = 0;
+                let _ =
+                    tauri::async_runtime::spawn_blocking(crate::host::screen_mode::put_back).await;
+            }
+        }
+    });
 }
 
 /// The size of the screen a stream from here shows, in real pixels.

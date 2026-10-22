@@ -42,7 +42,8 @@ ring = "0.17"
 if-addrs = "0.13"
 # The host's own clipboard, for text sync while streaming. The Wayland
 # data-control protocol lets it work on KDE/wlroots without a focused window.
-arboard = { version = "3", features = ["wayland-data-control"] }
+# Text only, so without the default image support.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 # Sealing the addresses a machine publishes to its account, so a secret gist
 # holds ciphertext rather than a map of someone's network. ring's X25519 is
 # ephemeral-only by design and a recipient's key has to outlive the message,

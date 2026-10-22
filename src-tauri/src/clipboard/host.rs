@@ -752,11 +752,12 @@ mod tests {
             || async { true },
         ));
         // Hello fits in the buffer; read just that and then stop reading.
-        let mut hello = [0u8; 29];
+        let mut hello = vec![0u8; line(&Wire::Hello { version: VERSION }).len()];
         read.read_exact(&mut hello).await.unwrap();
         fake.set(&"a".repeat(100_000));
         let ended = tokio::time::timeout(WRITE_TIMEOUT + SEC * 2, task).await;
-        assert!(ended.expect("run returned").unwrap().is_err());
+        let err = ended.expect("run returned").unwrap().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 
     /// A clipboard whose reads (after the first `reads` of them) and writes

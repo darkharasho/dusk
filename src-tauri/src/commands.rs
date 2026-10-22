@@ -358,9 +358,6 @@ fn this_display(app: &AppHandle) -> Option<(u32, u32)> {
     (size.width > 0 && size.height > 0).then_some((size.width, size.height))
 }
 
-/// Where a machine's clipboard is shared from, as the drawer hears of it.
-pub const CLIPBOARD_UNAVAILABLE_EVENT: &str = crate::clipboard::client::UNAVAILABLE_EVENT;
-
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardUnavailable {
@@ -475,7 +472,7 @@ fn start_clipboard(
         match ended {
             client::Ended::Declined(Decline::Unsupported { detail }) => {
                 let _ = app.emit(
-                    CLIPBOARD_UNAVAILABLE_EVENT,
+                    client::UNAVAILABLE_EVENT,
                     ClipboardUnavailable {
                         device_id,
                         message: unavailable_message(&detail).to_string(),
@@ -1417,7 +1414,19 @@ pub async fn set_startup_prefs(
 
 #[cfg(test)]
 mod clipboard_lookup_tests {
-    use super::pinned_cert;
+    use super::{pinned_cert, unavailable_message};
+
+    #[test]
+    fn a_decline_with_a_detail_names_the_desktop_and_one_without_does_not() {
+        assert_eq!(
+            unavailable_message(&Some("anything".into())),
+            "Clipboard sharing isn't available when that machine runs GNOME on Wayland."
+        );
+        assert_eq!(
+            unavailable_message(&None),
+            "Clipboard sharing isn't available on that machine yet."
+        );
+    }
     use crate::moonlight::hosts::KnownHost;
 
     fn host(uuid: Option<&str>, addresses: &[&str], cert: &str) -> KnownHost {

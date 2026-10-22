@@ -81,10 +81,15 @@ pub fn server_config(
         .map_err(|_| "server key is unreadable".to_string())?
         .ok_or_else(|| "no server key".to_string())?;
     // A paired entry that does not parse is skipped: it can never match.
-    let paired = paired_pems
+    let paired: Vec<_> = paired_pems
         .iter()
         .filter_map(|pem| leaf_of(pem).ok())
         .collect();
+    let skipped = paired_pems.len() - paired.len();
+    if skipped > 0 {
+        // The count only: the entries are certificates, but say nothing.
+        eprintln!("dusk: {skipped} paired device certificate(s) could not be read");
+    }
 
     let mut config = rustls::ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()

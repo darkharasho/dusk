@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Device } from "../types";
 import { cardState, pairingOf } from "../deviceState";
 import {
@@ -95,14 +95,19 @@ export function DeviceDrawer({
 
   // Why the clipboard is not being shared, said by the stream's clipboard
   // connection when the machine streamed from cannot do it. It belongs to one
-  // session, so it goes when that session does.
+  // session, so it goes when that session does. The listener is registered
+  // once per machine and reads whether it is streaming here through a ref:
+  // registering again whenever that changed left a gap a quick decline,
+  // which comes right as the stream starts, could fall into.
   const [clipboardNote, setClipboardNote] = useState<string | null>(null);
+  const streamingHere = useRef(device.streamingHere);
+  streamingHere.current = device.streamingHere;
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
     onClipboardUnavailable((note) => {
-      if (!cancelled && note.deviceId === device.id && device.streamingHere)
+      if (!cancelled && note.deviceId === device.id && streamingHere.current)
         setClipboardNote(note.message);
     }).then((fn) => {
       if (cancelled) fn();
@@ -113,7 +118,7 @@ export function DeviceDrawer({
       cancelled = true;
       unlisten?.();
     };
-  }, [device.id, device.streamingHere]);
+  }, [device.id]);
   useEffect(() => {
     // A note belongs to one session: gone when it ends, absent when the next starts.
     setClipboardNote(null);

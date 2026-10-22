@@ -47,6 +47,9 @@ const DRAIN: Duration = Duration::from_secs(1);
 /// How long any one write (or the closing shutdown) may take before the
 /// connection is given up on: a peer that stops reading must not pin it.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long one read or write of this machine's clipboard may take. A
+/// clipboard owner that never answers must not pin the connection.
+const CLIPBOARD_CALL: Duration = Duration::from_secs(2);
 /// Connections that may be between accept and admission at once.
 const PRE_ADMIT: usize = 8;
 const VERSION: u32 = 1;
@@ -202,26 +205,47 @@ pub(super) async fn read_lines<R: AsyncRead + Unpin>(
     }
 }
 
-/// `read_text` is `None` for an empty clipboard and for a read that failed;
-/// neither is a change.
-async fn read_clipboard<C: LocalClipboard + 'static>(clipboard: &Arc<Mutex<C>>) -> Option<String> {
-    let clipboard = clipboard.clone();
-    tokio::task::spawn_blocking(move || clipboard.lock().ok()?.read_text())
-        .await
-        .ok()
-        .flatten()
+/// Runs one clipboard call off the async threads, for at most
+/// [`CLIPBOARD_CALL`]. A call that takes longer is left to finish on its
+/// own and the connection is ended: its `?` releases the live slot.
+async fn clipboard_call<T: Send + 'static>(
+    call: impl FnOnce() -> T + Send + 'static,
+) -> io::Result<T> {
+    match tokio::time::timeout(CLIPBOARD_CALL, tokio::task::spawn_blocking(call)).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_)) => Err(io::Error::other("a clipboard call failed")),
+        Err(_) => {
+            eprintln!("dusk: this machine's clipboard did not answer in time");
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "a clipboard call timed out",
+            ))
+        }
+    }
 }
 
-async fn write_clipboard<C: LocalClipboard + 'static>(clipboard: &Arc<Mutex<C>>, text: String) {
+/// `read_text` is `None` for an empty clipboard and for a read that failed;
+/// neither is a change.
+async fn read_clipboard<C: LocalClipboard + 'static>(
+    clipboard: &Arc<Mutex<C>>,
+) -> io::Result<Option<String>> {
+    let clipboard = clipboard.clone();
+    clipboard_call(move || clipboard.lock().ok()?.read_text()).await
+}
+
+async fn write_clipboard<C: LocalClipboard + 'static>(
+    clipboard: &Arc<Mutex<C>>,
+    text: String,
+) -> io::Result<()> {
     let clipboard = clipboard.clone();
     // A failed write is dropped: there is nobody to tell, and the text must
     // not end up in an error message.
-    let _ = tokio::task::spawn_blocking(move || {
+    clipboard_call(move || {
         if let Ok(mut clipboard) = clipboard.lock() {
             let _ = clipboard.write_text(&text);
         }
     })
-    .await;
+    .await
 }
 
 /// One admitted connection: Hello, then relay until either side ends, or
@@ -241,7 +265,7 @@ where
     GFut: Future<Output = bool>,
 {
     let clipboard = Arc::new(Mutex::new(clipboard));
-    let baseline = read_clipboard(&clipboard).await;
+    let baseline = read_clipboard(&clipboard).await?;
     let mut guard = Guard::new(baseline.as_deref());
 
     let (read, mut write) = tokio::io::split(stream);
@@ -298,13 +322,13 @@ where
                     // ignored.
                     if let Some(text) = text_of(&message) {
                         if fits(text) && guard.incoming(text) {
-                            write_clipboard(clipboard, text.to_string()).await;
+                            write_clipboard(clipboard, text.to_string()).await?;
                         }
                     }
                 }
             },
             _ = poll.tick() => {
-                if let Some(text) = read_clipboard(clipboard).await {
+                if let Some(text) = read_clipboard(clipboard).await? {
                     if !fits(&text) {
                         if guard.too_big(&text) {
                             send(write, &Wire::TooBig).await?;
@@ -733,6 +757,77 @@ mod tests {
         fake.set(&"a".repeat(100_000));
         let ended = tokio::time::timeout(WRITE_TIMEOUT + SEC * 2, task).await;
         assert!(ended.expect("run returned").unwrap().is_err());
+    }
+
+    /// A clipboard whose reads (after the first `reads` of them) and writes
+    /// never return until the test lets them go by dropping its sender.
+    struct Stuck {
+        reads: usize,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl LocalClipboard for Stuck {
+        fn read_text(&mut self) -> Option<String> {
+            if self.reads == 0 {
+                let _ = self.release.recv();
+            } else {
+                self.reads -= 1;
+            }
+            None
+        }
+        fn write_text(&mut self, _text: &str) -> Result<(), String> {
+            let _ = self.release.recv();
+            Ok(())
+        }
+    }
+
+    /// Runs against a stuck clipboard and says how the run ended, and when.
+    async fn run_stuck(reads: usize, say: Option<Wire>) -> (io::Result<()>, Duration) {
+        let (_hold, release) = std::sync::mpsc::channel::<()>();
+        let (a, b) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(a);
+        let mut peer = Peer {
+            lines: BufReader::new(read).lines(),
+            write,
+        };
+        let started = std::time::Instant::now();
+        let task = tokio::spawn(run(
+            b,
+            Stuck { reads, release },
+            || async { Hosting::Yes },
+            || async { true },
+        ));
+        if let Some(message) = say {
+            if peer.next().await.is_some() {
+                peer.say(message).await;
+            }
+        }
+        let ended = tokio::time::timeout(SEC * 10, task)
+            .await
+            .expect("run ended")
+            .unwrap();
+        (ended, started.elapsed())
+    }
+
+    #[tokio::test]
+    async fn a_stuck_baseline_read_ends_the_connection() {
+        let (ended, took) = run_stuck(0, None).await;
+        assert_eq!(ended.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(took >= CLIPBOARD_CALL && took < CLIPBOARD_CALL + SEC * 2);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_poll_ends_the_connection() {
+        let (ended, took) = run_stuck(1, None).await;
+        assert_eq!(ended.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(took < POLL + CLIPBOARD_CALL + SEC * 2);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_write_ends_the_connection() {
+        let (ended, took) = run_stuck(usize::MAX, Some(clip("x"))).await;
+        assert_eq!(ended.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(took < CLIPBOARD_CALL + SEC * 2);
     }
 
     #[tokio::test(start_paused = true)]

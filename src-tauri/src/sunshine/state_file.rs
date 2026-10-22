@@ -74,6 +74,10 @@ pub fn server_cert_path(config: Option<&Map<String, Value>>) -> Option<PathBuf> 
     configured_path(config, "cert", "credentials/cacert.pem")
 }
 
+pub fn server_key_path(config: Option<&Map<String, Value>>) -> Option<PathBuf> {
+    configured_path(config, "pkey", "credentials/cakey.pem")
+}
+
 /// A PEM reduced to a form that compares equal across line endings and hashes
 /// the same everywhere: no `\r`, no trailing whitespace on any line, no
 /// leading or trailing whitespace overall.
@@ -101,6 +105,21 @@ fn devices(state: &Value) -> Result<Option<&Vec<Value>>, StateFileError> {
 
 fn str_field<'a>(entry: &'a Value, key: &str) -> Option<&'a str> {
     entry.get(key).and_then(Value::as_str)
+}
+
+/// The certificate of every client Sunshine has paired, as it keeps them.
+/// A state file of an unrecognised shape has none.
+pub fn paired_certs(state: &Value) -> Vec<String> {
+    devices(state)
+        .ok()
+        .flatten()
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| str_field(e, "cert"))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Apply Dusk's additions and removals to a parsed state file. `Ok(None)`
@@ -353,6 +372,16 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn paired_certs_come_from_the_state_file() {
+        let certs = paired_certs(&state());
+        assert_eq!(
+            certs,
+            ["-----BEGIN CERTIFICATE-----\nFOREIGN\n-----END CERTIFICATE-----\n"]
+        );
+        assert!(paired_certs(&json!({"username": "x"})).is_empty());
     }
 
     #[test]

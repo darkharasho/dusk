@@ -181,7 +181,7 @@ its own setting is back on, 30 s after B declined for now or closed, and not
 again on that stream once B said it cannot share or never answered. It checks
 every 5 s, and at once when a copy is made with no connection up. B polls its
 clipboard every 500 ms; on Windows and macOS it reads the text only when the
-system's change counter moved, and each clipboard call may take 2 s before
+system's change counter moved, and each clipboard call may take 5 s before
 the connection is ended. Admission only uses a host password already
 in memory: a connection never makes B read its keystore. A plain `Declined`
 or `Hello` line comes before the handshake, so an older Dusk with nothing

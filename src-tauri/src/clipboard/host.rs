@@ -48,8 +48,11 @@ const DRAIN: Duration = Duration::from_secs(1);
 /// connection is given up on: a peer that stops reading must not pin it.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long one read or write of this machine's clipboard may take. A
-/// clipboard owner that never answers must not pin the connection.
-const CLIPBOARD_CALL: Duration = Duration::from_secs(2);
+/// clipboard owner that never answers must not pin the connection. Longer
+/// than arboard's own 4 s X11 read timeout, so a slow owner (or a large
+/// transfer) that arboard would finish or fail cleanly does not end the
+/// connection first.
+const CLIPBOARD_CALL: Duration = Duration::from_secs(5);
 /// Connections that may be between accept and admission at once.
 const PRE_ADMIT: usize = 8;
 const VERSION: u32 = 1;

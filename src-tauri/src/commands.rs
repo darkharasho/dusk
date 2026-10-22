@@ -1415,6 +1415,7 @@ pub async fn set_startup_prefs(
 #[cfg(test)]
 mod clipboard_lookup_tests {
     use super::{pinned_cert, unavailable_message};
+    use crate::moonlight::hosts::KnownHost;
 
     #[test]
     fn a_decline_with_a_detail_names_the_desktop_and_one_without_does_not() {
@@ -1427,7 +1428,6 @@ mod clipboard_lookup_tests {
             "Clipboard sharing isn't available on that machine yet."
         );
     }
-    use crate::moonlight::hosts::KnownHost;
 
     fn host(uuid: Option<&str>, addresses: &[&str], cert: &str) -> KnownHost {
         KnownHost {

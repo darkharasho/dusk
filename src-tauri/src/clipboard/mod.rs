@@ -15,6 +15,7 @@
 //! Clipboard text is never logged, never written to disk, and never put in an
 //! error string, so a bug report cannot leak what was copied.
 
+pub mod client;
 pub mod guard;
 pub mod host;
 pub mod local;
@@ -22,4 +23,4 @@ pub mod tls;
 pub mod wire;
 
 pub use guard::Guard;
-pub use wire::{fits, line, text_of, Decline, Wire, MAX_LINE, MAX_TEXT_BYTES, PORT};
+pub use wire::{fits, line, text_of, Decline, Wire, MAX_LINE, PORT};

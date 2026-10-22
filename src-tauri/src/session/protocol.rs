@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 /// field this build does not know about should be ignored, not treated as a
 /// protocol error. The reverse — an unknown message *type* — is handled by
 /// the `Unknown` fallback rather than by failing the connection.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FromClient {
     /// First message on every connection. Nothing else is acted on until
@@ -48,10 +48,42 @@ pub enum FromClient {
     Disconnected {
         reason: Option<String>,
     },
+    /// The person copied something on this machine. Only `"text"` is acted
+    /// on; any other format is ignored.
+    Clipboard {
+        #[serde(default)]
+        format: String,
+        #[serde(default)]
+        text: String,
+    },
     /// A message type this build does not know. Kept rather than rejected so
     /// a newer client talking to an older Dusk degrades instead of dying.
     #[serde(other)]
     Unknown,
+}
+
+// Hand-written so clipboard text never reaches a log or a failed assertion.
+impl std::fmt::Debug for FromClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FromClient::Ready { token } => f.debug_struct("Ready").field("token", token).finish(),
+            FromClient::Stats(stats) => f.debug_tuple("Stats").field(stats).finish(),
+            FromClient::OverlayAction { action } => f
+                .debug_struct("OverlayAction")
+                .field("action", action)
+                .finish(),
+            FromClient::Disconnected { reason } => f
+                .debug_struct("Disconnected")
+                .field("reason", reason)
+                .finish(),
+            FromClient::Clipboard { format, text } => f
+                .debug_struct("Clipboard")
+                .field("format", format)
+                .field("len", &text.len())
+                .finish(),
+            FromClient::Unknown => f.write_str("Unknown"),
+        }
+    }
 }
 
 /// What the overlay offers. Deliberately intents rather than commands: the
@@ -95,7 +127,7 @@ pub struct Stats {
 /// count the round-trip test, so the allow is about where the first caller
 /// is, not about whether the variant is real.
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToClient {
     SetQuality {
@@ -110,10 +142,46 @@ pub enum ToClient {
     HostDisplay {
         id: String,
     },
+    /// Text copied on the host, for the client to put on its clipboard.
+    Clipboard {
+        format: String,
+        text: String,
+    },
+    /// A short message for the overlay to show.
+    Notice {
+        text: String,
+    },
+}
+
+// Hand-written so clipboard text never reaches a log or a failed assertion.
+impl std::fmt::Debug for ToClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToClient::SetQuality {
+                bitrate_kbps,
+                fps,
+                resolution,
+            } => f
+                .debug_struct("SetQuality")
+                .field("bitrate_kbps", bitrate_kbps)
+                .field("fps", fps)
+                .field("resolution", resolution)
+                .finish(),
+            ToClient::Disconnect => f.write_str("Disconnect"),
+            ToClient::ShowOverlay => f.write_str("ShowOverlay"),
+            ToClient::HostDisplay { id } => f.debug_struct("HostDisplay").field("id", id).finish(),
+            ToClient::Clipboard { format, text } => f
+                .debug_struct("Clipboard")
+                .field("format", format)
+                .field("len", &text.len())
+                .finish(),
+            ToClient::Notice { text } => f.debug_struct("Notice").field("text", text).finish(),
+        }
+    }
 }
 
 /// What a received line means for the session.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Effect {
     /// Nothing to do. Unknown messages and duplicate handshakes land here.
     Ignore,
@@ -127,6 +195,26 @@ pub enum Effect {
     Ended {
         reason: Option<String>,
     },
+    /// Text the person copied on this machine, to be shared with the host.
+    Clipboard(String),
+}
+
+// Hand-written so clipboard text never reaches a log or a failed assertion.
+impl std::fmt::Debug for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Effect::Ignore => f.write_str("Ignore"),
+            Effect::Authenticated => f.write_str("Authenticated"),
+            Effect::Close(why) => f.debug_tuple("Close").field(why).finish(),
+            Effect::Stats(stats) => f.debug_tuple("Stats").field(stats).finish(),
+            Effect::Overlay(action) => f.debug_tuple("Overlay").field(action).finish(),
+            Effect::Ended { reason } => f.debug_struct("Ended").field("reason", reason).finish(),
+            Effect::Clipboard(text) => f
+                .debug_struct("Clipboard")
+                .field("len", &text.len())
+                .finish(),
+        }
+    }
 }
 
 /// One connection's state, as a state machine so it can be tested without a
@@ -189,6 +277,8 @@ impl Conversation {
             FromClient::Stats(stats) => Effect::Stats(stats),
             FromClient::OverlayAction { action } => Effect::Overlay(action),
             FromClient::Disconnected { reason } => Effect::Ended { reason },
+            FromClient::Clipboard { format, text } if format == "text" => Effect::Clipboard(text),
+            FromClient::Clipboard { .. } => Effect::Ignore,
             FromClient::Unknown => Effect::Ignore,
         }
     }
@@ -361,6 +451,13 @@ mod tests {
             ToClient::Disconnect,
             ToClient::ShowOverlay,
             ToClient::HostDisplay { id: "1".into() },
+            ToClient::Clipboard {
+                format: "text".into(),
+                text: "a\nb".into(),
+            },
+            ToClient::Notice {
+                text: "Too large".into(),
+            },
             ToClient::SetQuality {
                 bitrate_kbps: None,
                 fps: None,
@@ -372,5 +469,54 @@ mod tests {
             assert_eq!(rendered.matches('\n').count(), 1, "{message:?}");
             serde_json::from_str::<serde_json::Value>(rendered.trim()).expect("valid JSON");
         }
+    }
+
+    fn authed() -> Conversation {
+        let mut c = Conversation::new("t");
+        c.accept(&ready("t"));
+        c
+    }
+
+    #[test]
+    fn a_text_copy_from_the_window_comes_through() {
+        let mut c = authed();
+        assert_eq!(
+            c.accept(r#"{"type":"clipboard","format":"text","text":"hi"}"#),
+            Effect::Clipboard("hi".into())
+        );
+    }
+
+    #[test]
+    fn a_non_text_copy_is_ignored() {
+        assert_eq!(
+            authed().accept(r#"{"type":"clipboard","format":"png","text":""}"#),
+            Effect::Ignore
+        );
+    }
+
+    #[test]
+    fn clipboard_before_the_handshake_closes() {
+        assert!(matches!(
+            Conversation::new("t").accept(r#"{"type":"clipboard","format":"text","text":"x"}"#),
+            Effect::Close(_)
+        ));
+    }
+
+    #[test]
+    fn clipboard_text_never_shows_in_debug_output() {
+        let secret = "hunter2-secret";
+        let shown = format!(
+            "{:?} {:?} {:?}",
+            FromClient::Clipboard {
+                format: "text".into(),
+                text: secret.into()
+            },
+            Effect::Clipboard(secret.into()),
+            ToClient::Clipboard {
+                format: "text".into(),
+                text: secret.into()
+            },
+        );
+        assert!(!shown.contains(secret), "{shown}");
     }
 }

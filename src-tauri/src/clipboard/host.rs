@@ -66,7 +66,7 @@ fn timed_out() -> io::Error {
     io::Error::new(io::ErrorKind::TimedOut, "a clipboard write timed out")
 }
 
-async fn send<W: AsyncWrite + Unpin>(out: &mut W, message: &Wire) -> io::Result<()> {
+pub(super) async fn send<W: AsyncWrite + Unpin>(out: &mut W, message: &Wire) -> io::Result<()> {
     let write = async {
         out.write_all(line(message).as_bytes()).await?;
         out.flush().await
@@ -76,20 +76,23 @@ async fn send<W: AsyncWrite + Unpin>(out: &mut W, message: &Wire) -> io::Result<
         .map_err(|_| timed_out())?
 }
 
-async fn close<W: AsyncWrite + Unpin>(out: &mut W) -> io::Result<()> {
+pub(super) async fn close<W: AsyncWrite + Unpin>(out: &mut W) -> io::Result<()> {
     tokio::time::timeout(WRITE_TIMEOUT, out.shutdown())
         .await
         .map_err(|_| timed_out())?
 }
 
-enum Incoming {
+pub(super) enum Incoming {
     Message(Wire),
     End,
 }
 
 /// Read lines until the peer ends, one capped line at a time. A line over
 /// the cap, or one that is not a message, ends the connection.
-async fn read_lines<R: AsyncRead + Unpin>(read: R, to: mpsc::Sender<io::Result<Incoming>>) {
+pub(super) async fn read_lines<R: AsyncRead + Unpin>(
+    read: R,
+    to: mpsc::Sender<io::Result<Incoming>>,
+) {
     let mut reader = BufReader::new(read);
     loop {
         let mut buf = Vec::new();
@@ -344,7 +347,7 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::MAX_TEXT_BYTES;
+    use crate::clipboard::wire::MAX_TEXT_BYTES;
     use tokio::io::{DuplexStream, Lines, ReadHalf, WriteHalf};
 
     #[derive(Clone)]

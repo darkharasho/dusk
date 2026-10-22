@@ -7,8 +7,6 @@ mod account;
 mod applist;
 mod cert_pairing;
 mod cli;
-// Later clipboard tasks use this module and its re-exports.
-#[allow(dead_code, unused_imports)]
 mod clipboard;
 mod commands;
 mod discovery;

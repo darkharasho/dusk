@@ -358,6 +358,93 @@ fn this_display(app: &AppHandle) -> Option<(u32, u32)> {
     (size.width > 0 && size.height > 0).then_some((size.width, size.height))
 }
 
+/// Where a machine's clipboard is shared from, as the drawer hears of it.
+pub const CLIPBOARD_UNAVAILABLE_EVENT: &str = crate::clipboard::client::UNAVAILABLE_EVENT;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardUnavailable {
+    pub device_id: String,
+    pub message: String,
+}
+
+/// What a person is told when the host's desktop cannot share a clipboard.
+fn unavailable_message(detail: &Option<String>) -> &'static str {
+    if detail.is_some() {
+        "Clipboard sharing isn't available when that machine runs GNOME on Wayland."
+    } else {
+        "Clipboard sharing isn't available on that machine yet."
+    }
+}
+
+/// The pinned TLS setup for sharing a clipboard with the host streamed from:
+/// its certificate as the streaming client stored it, and this machine's
+/// client identity. `None` (after one log line) when either is missing.
+async fn clipboard_tls(
+    state: &Arc<AppState>,
+    device_id: &str,
+    address: &str,
+) -> Option<Arc<rustls::ClientConfig>> {
+    let (id, address) = (device_id.to_string(), address.to_string());
+    let state = state.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let client = state.moonlight.as_ref();
+        let wanted = crate::peer::host_part(&address);
+        let cert = crate::moonlight::hosts::load(client)
+            .into_iter()
+            .find(|h| {
+                h.uuid.as_deref() == Some(id.as_str())
+                    || h.addresses
+                        .iter()
+                        .any(|a| a == &address || crate::peer::host_part(a) == wanted)
+            })
+            .and_then(|h| h.server_cert)?;
+        let identity = crate::moonlight::identity::load(client)?;
+        crate::clipboard::tls::client_config(&identity, &cert).ok()
+    })
+    .await
+    .ok()
+    .flatten();
+    if found.is_none() {
+        eprintln!("dusk: not sharing the clipboard: no pinned certificate for this host");
+    }
+    found
+}
+
+/// Share the clipboard with the host for as long as the returned sender
+/// lives. Dropping it ends the connection.
+fn start_clipboard(
+    app: &AppHandle,
+    control: crate::session::Control,
+    device_id: String,
+    config: Arc<rustls::ClientConfig>,
+    address: String,
+) -> tokio::sync::mpsc::UnboundedSender<String> {
+    use crate::clipboard::{client, Decline};
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let ended = match client::connect(&address, config).await {
+            Ok(stream) => client::run(stream, control, rx).await,
+            Err(ended) => ended,
+        };
+        match ended {
+            client::Ended::Declined(Decline::Unsupported { detail }) => {
+                let _ = app.emit(
+                    CLIPBOARD_UNAVAILABLE_EVENT,
+                    ClipboardUnavailable {
+                        device_id,
+                        message: unavailable_message(&detail).to_string(),
+                    },
+                );
+            }
+            // Logged by kind only: nothing that was copied.
+            other => eprintln!("dusk: clipboard sharing ended: {other:?}"),
+        }
+    });
+    tx
+}
+
 /// Start streaming an app, and watch the session for the card's sake.
 #[tauri::command]
 pub async fn launch_app(
@@ -426,6 +513,8 @@ pub async fn launch_app(
     // with it.
     let overlay_app = app.clone();
     let stats_device = id.clone();
+    let clipboard_state = inner.clone();
+    let clipboard_address = address.clone();
     // Whether Dusk stepped aside for this stream, so the watcher below knows
     // to bring it back. Shared because the two halves are separate tasks.
     let stepped_aside = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -433,6 +522,9 @@ pub async fn launch_app(
     tauri::async_runtime::spawn(async move {
         let session = session;
         let mut effects = effects;
+        // Held for as long as the stream is: when this loop ends the sender
+        // drops, which ends the clipboard connection.
+        let mut clipboard: Option<tokio::sync::mpsc::UnboundedSender<String>> = None;
         while let Some(effect) = effects.recv().await {
             match effect {
                 // Logged because nothing else shows the channel is in use:
@@ -450,6 +542,26 @@ pub async fn launch_app(
                     eprintln!("dusk: the client connected to the session channel");
                     aside.store(true, std::sync::atomic::Ordering::Relaxed);
                     crate::tray::hide_window(&overlay_app);
+
+                    let sharing = clipboard_state.store.lock().await.clipboard_sharing.is_on();
+                    if sharing && clipboard.is_none() {
+                        if let Some(config) =
+                            clipboard_tls(&clipboard_state, &stats_device, &clipboard_address).await
+                        {
+                            clipboard = Some(start_clipboard(
+                                &overlay_app,
+                                session.control(),
+                                stats_device.clone(),
+                                config,
+                                clipboard_address.clone(),
+                            ));
+                        }
+                    }
+                }
+                crate::session::Effect::Clipboard(text) => {
+                    if let Some(clipboard) = &clipboard {
+                        let _ = clipboard.send(text);
+                    }
                 }
                 crate::session::Effect::Overlay(action) => match action {
                     // Asked rather than killed: a client that is told to go

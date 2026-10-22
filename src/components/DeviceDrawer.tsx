@@ -5,6 +5,7 @@ import {
   generatePin,
   launchApp,
   onPairProgress,
+  onClipboardUnavailable,
   onSessionFailed,
   pairDevice,
   quitSession,
@@ -91,6 +92,30 @@ export function DeviceDrawer({
       unlisten?.();
     };
   }, [device.id]);
+
+  // Why the clipboard is not being shared, said by the stream's clipboard
+  // connection when the machine streamed from cannot do it. It belongs to one
+  // session, so it goes when that session does.
+  const [clipboardNote, setClipboardNote] = useState<string | null>(null);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    onClipboardUnavailable((note) => {
+      if (!cancelled && note.deviceId === device.id) setClipboardNote(note.message);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [device.id]);
+  useEffect(() => {
+    if (!device.streamingHere) setClipboardNote(null);
+  }, [device.streamingHere]);
 
   const { label, chipClass } = cardState(device);
   const online = device.reachability.kind === "online";
@@ -191,6 +216,9 @@ export function DeviceDrawer({
                     </p>
                   )}
                   {device.streamingHere && <StreamStats deviceId={device.id} />}
+                  {device.streamingHere && clipboardNote && (
+                    <p className="axi-ink-dim">{clipboardNote}</p>
+                  )}
                   <button
                     type="button"
                     className="axi-btn axi-btn--sm dusk-drawer__end"

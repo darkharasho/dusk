@@ -16,6 +16,7 @@ import type {
 export const SNAPSHOT_EVENT = "dusk://snapshot";
 export const SESSION_FAILED_EVENT = "dusk://session-failed";
 export const SESSION_STATS_EVENT = "dusk://session-stats";
+export const CLIPBOARD_UNAVAILABLE_EVENT = "dusk://clipboard-unavailable";
 export const PAIR_REQUEST_EVENT = "dusk://pair-request";
 export const PAIR_REQUEST_ENDED_EVENT = "dusk://pair-request-ended";
 export const PAIR_PROGRESS_EVENT = "dusk://pair-progress";
@@ -59,6 +60,12 @@ export interface StreamStats {
   decodeMs?: number | null;
   /** Percentage of frames the network dropped, 0 to 100. */
   packetLoss?: number | null;
+}
+
+/** The machine being streamed from cannot share its clipboard, and why. */
+export interface ClipboardUnavailable {
+  deviceId: string;
+  message: string;
 }
 
 export interface SessionStats {
@@ -243,6 +250,14 @@ export function onSessionFailed(
   handler: (failure: SessionFailed) => void,
 ): Promise<() => void> {
   return listen<SessionFailed>(SESSION_FAILED_EVENT, (event) => handler(event.payload));
+}
+
+export function onClipboardUnavailable(
+  handler: (note: ClipboardUnavailable) => void,
+): Promise<() => void> {
+  return listen<ClipboardUnavailable>(CLIPBOARD_UNAVAILABLE_EVENT, (event) =>
+    handler(event.payload),
+  );
 }
 
 export function onSessionStats(

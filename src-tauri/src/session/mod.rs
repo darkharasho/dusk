@@ -77,6 +77,14 @@ impl Control {
         let (tx, _rx) = mpsc::unbounded_channel();
         Self(tx)
     }
+
+    /// A control with its receiving end handed back, so a test can see what
+    /// was sent to the client.
+    #[cfg(test)]
+    pub(crate) fn pair() -> (Self, mpsc::UnboundedReceiver<ToClient>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self(tx), rx)
+    }
 }
 
 impl Drop for Session {

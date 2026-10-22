@@ -1,5 +1,22 @@
 # Release Notes
 
+Version v0.3.33 — October 22, 2026
+
+Each stream now leaves a log behind, even if the computer freezes.
+
+## Changes
+
+- **Every stream keeps a log you can read after a reboot.** On Linux, what
+  happened during a stream used to be kept only in memory, so a freeze took
+  it with it. Each stream is now written to
+  `~/.local/state/dev.dusk.app/streams/` as it runs and saved to disk every
+  second. The last ten streams are kept.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.32 — October 21, 2026
 
 A Linux host matches your screen when you pick up a stream where you left it.

@@ -6,8 +6,11 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.32 is released**, all three platforms, from `main` (PR #5), still
-carrying the client's `dusk-v0.2.5`. A Linux host now matches the viewer's
+**v0.3.33 is released**, all three platforms, from `main` (PR #6), still
+carrying the client's `dusk-v0.2.5`. Each stream's client log is now kept on
+disk and survives a freeze (see "keeps no log file" under Landmines); it was
+added to chase a Bazzite freeze on the overlay's display switch, which is
+still unexplained. **v0.3.32** (PR #5): a Linux host matches the viewer's
 screen when a stream resumes a session left open (see "(5)" under the Linux
 screen-sizing below). **v0.3.31** (PR #4): a host whose stream's client dropped
 without quitting no longer holds a certificate pairing forever (see "never
@@ -536,7 +539,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.32>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.33>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -572,7 +575,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30, v0.3.31, v0.3.32
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30, v0.3.31, v0.3.32, v0.3.33
 └── moonlight-qt/    master @ ded3c2f1  tags dusk-v0.1.0 … dusk-v0.2.5
 ```
 
@@ -913,6 +916,14 @@ newline, with nothing to say it has done so. Decode it before building an
 auth header from it, or the 401 that follows is a phantom of your own
 making. On Linux the equivalent is that `systemd-creds decrypt` refuses
 unless `--name=` matches the embedded credential name.
+
+**On Linux the client keeps no log file of its own.** moonlight-qt only
+writes `/tmp/Moonlight-*.log` on Windows and macOS release builds; on Linux
+it logs to stderr, which Dusk drains. Since v0.3.33 each session is copied to
+`~/.local/state/dev.dusk.app/streams/stream-<ms>.log`
+(`moonlight::stream_log`), stamped with the wall clock and synced once a
+second, so it outlives a freeze — `/tmp` is tmpfs on Bazzite and would not.
+Match a stamp against `journalctl -b -1 --since @<seconds>`.
 
 **`gh` needs a repo.** A job that does not check out has no git remote to
 infer one from; set `GH_REPO` rather than adding a pointless checkout.

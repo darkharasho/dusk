@@ -1,14 +1,37 @@
 # Release Notes
 
+Version v0.3.35 — October 22, 2026
+
+Copy and paste now work across a stream.
+
+## Changes
+
+- **Your clipboard follows you through a stream.** Text you copy on either
+  machine can be pasted on the other while a stream is running, on Windows,
+  macOS and Linux in any mix. It is on by default and can be turned off with
+  **Share clipboard while streaming** in Settings. It only shares with the
+  machine streaming from this one, over an encrypted connection, and stops
+  when the stream ends.
+- **It picks back up on its own.** Turning sharing back on mid-stream, or a
+  host that was briefly unavailable, reconnects without restarting the
+  stream.
+- **Very large copies stay put.** A copy over 1 MB is not sent, and the
+  stream says so.
+- **A GNOME Wayland host says why it can't share.** GNOME doesn't let a
+  background app follow the clipboard, so sharing is off there and the
+  device panel says so instead of looking broken.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.34 — October 22, 2026
 
 Fewer sync, sign-in and pairing errors, and a title bar that behaves the same on every platform.
 
 ## Changes
 
-- **Your clipboard follows you through a stream.** Text you copy on either
-  machine can be pasted on the other while a stream is running. It is on by
-  default and can be turned off with **Share clipboard while streaming**.
 - **Your machines show up without a restart.** A machine signed in after
   Dusk opened was not counted as yours until Dusk was started again. The
   list is now re-read every few minutes and whenever you press Refresh.

@@ -6,8 +6,16 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.34 is released**, all three platforms, from `main` (PRs #7 and #8),
-still carrying the client's `dusk-v0.2.5`. PR #7 was a stability pass over
+**v0.3.35 is released**, carrying the client's `dusk-v0.2.6`: copy and paste
+across a stream, text only, both ways, on all three platforms
+(`src-tauri/src/clipboard/`, and `app/streaming/duskchannel.*` in the fork;
+`docs/architecture.md` has the design). Not yet tried live: a real stream
+between two machines, the Windows and macOS change counters, reconnecting
+and per-stream binding against a real host, and the X11 focus behaviour.
+A GNOME Wayland host turns sharing off and says why.
+
+Before that, **v0.3.34** was released, all three platforms, from `main`
+(PRs #7 and #8), carrying the client's `dusk-v0.2.5`. PR #7 was a stability pass over
 sync, auth and pairing, from a full read of the code against the complaints
 of "endless errors with sync and auth"; PR #8 a UI pass, chiefly the
 titlebar behaving the same on every platform (see "Own titlebar" under the
@@ -639,7 +647,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.34>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.35>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon

@@ -1085,13 +1085,15 @@ mod tests {
     #[test]
     fn a_config_it_cannot_read_gives_no_paths() {
         assert!(located(None).is_none());
+        // Absolute on this platform: "/elsewhere" has no drive on Windows.
+        let elsewhere = std::env::temp_dir().join("elsewhere");
         let configured = serde_json::json!({
-            "file_state": "/elsewhere/state.json",
-            "cert": "/elsewhere/cacert.pem",
+            "file_state": elsewhere.join("state.json"),
+            "cert": elsewhere.join("cacert.pem"),
         });
         let at = located(configured.as_object()).unwrap();
-        assert_eq!(at.state, PathBuf::from("/elsewhere/state.json"));
-        assert_eq!(at.server_cert, PathBuf::from("/elsewhere/cacert.pem"));
+        assert_eq!(at.state, elsewhere.join("state.json"));
+        assert_eq!(at.server_cert, elsewhere.join("cacert.pem"));
         // A config that was read but leaves them unset means the defaults.
         let unset = serde_json::Map::new();
         let defaults = located(Some(&unset)).unwrap();

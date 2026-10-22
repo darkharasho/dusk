@@ -1,5 +1,24 @@
 # Release Notes
 
+Version v0.3.32 — October 21, 2026
+
+A Linux host matches your screen when you pick up a stream where you left it.
+
+## Changes
+
+- **Picking up a stream on a Linux host now sizes its screen to yours.** If
+  your last stream dropped instead of being quit, the next one carried on
+  where it left off, but at the host's own screen size. The host now resizes
+  its screen to yours as the stream resumes, and puts it back when you quit.
+- **A Linux host puts its screen back by itself once a dropped stream is
+  gone.** Before, it stayed at the other device's size until Dusk next
+  started. Now it goes back after about two minutes with nobody connected.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.31 — October 21, 2026
 
 Pairing without a PIN finishes after a stream that dropped.

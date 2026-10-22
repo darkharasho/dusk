@@ -6,8 +6,10 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.31 is released**, all three platforms, from `main` (PR #4), still
-carrying the client's `dusk-v0.2.5`. A host whose stream's client dropped
+**v0.3.32 is released**, all three platforms, from `main` (PR #5), still
+carrying the client's `dusk-v0.2.5`. A Linux host now matches the viewer's
+screen when a stream resumes a session left open (see "(5)" under the Linux
+screen-sizing below). **v0.3.31** (PR #4): a host whose stream's client dropped
 without quitting no longer holds a certificate pairing forever (see "never
 restarts mid-stream" below). **v0.3.30** (PR #3) fixed certificate pairing
 from Linux: every `add-host` there failed with "--name not provided" (see the
@@ -196,7 +198,15 @@ asked to quit leaves the session up and the screen resized; Sunshine logs
 `screen_mode::restore_if_left_resized`, called at startup. **(4) The mode in
 use is not the preferred mode.** Venus sits at 2560x1440 while `+` marks
 1920x1080, so `xrandr --auto` would "restore" it to the wrong size; the mode
-in use is recorded before the switch.
+in use is recorded before the switch. **(5) A resumed session runs no prep
+command.** A stream whose client dropped leaves the app running; the next
+stream resumes it and `do` never fires, so the screen stayed at the host's
+size (bazzite → Venus, v0.3.31). Since v0.3.32 the peer `display` answer
+(`peer::match_screen_for_a_resumed_stream`) resizes the screen itself when
+`reconcile::session_left_open` (serverinfo busy, nobody connected by the
+log), and `peer::watch_for_a_screen_left_resized` puts it back after two
+one-minute checks with nobody connected. The state file is written only if
+absent, so it always holds the pre-stream mode.
 
 `dusk screen on|off` exists for the same reason `dusk setup` does: a Linux
 host could otherwise only turn this on from its own screen, which a host in
@@ -526,7 +536,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.31>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.32>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -562,7 +572,7 @@ Two repositories, side by side. Several things assume they are siblings.
 
 ```
 <parent>/
-├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30, v0.3.31
+├── dusk/            main             tags v0.1.0, v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.3.5 (never published: failed its formatting check), v0.3.6, v0.3.7, v0.3.8, v0.3.9, v0.3.10, v0.3.11, v0.3.12, v0.3.13, v0.3.14, v0.3.15, v0.3.16, v0.3.17, v0.3.18, v0.3.19, v0.3.20, v0.3.21, v0.3.22, v0.3.23, v0.3.24, v0.3.25, v0.3.26, v0.3.27, v0.3.28, v0.3.29, v0.3.30, v0.3.31, v0.3.32
 └── moonlight-qt/    master @ ded3c2f1  tags dusk-v0.1.0 … dusk-v0.2.5
 ```
 

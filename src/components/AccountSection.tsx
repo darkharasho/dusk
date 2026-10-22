@@ -8,6 +8,7 @@ import {
   signOutOfGithub,
 } from "../api";
 import type { AccountView, SignInCode } from "../types";
+import { describe } from "../errors";
 
 /**
  * Signing in with GitHub, so your own machines pair without asking.
@@ -26,14 +27,14 @@ export function AccountSection() {
   }
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)));
+    refresh().catch((e) => setError(describe(e)));
     let stop: (() => void) | undefined;
     let cancelled = false;
     onAccount(({ error }) => {
       setCode(null);
       setBusy(false);
       setError(error);
-      refresh().catch((e) => setError(String(e)));
+      refresh().catch((e) => setError(describe(e)));
     }).then((fn) => {
       if (cancelled) fn();
       else stop = fn;
@@ -52,7 +53,7 @@ export function AccountSection() {
       setCode(next);
       await openSignInPage().catch(() => {});
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
       setBusy(false);
     }
   }
@@ -70,7 +71,7 @@ export function AccountSection() {
       await signOutOfGithub();
       await refresh();
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(false);
     }
@@ -152,7 +153,28 @@ export function AccountSection() {
         </>
       )}
 
-      {account && !user && !code && (
+      {account && !user && !code && account.unreadable && (
+        <div className="axi-notice axi-notice--danger">
+          <span className="axi-notice__icon" aria-hidden="true">
+            !
+          </span>
+          <div className="axi-stack">
+            <p>{account.unreadable}</p>
+            <div className="axi-row">
+              <button
+                type="button"
+                className="axi-btn axi-btn--sm"
+                disabled={busy}
+                onClick={() => refresh().catch((e) => setError(describe(e)))}
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {account && !user && !code && !account.unreadable && (
         <>
           <p>
             Sign in on each of your machines and they will pair with each
@@ -189,7 +211,7 @@ export function AccountSection() {
             <button
               type="button"
               className="axi-btn"
-              onClick={() => openSignInPage().catch((e) => setError(String(e)))}
+              onClick={() => openSignInPage().catch((e) => setError(describe(e)))}
             >
               Open GitHub
             </button>

@@ -5,6 +5,7 @@ import {
   onPairRequestEnded,
   type PairRequest,
 } from "../api";
+import { describe } from "../errors";
 
 /**
  * Another machine's Dusk asking to pair with this one.
@@ -55,7 +56,7 @@ export function PairRequestPrompt() {
       await answerPairRequest(request.id, allow);
       setRequest(null);
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setAnswering(false);
     }

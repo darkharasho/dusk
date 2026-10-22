@@ -86,7 +86,10 @@ type Reader = Arc<dyn Fn() -> Result<Option<Credentials>, String> + Send + Sync>
 /// then looks exactly like a password that never saved. Every path to the
 /// keystore goes through one of these fields, so a test cannot reach the
 /// real one by accident.
-type Writer = Arc<dyn Fn(&Credentials) -> Result<(), String> + Send + Sync>;
+///
+/// `None` erases the entry: for a save that has to be undone because the
+/// host never took the sign-in it was for.
+type Writer = Arc<dyn Fn(Option<&Credentials>) -> Result<(), String> + Send + Sync>;
 
 #[derive(Default)]
 struct Cached {
@@ -120,6 +123,17 @@ impl Default for CredentialStore {
 }
 
 impl CredentialStore {
+    /// A store over any reader and writer, for tests elsewhere in the crate
+    /// that must not reach the real keystore.
+    #[cfg(test)]
+    pub(crate) fn with(reader: Reader, writer: Writer) -> Self {
+        Self {
+            reader,
+            writer,
+            ..Default::default()
+        }
+    }
+
     /// What is known right now, without touching the keystore.
     ///
     /// Safe to call from anything that must not block — which is anything on
@@ -189,7 +203,7 @@ impl CredentialStore {
         let written = {
             let to_write = credentials.clone();
             let writer = self.writer.clone();
-            spawn_blocking(move || writer(&to_write)).await
+            spawn_blocking(move || writer(Some(&to_write))).await
         };
 
         let mut cached = self.cached.write().await;
@@ -205,6 +219,20 @@ impl CredentialStore {
         cached.credentials = Some(credentials);
         cached.read = true;
         Ok(())
+    }
+
+    /// Drop the sign-in, from memory and from the keystore: for undoing a
+    /// save whose host never took the password. A keystore that will not
+    /// erase it is an error, but the run forgets it either way, so nothing
+    /// this run does uses a password the host does not know.
+    pub async fn forget(&self) -> Result<(), String> {
+        let writer = self.writer.clone();
+        let erased = spawn_blocking(move || writer(None)).await;
+        let mut cached = self.cached.write().await;
+        cached.credentials = None;
+        cached.read = true;
+        cached.persistent = erased.is_ok();
+        erased
     }
 
     /// False when the password is only held in memory, so the UI can say
@@ -254,11 +282,14 @@ fn read_keystore() -> Result<Option<Credentials>, String> {
     }))
 }
 
-fn to_keystore(credentials: &Credentials) -> Result<(), String> {
-    crate::secrets::set(
-        crate::secrets::HOST,
-        &format!("{}\n{}", credentials.username, credentials.password),
-    )
+fn to_keystore(credentials: Option<&Credentials>) -> Result<(), String> {
+    match credentials {
+        Some(credentials) => crate::secrets::set(
+            crate::secrets::HOST,
+            &format!("{}\n{}", credentials.username, credentials.password),
+        ),
+        None => crate::secrets::delete(crate::secrets::HOST),
+    }
 }
 
 #[cfg(test)]
@@ -301,6 +332,28 @@ mod tests {
 
     fn store() -> (CredentialStore, Arc<AtomicUsize>) {
         store_answering(Ok(Some(sunshine())))
+    }
+
+    #[tokio::test]
+    async fn forgetting_erases_the_entry_and_reads_as_signed_out() {
+        let erased = Arc::new(AtomicUsize::new(0));
+        let count = erased.clone();
+        let store = CredentialStore {
+            reader: Arc::new(|| Ok(Some(sunshine()))),
+            writer: Arc::new(move |c| {
+                if c.is_none() {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(())
+            }),
+            ..Default::default()
+        };
+        assert!(store.load().await.is_some());
+        store.forget().await.unwrap();
+        assert_eq!(erased.load(Ordering::SeqCst), 1);
+        assert_eq!(store.peek().await, Known::SignedOut);
+        // Not re-read: forgetting is an answer, not a failed read.
+        assert!(store.load().await.is_none());
     }
 
     #[tokio::test]

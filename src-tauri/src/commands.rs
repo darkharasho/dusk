@@ -413,7 +413,9 @@ pub async fn launch_app(
     // The card follows *our* session, not Sunshine's. Marked before the
     // watcher so the grid does not have a window where the stream is up
     // and the card still says Ready.
-    inner.session_started(&id, session.control()).await;
+    inner
+        .session_started(&id, session.control(), child.id())
+        .await;
 
     // What the in-stream overlay asks for. The overlay raises an intent and
     // Dusk decides what it means, which is what keeps the policy on this

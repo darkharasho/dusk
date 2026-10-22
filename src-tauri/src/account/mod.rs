@@ -267,6 +267,11 @@ pub struct AccountView {
     /// shows this rather than letting the only symptom be other machines
     /// quietly ceasing to be yours.
     pub expired: Option<String>,
+    /// Set when the keystore would not say whether this machine is signed
+    /// in: a locked keyring, a dismissed prompt. Shown instead of the
+    /// sign-in form, which would otherwise invite a second sign-in on a
+    /// machine that already has one.
+    pub unreadable: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -712,7 +717,16 @@ impl AccountState {
     }
 
     pub async fn view(&self) -> AccountView {
-        let account = self.load().await;
+        let (account, unreadable) = match self.stored().await {
+            Ok(account) => (account, None),
+            Err(err) => (
+                None,
+                Some(format!(
+                    "Dusk could not open the system keystore to check whether this machine \
+                     is signed in ({err}). Unlock it and try again."
+                )),
+            ),
+        };
         let own = account.as_ref().map(|a| a.key.id.clone());
         let mut machines: Vec<MachineView> = self
             .list
@@ -742,6 +756,7 @@ impl AccountState {
             machines,
             persistent: self.cached.read().await.persistent,
             expired,
+            unreadable,
         }
     }
 
@@ -1325,6 +1340,20 @@ mod identity_tests {
     async fn a_keystore_it_cannot_read_is_unknown_not_signed_out() {
         let state = with_keystore(|| Err("keyring is locked".into()));
         assert_eq!(state.membership().await, Membership::Unknown);
+    }
+
+    #[tokio::test]
+    async fn a_keystore_it_cannot_read_is_said_so_on_the_account_screen() {
+        // The screen used to show the sign-in form, as though signed out,
+        // and signing in there would have given the machine a second
+        // identity on the account.
+        let state = with_keystore(|| Err("keyring is locked".into()));
+        let view = state.view().await;
+        assert!(view.user.is_none());
+        let notice = view.unreadable.expect("says the keystore would not answer");
+        assert!(notice.contains("keyring is locked"), "{notice}");
+        let fine = with_keystore(|| Ok(None));
+        assert!(fine.view().await.unreadable.is_none());
     }
 
     #[tokio::test]

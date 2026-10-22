@@ -18,6 +18,19 @@ use crate::sunshine::{CredentialStore, Known};
 
 pub const SNAPSHOT_EVENT: &str = "dusk://snapshot";
 
+/// A stream running from this machine: how to talk to its client, and how
+/// to end it when talking does not.
+#[derive(Clone)]
+pub struct Running {
+    pub control: crate::session::Control,
+    /// The client's process, for a quit that it does not answer.
+    pub pid: Option<u32>,
+}
+
+/// How long a stream is given to end on its own when Dusk quits, before
+/// it is made to; and then again before Dusk stops waiting.
+pub const QUIT_GRACE: Duration = Duration::from_secs(3);
+
 pub struct AppState {
     pub registry: RwLock<Registry>,
     pub host: Box<dyn HostBackend>,
@@ -52,7 +65,10 @@ pub struct AppState {
     ///
     /// Each carries the way to talk to that stream's client, for the
     /// controls in Dusk's own window.
-    sessions: RwLock<HashMap<DeviceId, crate::session::Control>>,
+    sessions: RwLock<HashMap<DeviceId, Running>>,
+    /// Set once quitting has begun, so the exit the clean-up itself asks
+    /// for is not taken as another request to clean up.
+    pub quitting: AtomicBool,
     /// mDNS is being browsed. It always is once started, so this alone is
     /// not something to show.
     browsing: AtomicBool,
@@ -225,6 +241,7 @@ impl AppState {
             reconciler: crate::cert_pairing::reconcile::Reconciler::new(account_changed),
             repairs: Default::default(),
             sessions: RwLock::new(HashMap::new()),
+            quitting: AtomicBool::new(false),
             browsing: AtomicBool::new(false),
             discovering: AtomicBool::new(false),
             sweeps: AtomicU64::new(0),
@@ -293,8 +310,71 @@ impl AppState {
     }
 
     /// Note that a stream to this device has started or ended here.
-    pub async fn session_started(&self, id: &str, control: crate::session::Control) {
-        self.sessions.write().await.insert(id.to_string(), control);
+    pub async fn session_started(
+        &self,
+        id: &str,
+        control: crate::session::Control,
+        pid: Option<u32>,
+    ) {
+        self.sessions
+            .write()
+            .await
+            .insert(id.to_string(), Running { control, pid });
+    }
+
+    /// End every stream running from here, because Dusk is quitting.
+    ///
+    /// A stream left running would outlive the one thing that can end it:
+    /// the overlay's Disconnect goes through Dusk, and with Dusk gone it
+    /// does nothing, leaving a full-screen stream with no way out but the
+    /// task manager. So quitting ends streams, the way closing a browser
+    /// ends its tabs. Each client is asked first, so it can take its stream
+    /// down cleanly, and given `grace` to do so before it is stopped.
+    pub async fn end_streams(&self, grace: Duration) {
+        let running: Vec<(DeviceId, Running)> = self
+            .sessions
+            .read()
+            .await
+            .iter()
+            .map(|(id, r)| (id.clone(), r.clone()))
+            .collect();
+        if running.is_empty() {
+            return;
+        }
+        eprintln!("dusk: ending {} stream(s) to quit", running.len());
+        for (_, r) in &running {
+            r.control.send(crate::session::ToClient::Disconnect);
+        }
+        if self.streams_ended_within(grace).await {
+            return;
+        }
+        for (id, r) in &running {
+            if !self.sessions.read().await.contains_key(id) {
+                continue;
+            }
+            match r.pid {
+                Some(pid) => {
+                    eprintln!("dusk: the stream from {id} did not end when asked; stopping it");
+                    terminate(pid);
+                }
+                None => eprintln!("dusk: the stream from {id} did not end when asked"),
+            }
+        }
+        self.streams_ended_within(grace).await;
+    }
+
+    /// Whether every stream's watcher has reported it ended, within `within`.
+    async fn streams_ended_within(&self, within: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            if self.sessions.read().await.is_empty() {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     pub async fn session_ended(&self, id: &str) {
@@ -304,7 +384,11 @@ impl AppState {
     /// The way to talk to the stream running from this device, if there is
     /// one. Whether its client is listening is another matter.
     pub async fn session_control(&self, id: &str) -> Option<crate::session::Control> {
-        self.sessions.read().await.get(id).cloned()
+        self.sessions
+            .read()
+            .await
+            .get(id)
+            .map(|r| r.control.clone())
     }
 
     pub async fn snapshot(&self) -> Snapshot {
@@ -314,7 +398,7 @@ impl AppState {
         // Copied out under one short lock. Two `lock().await`s in the
         // literal below would deadlock: the first guard lives until the
         // whole expression ends, so the second waits on it forever.
-        let (allow_other_devices, resolution, bitrate_kbps, codec, virtual_screen) = {
+        let (allow_other_devices, resolution, bitrate_kbps, codec, virtual_screen, restart_owed) = {
             let store = self.store.lock().await;
             (
                 store.allow_other_devices,
@@ -322,8 +406,18 @@ impl AppState {
                 store.bitrate_kbps,
                 store.codec,
                 store.virtual_screen,
+                store.restart_owed,
             )
         };
+        let host_restart = restart_owed.then(|| match self.reconciler.trouble() {
+            Some(reason) => format!(
+                "Hosting needs to restart to load a change to its paired machines, but \
+                 {reason}. Turn hosting off and on again in Settings › Hosting."
+            ),
+            None => "Hosting will restart to load a change to its paired machines once \
+                     nothing is streaming from here."
+                .to_string(),
+        });
         for device in &mut devices {
             // Or-ed rather than assigned: mock fixtures set this directly
             // to stage a mid-session card, and there is no real client to
@@ -351,6 +445,7 @@ impl AppState {
             codec,
             virtual_screen,
             virtual_screen_mechanism: crate::host::virtual_screen::mechanism(),
+            host_restart,
         }
     }
 }
@@ -370,11 +465,91 @@ pub async fn emit_snapshot(app: &AppHandle, state: &Arc<AppState>) {
     }
 }
 
+/// Stop a client that did not end its stream when asked.
+///
+/// A plain termination rather than a kill: the client gets to run its exit
+/// handlers, which is what puts a resized screen back and tells the host the
+/// session is over.
+pub fn terminate(pid: u32) {
+    #[cfg(unix)]
+    {
+        // SAFETY: a plain signal to a pid Dusk spawned itself; it cannot
+        // touch memory on this side.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
     use std::time::Duration;
+
+    fn state() -> AppState {
+        AppState::new(
+            Registry::new("here".into(), HashSet::new()),
+            Box::new(crate::host::mock::MockHost::default()),
+            Store::default(),
+            PathBuf::from("unused.json"),
+            plain_client().unwrap(),
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn quitting_with_nothing_streaming_waits_for_nothing() {
+        let state = state();
+        tokio::time::timeout(Duration::from_millis(100), state.end_streams(QUIT_GRACE))
+            .await
+            .expect("returned at once");
+    }
+
+    /// A client that never hears the ask, as a stock client does not, is
+    /// stopped; and Dusk stops waiting once its watcher has let go.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quitting_stops_a_stream_that_does_not_end_when_asked() {
+        let state = Arc::new(state());
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        state
+            .session_started("dev", crate::session::Control::detached(), pid)
+            .await;
+        let watched = state.clone();
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+            watched.session_ended("dev").await;
+        });
+        let started = std::time::Instant::now();
+        state.end_streams(Duration::from_millis(300)).await;
+        assert!(
+            state.session_control("dev").await.is_none(),
+            "watcher let go"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "did not wait out the sleep"
+        );
+    }
 
     #[tokio::test]
     async fn snapshot_does_not_hang() {

@@ -18,6 +18,7 @@ import { SettingsPage, type SettingsSection } from "./components/SettingsPage";
 import { Titlebar } from "./components/Titlebar";
 import { Icon } from "./components/Icon";
 import { startUpdates } from "./updates";
+import { describe } from "./errors";
 
 type Tab = "machines" | "settings";
 
@@ -102,7 +103,7 @@ function Body() {
           setSnapshot(s);
           setLoadError(null);
         })
-        .catch((err) => !cancelled && setLoadError(String(err)));
+        .catch((err) => !cancelled && setLoadError(describe(err)));
 
     load();
     onSnapshot((s) => !cancelled && setSnapshot(s)).then((fn) => {

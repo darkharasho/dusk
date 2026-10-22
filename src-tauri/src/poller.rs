@@ -39,6 +39,16 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>) {
 }
 
 pub async fn poll_once(app: &AppHandle, state: &Arc<AppState>) {
+    // Before the snapshot and before any peer is answered from the store:
+    // `dusk screen` may have written the settings file since the last tick.
+    if state
+        .store
+        .lock()
+        .await
+        .adopt_external_changes(&state.store_path)
+    {
+        eprintln!("dusk: the sized-screen setting was changed from the command line");
+    }
     let targets = state.registry.read().await.probe_targets();
     if targets.is_empty() {
         emit_snapshot(app, state).await;

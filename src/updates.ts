@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { describe } from "./errors";
 
 /**
  * Where Dusk's self-update is.
@@ -138,7 +139,7 @@ export async function checkForUpdate(manual: boolean) {
   try {
     version = await channel.check();
   } catch (err) {
-    set(manual ? { kind: "error", message: String(err) } : before);
+    set(manual ? { kind: "error", message: describe(err) } : before);
     return;
   }
   if (!version) {
@@ -150,7 +151,7 @@ export async function checkForUpdate(manual: boolean) {
   try {
     await channel.download((percent) => set({ kind: "downloading", version, percent }));
   } catch (err) {
-    set(manual ? { kind: "error", message: String(err) } : before);
+    set(manual ? { kind: "error", message: describe(err) } : before);
     return;
   }
   set({ kind: "ready", version });
@@ -171,6 +172,6 @@ export async function restartToUpdate() {
     await channel.install();
     await relaunch();
   } catch (err) {
-    set({ kind: "error", message: String(err) });
+    set({ kind: "error", message: describe(err) });
   }
 }

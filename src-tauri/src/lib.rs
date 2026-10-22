@@ -366,11 +366,33 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running Dusk");
 
-    app.run(|_app, _event| {
+    app.run(|app, event| match event {
+        // Quitting, from the tray or from the last window closing, ends
+        // the streams running from here first: see
+        // [`state::AppState::end_streams`]. The first request is held
+        // while that happens, and the exit asked for afterwards goes
+        // through.
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            let Some(state) = app.try_state::<Arc<state::AppState>>() else {
+                return;
+            };
+            if state
+                .quitting
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                return;
+            }
+            api.prevent_exit();
+            let state = state.inner().clone();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                state.end_streams(state::QUIT_GRACE).await;
+                app.exit(code.unwrap_or(0));
+            });
+        }
         // Clicking the dock icon of a Dusk whose window is hidden.
         #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Reopen { .. } = _event {
-            tray::show_window(_app);
-        }
+        tauri::RunEvent::Reopen { .. } => tray::show_window(app),
+        _ => {}
     });
 }

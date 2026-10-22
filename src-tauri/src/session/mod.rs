@@ -69,6 +69,14 @@ impl Control {
     pub fn send(&self, message: ToClient) {
         let _ = self.0.send(message);
     }
+
+    /// A control nothing listens to, standing in for a client that never
+    /// connected to its channel.
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        Self(tx)
+    }
 }
 
 impl Drop for Session {

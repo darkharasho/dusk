@@ -7,6 +7,7 @@ import {
   type Control,
   type Setting,
 } from "../sunshineSchema";
+import { describe } from "../errors";
 
 /** The host reports almost everything as a string, so that is what we send. */
 function toWire(control: Control, raw: string | boolean): string {
@@ -37,7 +38,7 @@ export function HostSettings() {
   useEffect(() => {
     getHostConfig()
       .then(setConfig)
-      .catch((err) => setError(String(err)));
+      .catch((err) => setError(describe(err)));
   }, []);
 
   const groups = useMemo(() => {
@@ -80,7 +81,7 @@ export function HostSettings() {
       setEdits({});
       setSaved(true);
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setSaving(false);
     }

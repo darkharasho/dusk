@@ -31,7 +31,7 @@ const SCOPE: &str = "gist";
 /// How Dusk finds its gist among the account's others.
 const GIST_DESCRIPTION: &str = "Dusk machines";
 const FILE_PREFIX: &str = "dusk-machine-";
-const TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The OAuth app's client ID. Public by design — the device flow has no
 /// secret — so it is baked in at build time, with an environment override

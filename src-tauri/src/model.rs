@@ -286,6 +286,12 @@ pub struct Snapshot {
     /// watching, and by what means this machine could do it.
     pub virtual_screen: bool,
     pub virtual_screen_mechanism: ScreenMechanism,
+    /// Hosting owes a restart to load a change to its paired machines, and
+    /// why it has not happened yet, in words for the window. `None` when
+    /// nothing is owed. Until it happens, a machine that paired with this
+    /// one by account is told to try again in a minute, so this is the one
+    /// place that says what is really going on.
+    pub host_restart: Option<String>,
 }
 
 /// How a machine can give a stream a screen the size of the device watching.

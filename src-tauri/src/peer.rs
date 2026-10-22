@@ -99,11 +99,25 @@ pub const PORT: u16 = 47850;
 /// timeout, so the client is still waiting when the answer comes.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// How long the connecting side waits on an answer: the host's own wait,
-/// and time on top for whatever it does once allowed. A pairing by
-/// certificate needs the room too, since the host may restart before it
-/// replies.
-const REPLY_TIMEOUT: Duration = Duration::from_secs(ANSWER_TIMEOUT.as_secs() + 30);
+/// How long the connecting side waits on each line of an answer: the most
+/// a host that took the request can take over it. Checking the account
+/// with GitHub and then offering the PIN for as long as the client may take
+/// to send its own request is one path; asking the person and then the
+/// same is the other, and the longer. Not shorter than either, because a
+/// reply that times out is reported as the host having gone, and that
+/// stops the client, which may have been seconds from pairing.
+///
+/// The client's own pairing timeout is what really bounds a pairing: the
+/// ask is dropped the moment the client finishes, however it finishes.
+const REPLY_TIMEOUT: Duration =
+    Duration::from_secs(ANSWER_TIMEOUT.as_secs() + PIN_WINDOW.as_secs() + 10);
+
+/// How long the connecting side waits on a reply to a pairing by
+/// certificate. The host checks the account with GitHub, writes its file
+/// and may restart before it replies, which takes up to about forty
+/// seconds; a host that takes the request and says nothing for longer
+/// than that is not going to, and the PIN path is waiting behind this.
+const CERT_REPLY_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The longest line read from a peer, 16 KiB. A request is small, but a
 /// certificate pairing carries PEM certificates and a signature; some reads
@@ -720,7 +734,8 @@ async fn ask_cert_at(address: &str, port: u16, request: Message) -> CertOutcome 
     }
 
     let mut lines = BufReader::new(read.take(MAX_LINE as u64 * 4)).lines();
-    let Ok(Ok(Some(line))) = tokio::time::timeout(REPLY_TIMEOUT, lines.next_line()).await else {
+    let Ok(Ok(Some(line))) = tokio::time::timeout(CERT_REPLY_TIMEOUT, lines.next_line()).await
+    else {
         return CertOutcome::NoPeer;
     };
     match serde_json::from_str::<Message>(&line) {
@@ -1339,6 +1354,16 @@ mod tests {
     fn the_client_waits_out_a_host_that_restarts_before_answering() {
         // The host may restart itself before it replies, which takes up to
         // about forty seconds.
-        assert!(REPLY_TIMEOUT >= Duration::from_secs(45));
+        assert!(CERT_REPLY_TIMEOUT >= Duration::from_secs(45));
+    }
+
+    #[test]
+    fn the_client_outwaits_everything_the_host_may_do_with_a_pin_request() {
+        // A reply that times out is taken as the host having gone, which
+        // stops the client. So it must not time out while the host is still
+        // within its own limits: the person's answer and then the PIN
+        // window, or the GitHub check and then the PIN window.
+        assert!(REPLY_TIMEOUT > ANSWER_TIMEOUT + PIN_WINDOW);
+        assert!(REPLY_TIMEOUT > crate::account::github::TIMEOUT + PIN_WINDOW);
     }
 }

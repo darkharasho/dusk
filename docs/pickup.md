@@ -59,18 +59,46 @@ and pairing**, from a full read of the code against the complaints of
   answer is on its way. The hand-typed PIN (`accept_pin`) retries like the
   peer path instead of failing once with "no device is waiting yet".
 
-Found and **not** done, in rough order of value: an owed restart the host
-cannot do (wrong port, rotated password) is invisible and tells the other
-machine "try again in a minute" forever (`reconcile.rs`); a restart that
-`came_back` does not observe is issued again, up to three in ~45 s; the
-new password is written to Sunshine before Dusk saves it, so a failed
-restart in `provision::run` strands it; `SunshineApi` builds a client per
-call without `pool_max_idle_per_host(0)`; the stream child has no quit
-policy when Dusk exits; `REPLY_TIMEOUT` (120 s) can be shorter than the
-host's vouch + `PIN_WINDOW`; a corrupt or locked keystore still reads as
-"signed out" on the Account screen; every `setError(String(err))` shows
-raw backend text; the CLI's `virtual_screen` write is overwritten by the
-running window's next save.
+A second pass closed everything the first one found and left:
+
+- *Owed restart.* `Snapshot::host_restart` says, on the Hosting panel, that
+  hosting owes a restart and, when it keeps not happening, why
+  (`Reconciler::trouble`, from `Unconfirmed::reason`). Before, a host
+  with a wrong port or a rotated password told every machine that paired
+  with it "try again in a minute", forever, and nothing on the host said
+  anything. `came_back` is three-valued now: a host seen going down is
+  waited for up to three `back_within`s (`STILL_DOWN_PATIENCE`) before the
+  restart is asked for again, so a slow start no longer costs a second
+  restart the moment the first is up.
+- *Provisioning.* `provision::run` keeps the new password before it is
+  handed to the host; on a failure it looks at which sign-in the running
+  host still takes and puts the old one back, forgets the new one
+  (`CredentialStore::forget`, a `None` write), or keeps it, so that every
+  outcome is one `ApiError::Unauthorized` or the next start recovers from.
+- *Host API.* One shared client with `pool_max_idle_per_host(0)` behind
+  every `SunshineApi::new`, instead of a pool per call.
+- *Quitting.* `AppState::end_streams`: quitting ends each stream (asked
+  first over the session channel, then `terminate`d after `QUIT_GRACE`),
+  because the overlay's Disconnect goes through Dusk and a stream left
+  behind had no way out. `RunEvent::ExitRequested` holds the first exit
+  while that runs; `AppState::quitting` lets the second through.
+- *Peer timeouts.* `REPLY_TIMEOUT` is `ANSWER_TIMEOUT + PIN_WINDOW + 10 s`,
+  since a reply that times out is taken as the host having gone and stops
+  the client; `CERT_REPLY_TIMEOUT` (90 s) is separate and shorter.
+- *Account screen.* `AccountView::unreadable`: a keystore that will not
+  answer shows a notice with Try again instead of the sign-in form.
+- *Error text.* `src/errors.ts` `describe(err)` everywhere `String(err)`
+  was, so a plugin's `Error` or object never reads as `[object Object]`.
+- *`dusk screen`.* The window adopts the file's sized-screen setting at
+  each poll tick (`Store::adopt_external_changes`, by mtime and length)
+  instead of answering peers from its stale copy and overwriting the file.
+
+Still open after that: the Windows `terminate` (`taskkill`) path and the
+`ExitRequested` hold have only been exercised on Linux; `adopt_external_changes`
+takes only `virtual_screen`, so a second CLI-written setting would need
+adding there; and `undo` in `provision.rs` cannot tell "file written,
+restart failed" from "nothing written" when the host is up with the old
+sign-in, so that one case still ends in "Set it up again in Settings".
 
 **v0.3.33 is released**, all three platforms, from `main` (PR #6), still
 carrying the client's `dusk-v0.2.5`. Each stream's client log is now kept on

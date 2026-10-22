@@ -135,11 +135,7 @@ impl SunshineApi {
     /// cannot be spoofed by anything that is not already running as this
     /// user on this machine.
     pub fn new(port: u16) -> Result<Self, ApiError> {
-        let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .connect_timeout(Duration::from_millis(1500))
-            .build()
-            .map_err(|e| ApiError::Failed(e.to_string()))?;
+        let client = shared_client()?;
         Ok(Self { client, port })
     }
 
@@ -472,6 +468,30 @@ impl SunshineApi {
         self.save_config(credentials, changes).await?;
         Ok(true)
     }
+}
+
+/// One client for every `SunshineApi`, however many are made.
+///
+/// A `SunshineApi` is built per call all over Dusk, and each used to build
+/// its own `reqwest::Client`: a connection pool, a TLS context and a
+/// resolver thread per call, and with it a pool Sunshine's habit of closing
+/// every socket after answering (measured and explained in `state.rs`)
+/// turns into intermittent "error sending request". Built once, with
+/// pooling off for the same reason it is off on the other two clients.
+fn shared_client() -> Result<reqwest::Client, ApiError> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
+        std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .connect_timeout(Duration::from_millis(1500))
+                .pool_max_idle_per_host(0)
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .clone()
+        .map_err(ApiError::Failed)
 }
 
 async fn post_restart(

@@ -41,6 +41,11 @@ pub struct Store {
     /// old name so an existing settings file still reads. See
     /// [`crate::host::virtual_screen`].
     pub virtual_screen: bool,
+    /// What the file looked like when it was last read or written here, so
+    /// a change another process made since can be told from this copy's
+    /// own. Never in the file.
+    #[serde(skip)]
+    pub(crate) on_disk: Option<Fingerprint>,
     /// Your own machines this one has paired by certificate, without a PIN.
     /// Dusk only ever touches the host's paired-machine entries named here.
     pub account_pairings: Vec<AccountPairing>,
@@ -137,8 +142,11 @@ impl Store {
         let Ok(raw) = std::fs::read_to_string(path) else {
             return Self::default();
         };
-        match serde_json::from_str(&raw) {
-            Ok(store) => store,
+        match serde_json::from_str::<Store>(&raw) {
+            Ok(mut store) => {
+                store.on_disk = fingerprint(path);
+                store
+            }
             Err(err) => {
                 let aside = set_aside(path);
                 match std::fs::rename(path, &aside) {
@@ -157,12 +165,46 @@ impl Store {
     /// Write the settings whole, never half: what this file holds includes
     /// a note that the host owes a restart, and a crash part way through a
     /// plain write could lose it along with everything else here.
-    pub fn save(&self, path: &Path) -> Result<(), String> {
+    ///
+    /// `&mut` only to note what the file looks like afterwards, for
+    /// [`Store::adopt_external_changes`].
+    pub fn save(&mut self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        write_atomically(path, json.as_bytes()).map_err(|e| e.to_string())
+        write_atomically(path, json.as_bytes()).map_err(|e| e.to_string())?;
+        self.on_disk = fingerprint(path);
+        Ok(())
+    }
+
+    /// Take on a change another process made to the file since this copy
+    /// last read or wrote it. Answers whether anything changed.
+    ///
+    /// `dusk screen` is the one command that writes a setting while a
+    /// window may be running, from a shell on a machine whose Dusk sits in
+    /// the tray. Without this the window kept answering other machines
+    /// from its own copy, where the setting was still off, and wrote that
+    /// copy over the file at its next save. Only the sized-screen setting
+    /// is taken: nothing else is written from outside, and everything else
+    /// in the file is this window's own bookkeeping.
+    pub fn adopt_external_changes(&mut self, path: &Path) -> bool {
+        let now = fingerprint(path);
+        if now == self.on_disk {
+            return false;
+        }
+        self.on_disk = now;
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(disk) = serde_json::from_str::<Store>(&raw) else {
+            return false;
+        };
+        if disk.virtual_screen == self.virtual_screen {
+            return false;
+        }
+        self.virtual_screen = disk.virtual_screen;
+        true
     }
 
     pub fn upsert(&mut self, entry: ManualEntry) {
@@ -187,6 +229,16 @@ impl Store {
 /// renamed over it, and the rename itself flushed by syncing the directory.
 /// The old file's permissions are kept, set before any content lands so a
 /// private file is never briefly readable under the default mode.
+/// Enough of the file's metadata to notice it being rewritten: its
+/// modification time and its length, since a rewrite within the clock's
+/// resolution is unlikely to also be the same length.
+pub(crate) type Fingerprint = (std::time::SystemTime, u64);
+
+fn fingerprint(path: &Path) -> Option<Fingerprint> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
 pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
@@ -456,12 +508,45 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_written_by_the_command_line_reaches_a_running_window() {
+        let dir = std::env::temp_dir().join(format!("dusk-store-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.json");
+        let mut window = Store::default();
+        window.save(&path).unwrap();
+        // Its own write is not news.
+        assert!(!window.adopt_external_changes(&path));
+
+        // `dusk screen on`, in another process: load, set, save.
+        let mut cli = Store::load(&path);
+        cli.virtual_screen = true;
+        cli.save(&path).unwrap();
+        assert!(window.adopt_external_changes(&path));
+        assert!(window.virtual_screen);
+        assert!(!window.adopt_external_changes(&path));
+
+        // The window's next save keeps it, rather than writing its old
+        // copy over the file.
+        window.restart_owed = true;
+        window.save(&path).unwrap();
+        assert!(Store::load(&path).virtual_screen);
+
+        // A change made in the window is not undone by looking at the file.
+        window.virtual_screen = false;
+        window.save(&path).unwrap();
+        assert!(!window.adopt_external_changes(&path));
+        assert!(!window.virtual_screen);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_save_replaces_the_file_whole_or_not_at_all() {
         let dir = std::env::temp_dir().join(format!("dusk-store-atomic-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.json");
-        let store = Store {
+        let mut store = Store {
             restart_owed: true,
             ..Default::default()
         };
@@ -477,7 +562,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let before = std::fs::read_to_string(&path).unwrap();
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-            let store = Store {
+            let mut store = Store {
                 restart_owed: false,
                 ..store
             };

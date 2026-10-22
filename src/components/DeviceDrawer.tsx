@@ -11,6 +11,7 @@ import {
   type PairProgress,
 } from "../api";
 import { StreamStats } from "./StreamStats";
+import { describe } from "../errors";
 
 interface Props {
   device: Device;
@@ -103,7 +104,7 @@ export function DeviceDrawer({
     try {
       await action();
     } catch (err) {
-      setError(String(err));
+      setError(describe(err));
     } finally {
       setBusy(null);
       setPin(null);

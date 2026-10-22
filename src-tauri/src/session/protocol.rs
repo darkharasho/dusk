@@ -250,7 +250,15 @@ impl Conversation {
             // Malformed input closes the connection rather than being
             // skipped: a desynchronised stream of lines will not recover on
             // its own, and continuing would mean acting on half a protocol.
-            Err(err) => return Effect::Close(format!("could not read a message: {err}")),
+            Err(err) => {
+                // Not serde's own text: it can echo the offending value.
+                return Effect::Close(format!(
+                    "could not read a message ({:?} at {}:{})",
+                    err.classify(),
+                    err.line(),
+                    err.column()
+                ));
+            }
         };
 
         match message {
@@ -518,5 +526,22 @@ mod tests {
             },
         );
         assert!(!shown.contains(secret), "{shown}");
+    }
+
+    #[test]
+    fn a_rejected_message_does_not_echo_its_values() {
+        for bad in [
+            r#"{"type":"clipboard","format":"text","text":123456789}"#,
+            r#"{"type":"overlay_action","action":"secret-value-xyz"}"#,
+        ] {
+            let mut c = authed();
+            match c.accept(bad) {
+                Effect::Close(why) => {
+                    assert!(!why.contains("123456789"), "{why}");
+                    assert!(!why.contains("secret-value-xyz"), "{why}");
+                }
+                other => panic!("expected a close, got {other:?}"),
+            }
+        }
     }
 }

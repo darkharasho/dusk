@@ -102,7 +102,8 @@ export function DeviceDrawer({
     let cancelled = false;
 
     onClipboardUnavailable((note) => {
-      if (!cancelled && note.deviceId === device.id) setClipboardNote(note.message);
+      if (!cancelled && note.deviceId === device.id && device.streamingHere)
+        setClipboardNote(note.message);
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -112,9 +113,10 @@ export function DeviceDrawer({
       cancelled = true;
       unlisten?.();
     };
-  }, [device.id]);
+  }, [device.id, device.streamingHere]);
   useEffect(() => {
-    if (!device.streamingHere) setClipboardNote(null);
+    // A note belongs to one session: gone when it ends, absent when the next starts.
+    setClipboardNote(null);
   }, [device.streamingHere]);
 
   const { label, chipClass } = cardState(device);

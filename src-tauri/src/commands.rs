@@ -389,26 +389,54 @@ async fn clipboard_tls(
     let state = state.clone();
     let found = tokio::task::spawn_blocking(move || {
         let client = state.moonlight.as_ref();
-        let wanted = crate::peer::host_part(&address);
-        let cert = crate::moonlight::hosts::load(client)
-            .into_iter()
-            .find(|h| {
-                h.uuid.as_deref() == Some(id.as_str())
-                    || h.addresses
-                        .iter()
-                        .any(|a| a == &address || crate::peer::host_part(a) == wanted)
-            })
-            .and_then(|h| h.server_cert)?;
-        let identity = crate::moonlight::identity::load(client)?;
-        crate::clipboard::tls::client_config(&identity, &cert).ok()
+        let hosts = crate::moonlight::hosts::load(client);
+        let Some(cert) = pinned_cert(&hosts, &id, &address) else {
+            eprintln!("dusk: not sharing the clipboard: no pinned certificate for this host");
+            return None;
+        };
+        let Some(identity) = crate::moonlight::identity::load(client) else {
+            eprintln!("dusk: not sharing the clipboard: no client identity");
+            return None;
+        };
+        match crate::clipboard::tls::client_config(&identity, cert) {
+            Ok(config) => Some(config),
+            Err(_) => {
+                // Fixed text: the error is about key material.
+                eprintln!("dusk: not sharing the clipboard: the stored certificates are unusable");
+                None
+            }
+        }
     })
     .await
     .ok()
     .flatten();
-    if found.is_none() {
-        eprintln!("dusk: not sharing the clipboard: no pinned certificate for this host");
-    }
     found
+}
+
+/// The certificate a host is pinned by: matched on its unique id first, and
+/// only failing that on its address (exact before host part alone).
+fn pinned_cert<'a>(
+    hosts: &'a [crate::moonlight::hosts::KnownHost],
+    id: &str,
+    address: &str,
+) -> Option<&'a str> {
+    let wanted = crate::peer::host_part(address);
+    hosts
+        .iter()
+        .find(|h| h.uuid.as_deref() == Some(id))
+        .or_else(|| {
+            hosts
+                .iter()
+                .find(|h| h.addresses.iter().any(|a| a == address))
+        })
+        .or_else(|| {
+            hosts.iter().find(|h| {
+                h.addresses
+                    .iter()
+                    .any(|a| crate::peer::host_part(a) == wanted)
+            })
+        })
+        .and_then(|h| h.server_cert.as_deref())
 }
 
 /// Share the clipboard with the host for as long as the returned sender
@@ -1261,4 +1289,44 @@ pub async fn set_startup_prefs(
     }
     app.state::<startup::Live>().set(&prefs);
     get_startup(app, state).await
+}
+
+#[cfg(test)]
+mod clipboard_lookup_tests {
+    use super::pinned_cert;
+    use crate::moonlight::hosts::KnownHost;
+
+    fn host(uuid: Option<&str>, addresses: &[&str], cert: &str) -> KnownHost {
+        KnownHost {
+            name: "h".into(),
+            addresses: addresses.iter().map(|a| a.to_string()).collect(),
+            port: 47989,
+            uuid: uuid.map(str::to_string),
+            server_cert: Some(cert.into()),
+        }
+    }
+
+    #[test]
+    fn the_uuid_wins_over_an_earlier_entry_sharing_the_address() {
+        let hosts = [
+            host(Some("other"), &["10.0.0.5"], "stale"),
+            host(Some("me"), &["10.0.0.9"], "right"),
+        ];
+        assert_eq!(pinned_cert(&hosts, "me", "10.0.0.5"), Some("right"));
+    }
+
+    #[test]
+    fn an_exact_address_beats_a_host_part_match() {
+        let hosts = [
+            host(None, &["10.0.0.5:47989"], "by-host-part"),
+            host(None, &["10.0.0.5"], "exact"),
+        ];
+        assert_eq!(pinned_cert(&hosts, "none", "10.0.0.5"), Some("exact"));
+    }
+
+    #[test]
+    fn nothing_matching_gives_nothing() {
+        let hosts = [host(Some("a"), &["10.0.0.1"], "x")];
+        assert_eq!(pinned_cert(&hosts, "b", "10.0.0.2"), None);
+    }
 }

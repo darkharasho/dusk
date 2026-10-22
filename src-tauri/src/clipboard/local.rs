@@ -44,14 +44,17 @@ impl LocalClipboard for System {
 pub enum Support {
     Supported,
     /// Why not, in words shown to the user as-is.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Unsupported(&'static str),
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const GNOME_WAYLAND: &str =
     "Clipboard sharing isn't available when this machine runs GNOME on Wayland.";
 
 /// GNOME on Wayland has no clipboard protocol a background app can use.
 /// An unknown session is assumed supported.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn support_for(session_type: Option<&str>, current_desktop: Option<&str>) -> Support {
     let wayland = session_type.is_some_and(|s| s.trim().eq_ignore_ascii_case("wayland"));
     let gnome = current_desktop.is_some_and(|d| {

@@ -412,7 +412,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.json");
-        let mut store = Store {
+        let store = Store {
             restart_owed: true,
             ..Default::default()
         };
@@ -428,7 +428,10 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let before = std::fs::read_to_string(&path).unwrap();
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-            store.restart_owed = false;
+            let store = Store {
+                restart_owed: false,
+                ..store
+            };
             let saved = store.save(&path);
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
             assert!(saved.is_err());

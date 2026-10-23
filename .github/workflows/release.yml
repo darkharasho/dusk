@@ -31,6 +31,10 @@ env:
   # the same reason as the client, and more so: the settings screen is built
   # against Sunshine's configuration keys, and a bump means re-testing it.
   SUNSHINE_TAG: v2026.914.233613
+  # macOS runs ahead: 2026.914's input code keeps the pointer on the main
+  # display, so after switching the stream to another screen the mouse is
+  # dead. 2026.1018 (a prerelease) moves it within the captured display.
+  SUNSHINE_MACOS_TAG: v2026.1018.5342
 
   # The GitHub OAuth app behind "Sign in with GitHub". A client ID, not a
   # secret: the device flow has none, so it is baked into the binary. Set it
@@ -188,13 +192,13 @@ jobs:
       - name: Stage the hosting helper
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/stage-host-macos.sh "$SUNSHINE_TAG" /tmp/host
+        run: ./scripts/stage-host-macos.sh "$SUNSHINE_MACOS_TAG" /tmp/host
 
       # The source offer in licenses/ names exact versions.
       - name: Record shipped versions
         run: |
           printf 'moonlight-qt fork  %s\nSunshine           %s\n' \
-            "$CLIENT_TAG" "$SUNSHINE_TAG" > src-tauri/licenses/versions.txt
+            "$CLIENT_TAG" "$SUNSHINE_MACOS_TAG" > src-tauri/licenses/versions.txt
 
       # The app only. The disk image is built afterwards, by package-macos.sh,
       # because the client has to be inside the app before an image is made

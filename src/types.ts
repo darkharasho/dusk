@@ -65,6 +65,13 @@ export interface Device {
   mine: boolean;
   /** True when this Dusk is streaming from the machine right now. */
   streamingHere: boolean;
+  /**
+   * The machine answers on its plain port, but its pairing port has not
+   * completed a handshake for a while. Pairing, streaming and ending a
+   * session all go through that port, so nothing works until its hosting
+   * is restarted.
+   */
+  securePortDown: boolean;
   isSelf: boolean;
   reachability: Reachability;
   pairing: PairingState;

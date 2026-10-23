@@ -218,6 +218,26 @@ pub fn tls_client(identity: &ClientIdentity) -> Option<reqwest::Client> {
         .ok()
 }
 
+/// A client for the pairing port with an identity made up on the spot.
+///
+/// What the host's watchdog asks its own pairing port with. Only whether
+/// the port answers matters, but Sunshine requires *a* client certificate
+/// to complete the handshake at all: offered none, a healthy host fails the
+/// handshake, which from outside looks the same as a dead one. Offered one
+/// it has never seen, it answers "not authorized" over HTTP, which is an
+/// answer. So the watchdog mints one. Nothing is ever paired with it, and
+/// it goes when Dusk does.
+pub fn loopback_tls_client() -> Option<reqwest::Client> {
+    let minted = rcgen::generate_simple_self_signed(vec!["dusk-watchdog".to_string()])
+        .map_err(|err| eprintln!("dusk: could not mint the watchdog's certificate: {err}"))
+        .ok()?;
+    let identity = ClientIdentity {
+        cert_pem: minted.cert.pem().into_bytes(),
+        key_pem: minted.key_pair.serialize_pem().into_bytes(),
+    };
+    tls_client(&identity)
+}
+
 impl AppState {
     pub fn new(
         registry: Registry,
@@ -526,6 +546,11 @@ pub fn terminate(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_watchdog_can_mint_an_identity_the_tls_client_accepts() {
+        assert!(loopback_tls_client().is_some());
+    }
     use std::collections::HashSet;
     use std::time::Duration;
 

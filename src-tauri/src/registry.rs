@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::{
     Activity, Device, DeviceId, DuskInfo, PairingState, Reachability, DEFAULT_HTTPS_PORT,
-    DEFAULT_HTTP_PORT, OFFLINE_AFTER_MISSES,
+    DEFAULT_HTTP_PORT, OFFLINE_AFTER_MISSES, SECURE_PORT_DOWN_AFTER,
 };
 use crate::moonlight::hosts::KnownHost;
 use crate::serverinfo::ServerInfo;
@@ -122,6 +122,10 @@ pub enum ProbeOutcome {
         /// carrying the detail was not itself authenticated. Wins over
         /// `info.pairing()`, which in that case can only say Unknown.
         pairing: Option<PairingState>,
+        /// The pairing port was tried on every address and none completed
+        /// a handshake: reset, timed out, refused. False when it answered
+        /// anything at all, and when there was no identity to try it with.
+        secure_port_failed: bool,
     },
     Unreachable,
 }
@@ -566,14 +570,23 @@ impl Registry {
                 device.reachability = Reachability::Offline;
                 device.activity = Activity::Unknown;
                 device.pairing = PairingState::Unknown;
+                device.secure_misses = 0;
+                device.secure_port_down = false;
                 return id.to_string();
             }
             ProbeOutcome::Reached {
                 address,
                 info,
                 pairing,
+                secure_port_failed,
             } => {
                 device.misses = 0;
+                device.secure_misses = if secure_port_failed {
+                    device.secure_misses.saturating_add(1)
+                } else {
+                    0
+                };
+                device.secure_port_down = device.secure_misses >= SECURE_PORT_DOWN_AFTER;
                 device.reachability = Reachability::Online {
                     rtt_ms: info.rtt_ms,
                 };
@@ -651,6 +664,8 @@ impl Registry {
                 // The fresher probe wins for live state.
                 existing.reachability = moving.reachability;
                 existing.misses = moving.misses;
+                existing.secure_misses = moving.secure_misses;
+                existing.secure_port_down = moving.secure_port_down;
                 if moving.pairing != PairingState::Unknown
                     || existing.pairing == PairingState::Unknown
                 {
@@ -927,6 +942,7 @@ mod tests {
             address: address.into(),
             info,
             pairing: None,
+            secure_port_failed: false,
         }
     }
 
@@ -945,6 +961,56 @@ mod tests {
         let device = r.devices().into_iter().find(|d| d.id == id).unwrap();
         assert_eq!(device.dusk, Some(dusk));
         assert_eq!(device.asked_at, Some(1_060));
+    }
+
+    #[test]
+    fn a_pairing_port_that_keeps_failing_is_reported_and_a_single_miss_is_not() {
+        // The case from a Mac whose host wedged starting a stream: the plain
+        // port answers every tick, the pairing port resets every handshake.
+        // Pairing stays Unknown, which is honest, but the card has to say
+        // why or the drawer reads "Checking" for ever.
+        let mut r = registry();
+        let id = r.upsert_manual("192.168.1.40", None, None);
+        let failing = || ProbeOutcome::Reached {
+            address: "192.168.1.40".into(),
+            info: info(&[("hostname", "WORKSHOP")]),
+            pairing: None,
+            secure_port_failed: true,
+        };
+        for _ in 0..SECURE_PORT_DOWN_AFTER - 1 {
+            r.apply_probe(&id, failing());
+        }
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert!(!device.secure_port_down, "one aborted handshake is routine");
+
+        r.apply_probe(&id, failing());
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert!(device.secure_port_down);
+        assert_eq!(device.pairing, PairingState::Unknown);
+
+        // One handshake that gets through clears it, whatever it said.
+        r.apply_probe(
+            &id,
+            ProbeOutcome::Reached {
+                address: "192.168.1.40".into(),
+                info: info(&[("hostname", "WORKSHOP")]),
+                pairing: Some(PairingState::NotPaired),
+                secure_port_failed: false,
+            },
+        );
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert!(!device.secure_port_down);
+
+        // And so does the machine going away: nothing is known about a
+        // host that is off.
+        for _ in 0..SECURE_PORT_DOWN_AFTER {
+            r.apply_probe(&id, failing());
+        }
+        for _ in 0..OFFLINE_AFTER_MISSES {
+            r.apply_probe(&id, ProbeOutcome::Unreachable);
+        }
+        let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
+        assert!(!device.secure_port_down);
     }
 
     #[test]
@@ -1060,6 +1126,7 @@ mod tests {
                 address: "192.168.1.40".into(),
                 info: info(&[("hostname", "WORKSHOP")]),
                 pairing: Some(PairingState::Paired),
+                secure_port_failed: false,
             },
         );
         let find = |r: &Registry| r.devices().into_iter().find(|d| !d.is_self).unwrap();
@@ -1096,6 +1163,7 @@ mod tests {
                 address: "192.168.1.40".into(),
                 info: info(&[("hostname", "WORKSHOP")]),
                 pairing: Some(PairingState::Paired),
+                secure_port_failed: false,
             },
         );
         r.apply_probe(
@@ -1112,6 +1180,7 @@ mod tests {
                 address: "192.168.1.40".into(),
                 info: info(&[("hostname", "WORKSHOP")]),
                 pairing: Some(PairingState::NotPaired),
+                secure_port_failed: false,
             },
         );
         let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();
@@ -1159,6 +1228,7 @@ mod tests {
                 address: "192.168.1.40".into(),
                 info: info(&[("hostname", "WORKSHOP")]),
                 pairing: Some(PairingState::NotPaired),
+                secure_port_failed: false,
             },
         );
         let device = r.devices().into_iter().find(|d| !d.is_self).unwrap();

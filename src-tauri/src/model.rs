@@ -75,6 +75,14 @@ pub struct ServerDetails {
 /// How many probes in a row must miss before an online card goes Offline.
 pub const OFFLINE_AFTER_MISSES: u8 = 2;
 
+/// How many probes in a row the pairing port must fail to answer, while the
+/// plain port answers, before the card says the host is stuck.
+///
+/// A host aborts the odd handshake, and one slow answer is nothing; a
+/// handshake that cannot complete for twenty seconds while the machine is
+/// plainly up is a host that no one can pair with, stream from, or quit.
+pub const SECURE_PORT_DOWN_AFTER: u8 = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Device {
@@ -117,6 +125,14 @@ pub struct Device {
     /// so the card has to tell the two apart or it claims you are
     /// streaming when nothing is on screen.
     pub streaming_here: bool,
+    /// The machine answers on its plain port but its pairing port has not
+    /// completed a handshake for [`SECURE_PORT_DOWN_AFTER`] probes. That is
+    /// the port pairing, launching, resuming and quitting all go through, so
+    /// nothing can be done with the machine until its host is restarted.
+    /// Seen on a Mac whose host wedged starting a stream with the screen
+    /// asleep: the plain port kept answering for a day.
+    #[serde(default)]
+    pub secure_port_down: bool,
     pub last_seen_ms: Option<u64>,
     /// What the machine's own Dusk said about itself over the peer port.
     /// `None` until it answers, and for a Dusk too old to say.
@@ -133,6 +149,10 @@ pub struct Device {
     /// it. Internal to the backend.
     #[serde(skip)]
     pub misses: u8,
+    /// Probes in a row on which the plain port answered and the pairing
+    /// port did not. Internal to the backend.
+    #[serde(skip)]
+    pub secure_misses: u8,
     /// When the machine was last asked who it is, in Unix seconds, so a
     /// machine of yours is asked again now and then for its version.
     /// Internal to the backend.
@@ -169,10 +189,12 @@ impl Device {
             server: None,
             apps: Vec::new(),
             streaming_here: false,
+            secure_port_down: false,
             last_seen_ms: None,
             dusk: None,
             custom_name: None,
             misses: 0,
+            secure_misses: 0,
             asked_at: None,
         }
     }

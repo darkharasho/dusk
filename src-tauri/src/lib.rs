@@ -323,6 +323,7 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 peer::watch_for_a_screen_left_resized(state.clone());
                 cert_pairing::reconcile::Reconciler::spawn(state.clone());
+                host::watchdog::spawn(state.clone());
                 poller::spawn(handle, state);
             }
 

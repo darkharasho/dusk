@@ -116,9 +116,12 @@ version = "0.26"
 default-features = false
 features = ["ring", "tls12"]
 
+# A throwaway client certificate for the host's own pairing-port watchdog,
+# and the certificates for the clipboard handshake tests.
+[dependencies.rcgen]
+version = "0.13"
+
 [dev-dependencies]
 # `test-util` for paused time in tests whose timing a slow runner would
 # otherwise decide; adding it here keeps the clock real in the shipped binary.
 tokio = { version = "1", features = ["test-util"] }
-# Certificates for the clipboard handshake tests.
-rcgen = "0.13"

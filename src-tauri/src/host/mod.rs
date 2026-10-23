@@ -15,6 +15,7 @@ pub mod platform;
 pub mod screen_mode;
 pub mod service;
 pub mod virtual_screen;
+pub mod watchdog;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {

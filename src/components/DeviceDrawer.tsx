@@ -194,12 +194,36 @@ export function DeviceDrawer({
 
           {online && <RemoteUpdate key={device.id} device={device} />}
 
+          {/* The port everything else here goes through is dead while the
+              machine is plainly up. Said before any of it is offered: a
+              Stream or End button would only time out, and "Checking"
+              would never finish. */}
+          {online && device.securePortDown && (
+            <div className="axi-notice axi-notice--warn">
+              <span className="axi-notice__icon" aria-hidden="true">
+                !
+              </span>
+              <p>
+                {device.name} is up, but its hosting has stopped answering
+                securely, so Dusk cannot pair with it, stream from it, or end
+                its session. This usually means a session got stuck starting
+                there. Dusk on {device.name} restarts hosting on its own once
+                it notices; if this stays, turn hosting off and on again
+                there.
+              </p>
+            </div>
+          )}
+
           {/* Not knowing is not "not paired": a host that answered only on
               its plain port this tick says nothing either way, and offering
               to pair with one already paired ends in an error. */}
-          {online && moonlightAvailable && pairing === "unknown" && busy !== "pairing" && (
-            <p className="axi-ink-dim">Checking whether this machine is paired.</p>
-          )}
+          {online &&
+            moonlightAvailable &&
+            pairing === "unknown" &&
+            !device.securePortDown &&
+            busy !== "pairing" && (
+              <p className="axi-ink-dim">Checking whether this machine is paired.</p>
+            )}
 
           {online && moonlightAvailable && (pairing === "notPaired" || busy === "pairing") && (
             <PairPanel

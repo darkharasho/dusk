@@ -42,6 +42,30 @@ pub fn describe(err: &(dyn std::error::Error + 'static)) -> String {
     out
 }
 
+/// Why a query gave no `ServerInfo`.
+///
+/// The two halves matter to a watchdog: a host that answers anything at all
+/// on a port is alive there, however unhelpful the answer; one that resets,
+/// refuses or times out is not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryError {
+    /// No HTTP answer: refused, reset, a handshake that never completed, or
+    /// a timeout.
+    Unreachable(String),
+    /// The host answered, but not with a serverinfo Dusk could use.
+    Answered(String),
+}
+
+impl std::fmt::Display for QueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueryError::Unreachable(text) | QueryError::Answered(text) => f.write_str(text),
+        }
+    }
+}
+
+impl std::error::Error for QueryError {}
+
 #[derive(Debug, Clone)]
 pub struct ServerInfo {
     pub fields: HashMap<String, String>,
@@ -129,7 +153,7 @@ pub async fn query_http(
     client: &reqwest::Client,
     address: &str,
     port: u16,
-) -> Result<ServerInfo, String> {
+) -> Result<ServerInfo, QueryError> {
     let authority = with_port(address, port);
     query(
         client,
@@ -151,7 +175,7 @@ pub async fn query_https(
     client: &reqwest::Client,
     address: &str,
     port: u16,
-) -> Result<ServerInfo, String> {
+) -> Result<ServerInfo, QueryError> {
     let authority = with_port(address, port);
     query(
         client,
@@ -165,14 +189,14 @@ async fn query(
     client: &reqwest::Client,
     url: &str,
     authenticated: bool,
-) -> Result<ServerInfo, String> {
+) -> Result<ServerInfo, QueryError> {
     let started = Instant::now();
     let response = client
         .get(url)
         .timeout(PROBE_TIMEOUT)
         .send()
         .await
-        .map_err(|e| describe(&e))?;
+        .map_err(|e| QueryError::Unreachable(describe(&e)))?;
     let rtt_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
     // Read before the body, which consumes the response. Only a client
     // built with `tls_info` records it; see `state::tls_client`.
@@ -183,11 +207,19 @@ async fn query(
         .map(<[u8]>::to_vec);
 
     if !response.status().is_success() {
-        return Err(format!("serverinfo returned {}", response.status()));
+        return Err(QueryError::Answered(format!(
+            "serverinfo returned {}",
+            response.status()
+        )));
     }
 
-    let body = response.text().await.map_err(|e| describe(&e))?;
-    let (status_code, fields) = parse(&body)?;
+    // Past the status line the host has plainly answered; a body that then
+    // fails to arrive is still a host that is up.
+    let body = response
+        .text()
+        .await
+        .map_err(|e| QueryError::Answered(describe(&e)))?;
+    let (status_code, fields) = parse(&body).map_err(QueryError::Answered)?;
     Ok(ServerInfo {
         fields,
         rtt_ms,

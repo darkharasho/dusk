@@ -482,7 +482,9 @@ async fn re_pair_changed_hosts(
 ///   "not paired", but the body carries no hostname or session state, so the
 ///   plain probe still runs for detail and the pairing verdict is carried
 ///   over. A host that answers only this is still online.
-/// - TLS fails outright — plain probe alone, pairing unknown.
+/// - TLS fails outright — plain probe alone, pairing unknown. Noted on the
+///   outcome, so a host whose pairing port stays dead can be told apart
+///   from one that aborted a single handshake.
 ///
 /// Alongside the outcome comes the certificate the host presented over TLS,
 /// whatever it then said about us.
@@ -494,22 +496,33 @@ async fn probe(
     tls_port: u16,
 ) -> (ProbeOutcome, Option<Vec<u8>>) {
     let mut rejected: Option<(String, serverinfo::ServerInfo)> = None;
+    // Whether the pairing port answered anything on any address. Only a
+    // probe that was tried and got no answer at all counts against it:
+    // with no identity there is nothing to try, and a host that answered
+    // with something Dusk could not use is at least alive on that port.
+    let mut secure_port_failed = tls.is_some();
 
     for address in addresses {
         if let Some(tls) = tls {
-            if let Ok(info) = serverinfo::query_https(tls, address, tls_port).await {
-                if info.status_code == serverinfo::STATUS_OK {
-                    let cert = info.server_cert.clone();
-                    let outcome = ProbeOutcome::Reached {
-                        address: address.clone(),
-                        info,
-                        pairing: None,
-                    };
-                    return (outcome, cert);
+            match serverinfo::query_https(tls, address, tls_port).await {
+                Ok(info) => {
+                    secure_port_failed = false;
+                    if info.status_code == serverinfo::STATUS_OK {
+                        let cert = info.server_cert.clone();
+                        let outcome = ProbeOutcome::Reached {
+                            address: address.clone(),
+                            info,
+                            pairing: None,
+                            secure_port_failed: false,
+                        };
+                        return (outcome, cert);
+                    }
+                    if info.status_code == serverinfo::STATUS_UNAUTHORIZED && rejected.is_none() {
+                        rejected = Some((address.clone(), info));
+                    }
                 }
-                if info.status_code == serverinfo::STATUS_UNAUTHORIZED && rejected.is_none() {
-                    rejected = Some((address.clone(), info));
-                }
+                Err(serverinfo::QueryError::Answered(_)) => secure_port_failed = false,
+                Err(serverinfo::QueryError::Unreachable(_)) => {}
             }
         }
 
@@ -521,6 +534,7 @@ async fn probe(
                 // Unknown, which is strictly less informative.
                 pairing: rejected.as_ref().map(|(_, r)| r.pairing()),
                 info,
+                secure_port_failed,
             };
             return (outcome, cert);
         }
@@ -535,6 +549,7 @@ async fn probe(
                 address,
                 pairing: Some(info.pairing()),
                 info,
+                secure_port_failed: false,
             };
             (outcome, cert)
         }

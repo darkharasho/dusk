@@ -1,5 +1,29 @@
 # Release Notes
 
+Version v0.3.38 — October 23, 2026
+
+A machine whose hosting has stopped answering securely now fixes itself, and the other machine says what is wrong.
+
+## Changes
+
+- **Hosting restarts itself when it gets stuck.** A stream that failed to
+  start could leave hosting in a state where the machine looked up but no
+  other machine could pair with it, stream from it, or end its session.
+  Dusk on the host now notices within about ninety seconds and restarts
+  hosting on its own, at most once every ten minutes.
+- **The other machine says so instead of checking forever.** A card for
+  such a machine used to sit on "Checking whether this machine is paired".
+  It now explains that the machine is up but its hosting is not answering
+  securely, and what to do about it.
+
+The host has to run this version to restart itself; if it runs v0.3.37 or
+earlier, turn hosting off and on again there, or update it from here.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.37 — October 22, 2026
 
 Reach a Mac whose screen is asleep or locked.

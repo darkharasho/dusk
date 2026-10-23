@@ -6,7 +6,16 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.37 is released**: a Mac asked the `display` question on the peer
+**v0.3.38 is released**: a host whose pairing port (47984) stops
+completing handshakes while its plain port still answers is restarted by
+its own Dusk (`src-tauri/src/host/watchdog.rs`: three 30 s looks with a
+minted client certificate, stop/start through the service backend, at
+most once in ten minutes). The poller marks such a device `securePortDown`
+after four probes and the drawer says so instead of "Checking whether this
+machine is paired". Seen for real: a Mac's HTTPS thread wedged on a
+`/resume` with its screen asleep and stayed that way for a day.
+
+Before that, **v0.3.37** was released: a Mac asked the `display` question on the peer
 port turns its screen on (`caffeinate -u`), and the question is now asked
 before every stream, so a Mac whose screen slept or locked can be reached.
 A Mac in full system sleep still can't. Not yet tried on a real Mac.
@@ -658,7 +667,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.37>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.38>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon

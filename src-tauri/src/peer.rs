@@ -71,6 +71,24 @@
 //! host → connecting   {"type":"display_size","width":2560,"height":1440}
 //! ```
 //!
+//! A machine of the same account can ask another to update itself, when
+//! the grid shows it on an older Dusk. `at` is when it asked, in Unix
+//! seconds, and the proof signs it with the machine asked, so the request
+//! cannot be sent again later or to another machine:
+//!
+//! ```text
+//! connecting → host   {"type":"update","at":1792700000,"streaming":false,
+//!                      "proof":{"account":1,"machine":"…","signature":"…"}}
+//! host → connecting   {"type":"updating","version":"0.3.36"}  restarting into it
+//!                     {"type":"up_to_date"}
+//!                     {"type":"declined","reason":"..."}
+//! ```
+//!
+//! `streaming` says the asking machine is streaming from the host, so the
+//! stream that a restart interrupts is its own. A host streaming to anyone
+//! else declines. The identity answer says which Dusk a machine runs, and
+//! whether it can update this way, so the grid knows when to offer it.
+//!
 //! `screen` is the asking machine's own, and is new in 0.3.10. A host
 //! streaming its virtual display answers with the size closest to it that
 //! the display has, so the stream is the asker's shape; one streaming its
@@ -123,6 +141,9 @@ const CERT_REPLY_TIMEOUT: Duration = Duration::from_secs(90);
 /// certificate pairing carries PEM certificates and a signature; some reads
 /// allow a multiple of this.
 const MAX_LINE: usize = 16 * 1024;
+
+/// What a Dusk says to a request it does not know, as every version has.
+const UNDERSTOOD_NOTHING: &str = "Dusk did not understand that request.";
 
 pub const PAIR_REQUEST_EVENT: &str = "dusk://pair-request";
 pub const PAIR_REQUEST_ENDED_EVENT: &str = "dusk://pair-request-ended";
@@ -187,7 +208,38 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
         name: String,
+        /// This machine's Dusk version. New in 0.3.36; older ones say nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        /// It can update itself with nobody at it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        remote_update: bool,
     },
+    /// Update yourself: asked by another machine on the same account.
+    Update {
+        at: u64,
+        /// The asking machine is streaming from this one.
+        #[serde(default)]
+        streaming: bool,
+        proof: crate::account::Proof,
+    },
+    /// A newer release is going in, and Dusk restarts into it.
+    Updating {
+        version: String,
+    },
+    UpToDate,
+}
+
+/// How far apart the two machines' clocks, and the request's trip, may be
+/// before an update request counts as stale.
+const UPDATE_REQUEST_LIFETIME: u64 = 5 * 60;
+
+/// What another machine's Dusk said about itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identified {
+    pub machine: Option<String>,
+    pub name: String,
+    pub dusk: Option<crate::model::DuskInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,7 +363,15 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
         Ok(Message::Identify) => Message::Identity {
             machine: state.account.machine_id().await,
             name: host_name(),
+            version: Some(app.package_info().version.to_string()),
+            remote_update: crate::updates::unattended::unattended()
+                == crate::updates::unattended::Unattended::Possible,
         },
+        Ok(Message::Update {
+            at,
+            streaming,
+            proof,
+        }) => handle_update(&app, &state, at, streaming, &proof).await,
         Ok(Message::Display { screen }) => match display_answer(&app, &state, screen).await {
             Some((width, height)) => Message::DisplaySize { width, height },
             None => Message::Declined {
@@ -319,10 +379,85 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
             },
         },
         _ => Message::Declined {
-            reason: "Dusk did not understand that request.".into(),
+            reason: UNDERSTOOD_NOTHING.into(),
         },
     };
     let _ = send(&mut write, &reply).await;
+}
+
+/// Update this machine, because another on its account asked.
+async fn handle_update(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    at: u64,
+    streaming: bool,
+    proof: &crate::account::Proof,
+) -> Message {
+    use crate::updates::unattended::{self, Found};
+    let declined = |reason: String| Message::Declined { reason };
+    let name = host_name();
+    let Some(me) = state.account.machine_id().await else {
+        return declined(not_on_this_account(true));
+    };
+    let now = crate::account::github::now_unix();
+    if !fresh(at, now) {
+        return declined(format!(
+            "The request reached {name} too late, or the two machines' clocks disagree."
+        ));
+    }
+    let message = crate::account::keys::update_message(&me, at, streaming);
+    match state.account.vouch_for(&state.http, proof, &message).await {
+        crate::account::Vouch::Vouched => {}
+        crate::account::Vouch::NotOnAccount => return declined(not_on_this_account(true)),
+        crate::account::Vouch::CouldNotCheck(reason) => return declined(could_not_check(&reason)),
+    }
+    // After the signature, so only a request that would otherwise be acted
+    // on is remembered.
+    if !UPDATE_REQUESTS_SEEN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .first_time(&format!("{}\n{at}\n{streaming}", proof.machine), at, now)
+    {
+        return declined("That request was already used.".into());
+    }
+    if let Some(why) = unattended::cannot_update(unattended::unattended(), &name) {
+        return declined(why);
+    }
+    if let Some(why) = unattended::busy(state, streaming).await {
+        return declined(why);
+    }
+    match unattended::update_now(app, state, streaming).await {
+        Ok(Found::Installing { version }) => Message::Updating { version },
+        Ok(Found::UpToDate) => Message::UpToDate,
+        Err(reason) => declined(format!("{name} could not update: {reason}")),
+    }
+}
+
+/// Update requests acted on recently, so each works once: the peer port is
+/// plain TCP, and a request seen on the network must not be sendable again
+/// inside its lifetime. Kept by what was signed and who signed it, not by
+/// the signature's text, which more than one spelling of the same hex
+/// would get past.
+static UPDATE_REQUESTS_SEEN: std::sync::Mutex<Seen> = std::sync::Mutex::new(Seen(Vec::new()));
+
+struct Seen(Vec<(String, u64)>);
+
+impl Seen {
+    /// Whether the request `request`, made at `at`, is new, remembering it
+    /// if so. Forgets requests too old to be [`fresh`] any more.
+    fn first_time(&mut self, request: &str, at: u64, now: u64) -> bool {
+        self.0.retain(|(_, seen_at)| fresh(*seen_at, now));
+        if self.0.iter().any(|(r, _)| r == request) {
+            return false;
+        }
+        self.0.push((request.to_string(), at));
+        true
+    }
+}
+
+/// Whether an update request made at `at` is recent enough to act on.
+fn fresh(at: u64, now: u64) -> bool {
+    at.abs_diff(now) <= UPDATE_REQUEST_LIFETIME
 }
 
 /// The size a stream from here should be, for a machine whose screen is
@@ -796,11 +931,11 @@ async fn display_size_at(
 /// does. That is not a failure: a machine Dusk cannot identify is simply one
 /// the grid cannot claim as yours, which is the honest answer rather than a
 /// guess from its name.
-pub async fn identify(address: &str) -> Option<(Option<String>, String)> {
+pub async fn identify(address: &str) -> Option<Identified> {
     identify_at(address, PORT).await
 }
 
-async fn identify_at(address: &str, port: u16) -> Option<(Option<String>, String)> {
+async fn identify_at(address: &str, port: u16) -> Option<Identified> {
     // Asked on the poll tick for every machine, so it must never be the slow
     // part of one. A machine that does not answer in two seconds is one the
     // grid shows as it did before.
@@ -815,8 +950,87 @@ async fn identify_at(address: &str, port: u16) -> Option<(Option<String>, String
         .ok()?
         .ok()??;
     match serde_json::from_str::<Message>(&line).ok()? {
-        Message::Identity { machine, name } => Some((machine, name)),
+        Message::Identity {
+            machine,
+            name,
+            version,
+            remote_update,
+        } => Some(Identified {
+            machine,
+            name,
+            dusk: version.map(|version| crate::model::DuskInfo {
+                version,
+                remote_update,
+            }),
+        }),
         _ => None,
+    }
+}
+
+/// What asking another machine to update found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UpdateOutcome {
+    Updating { version: String },
+    UpToDate,
+}
+
+/// Ask the machine at `address`, whose account id is `machine`, to update.
+pub async fn ask_update(
+    state: &AppState,
+    address: &str,
+    machine: &str,
+    streaming: bool,
+) -> Result<UpdateOutcome, String> {
+    let at = crate::account::github::now_unix();
+    let proof = state
+        .account
+        .sign(&crate::account::keys::update_message(
+            machine, at, streaming,
+        ))
+        .await
+        .ok_or("Sign in to GitHub on this machine to update your others from it.")?;
+    ask_update_at(
+        address,
+        PORT,
+        &Message::Update {
+            at,
+            streaming,
+            proof,
+        },
+    )
+    .await
+}
+
+async fn ask_update_at(
+    address: &str,
+    port: u16,
+    request: &Message,
+) -> Result<UpdateOutcome, String> {
+    let gone = || "That machine didn't answer.".to_string();
+    let connect = TcpStream::connect((address, port));
+    let stream = tokio::time::timeout(Duration::from_secs(5), connect)
+        .await
+        .map_err(|_| gone())?
+        .map_err(|_| gone())?;
+    let (read, mut write) = stream.into_split();
+    send(&mut write, request).await.map_err(|_| gone())?;
+    let mut lines = BufReader::new(read.take(MAX_LINE as u64)).lines();
+    // The host checks the account, and then GitHub for a release, before it
+    // answers.
+    let line = tokio::time::timeout(Duration::from_secs(60), lines.next_line())
+        .await
+        .map_err(|_| gone())?
+        .map_err(|_| gone())?
+        .ok_or_else(gone)?;
+    match serde_json::from_str::<Message>(&line).map_err(|_| gone())? {
+        Message::Updating { version } => Ok(UpdateOutcome::Updating { version }),
+        Message::UpToDate => Ok(UpdateOutcome::UpToDate),
+        Message::Declined { reason } if reason == UNDERSTOOD_NOTHING => {
+            Err("That machine's Dusk is too old to be updated from here.".into())
+        }
+        Message::Declined { reason } => Err(reason),
+        _ => Err(gone()),
     }
 }
 
@@ -1179,8 +1393,113 @@ mod tests {
         .await;
         assert_eq!(
             identify_at("127.0.0.1", port).await,
-            Some((Some("8717645a43edf635".into()), "Michaels-Mini".into()))
+            Some(Identified {
+                machine: Some("8717645a43edf635".into()),
+                name: "Michaels-Mini".into(),
+                dusk: None,
+            })
         );
+    }
+
+    #[tokio::test]
+    async fn a_machine_says_which_dusk_it_runs() {
+        let port = host_identifying(
+            r#"{"type":"identity","machine":"aa","name":"Mini","version":"0.3.36","remote_update":true}"#,
+        )
+        .await;
+        assert_eq!(
+            identify_at("127.0.0.1", port).await.unwrap().dusk,
+            Some(crate::model::DuskInfo {
+                version: "0.3.36".into(),
+                remote_update: true,
+            })
+        );
+    }
+
+    #[test]
+    fn an_update_request_is_only_good_for_a_few_minutes() {
+        assert!(fresh(1_000, 1_000));
+        assert!(fresh(1_000, 1_000 + UPDATE_REQUEST_LIFETIME));
+        // A clock a little ahead of this one's is not a replay.
+        assert!(fresh(1_000 + 60, 1_000));
+        assert!(!fresh(1_000, 1_000 + UPDATE_REQUEST_LIFETIME + 1));
+        assert!(!fresh(1_000 + UPDATE_REQUEST_LIFETIME + 1, 1_000));
+    }
+
+    #[test]
+    fn an_update_request_works_once() {
+        let mut seen = Seen(Vec::new());
+        assert!(seen.first_time("sig", 1_000, 1_000));
+        assert!(!seen.first_time("sig", 1_000, 1_010), "sent again");
+        assert!(seen.first_time("other", 1_005, 1_010));
+        // Once the first is too old to be fresh it is forgotten, which is
+        // safe: it would be refused as stale anyway.
+        seen.first_time("later", 2_000, 2_000);
+        assert_eq!(seen.0.len(), 1);
+    }
+
+    #[test]
+    fn an_update_request_round_trips() {
+        let request = Message::Update {
+            at: 1_792_700_000,
+            streaming: true,
+            proof: crate::account::Proof {
+                account: 1,
+                machine: "ab".into(),
+                signature: "cd".into(),
+            },
+        };
+        let line = serde_json::to_string(&request).unwrap();
+        assert!(line.starts_with(r#"{"type":"update","at":1792700000"#));
+        assert_eq!(serde_json::from_str::<Message>(&line).unwrap(), request);
+        assert_eq!(
+            serde_json::to_string(&Message::UpToDate).unwrap(),
+            r#"{"type":"up_to_date"}"#
+        );
+    }
+
+    async fn host_replying_to_update(reply: &'static str) -> u16 {
+        host_expecting(|m| matches!(m, Message::Update { .. }), reply).await
+    }
+
+    fn update_request() -> Message {
+        Message::Update {
+            at: 0,
+            streaming: false,
+            proof: crate::account::Proof {
+                account: 1,
+                machine: "ab".into(),
+                signature: "cd".into(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn an_update_answer_reaches_the_asker() {
+        let port = host_replying_to_update(r#"{"type":"updating","version":"0.3.36"}"#).await;
+        assert_eq!(
+            ask_update_at("127.0.0.1", port, &update_request()).await,
+            Ok(UpdateOutcome::Updating {
+                version: "0.3.36".into()
+            })
+        );
+        let port = host_replying_to_update(r#"{"type":"declined","reason":"Not now."}"#).await;
+        assert_eq!(
+            ask_update_at("127.0.0.1", port, &update_request()).await,
+            Err("Not now.".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dusk_too_old_to_update_from_here_says_so() {
+        let port = host_replying_to_update(
+            r#"{"type":"declined","reason":"Dusk did not understand that request."}"#,
+        )
+        .await;
+        assert!(ask_update_at("127.0.0.1", port, &update_request())
+            .await
+            .unwrap_err()
+            .contains("too old"));
     }
 
     #[tokio::test]
@@ -1190,7 +1509,11 @@ mod tests {
         let port = host_identifying(r#"{"type":"identity","name":"someone-elses-pc"}"#).await;
         assert_eq!(
             identify_at("127.0.0.1", port).await,
-            Some((None, "someone-elses-pc".into()))
+            Some(Identified {
+                machine: None,
+                name: "someone-elses-pc".into(),
+                dusk: None,
+            })
         );
     }
 

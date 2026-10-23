@@ -224,6 +224,18 @@ export function setClipboardSharing(on: boolean): Promise<void> {
   return invoke("set_clipboard_sharing", { on });
 }
 
+/** Whether Dusk updates itself while nobody is streaming either way. */
+export function setAutoUpdate(on: boolean): Promise<void> {
+  return invoke("set_auto_update", { on });
+}
+
+export type UpdateOutcome = { kind: "updating"; version: string } | { kind: "upToDate" };
+
+/** Ask another of your machines to update its Dusk and restart into it. */
+export function updateDevice(id: string): Promise<UpdateOutcome> {
+  return invoke("update_device", { id });
+}
+
 export function acceptPin(pin: string, deviceName?: string): Promise<void> {
   return invoke("accept_pin", { pin, deviceName: deviceName ?? null });
 }

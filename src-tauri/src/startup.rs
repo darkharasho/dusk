@@ -92,16 +92,37 @@ pub fn starts_hidden(args: impl IntoIterator<Item = String>, prefs: &Prefs) -> b
 /// restart, and is taken by the launch that reads it.
 const SHOW_MARKER: &str = "show-after-restart";
 
-/// Ask the next launch to show its window whatever its command line says.
-pub fn mark_show_next_launch(config_dir: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    std::fs::write(config_dir.join(SHOW_MARKER), b"").map_err(|e| e.to_string())
+/// What the launch after a restart does with its window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextLaunch {
+    /// Show it, whatever the command line says: someone pressed Restart.
+    Show,
+    /// Keep it in the tray, whatever the command line says: an update
+    /// nobody was watching, on a machine whose window was already hidden.
+    Hide,
 }
 
-/// Whether a restart asked this launch to show its window. Taken, so only
-/// the launch straight after it does.
-pub fn take_show_marker(config_dir: &Path) -> bool {
-    std::fs::remove_file(config_dir.join(SHOW_MARKER)).is_ok()
+/// Tell the next launch what to do with its window.
+pub fn mark_next_launch(config_dir: &Path, next: NextLaunch) -> Result<(), String> {
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    let body: &[u8] = match next {
+        NextLaunch::Show => b"",
+        NextLaunch::Hide => b"hide",
+    };
+    std::fs::write(config_dir.join(SHOW_MARKER), body).map_err(|e| e.to_string())
+}
+
+/// What a restart asked this launch to do with its window, if it asked.
+/// Taken, so only the launch straight after it does.
+pub fn take_launch_marker(config_dir: &Path) -> Option<NextLaunch> {
+    let path = config_dir.join(SHOW_MARKER);
+    let body = std::fs::read(&path).ok()?;
+    std::fs::remove_file(&path).ok()?;
+    Some(if body == b"hide" {
+        NextLaunch::Hide
+    } else {
+        NextLaunch::Show
+    })
 }
 
 pub fn view(app: &AppHandle, prefs: Prefs) -> StartupView {
@@ -171,13 +192,16 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_after_a_restart_shows_its_window_once() {
+    fn the_launch_after_a_restart_does_what_it_was_told_once() {
         let dir = std::env::temp_dir().join(format!("dusk-show-marker-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(!take_show_marker(&dir));
-        mark_show_next_launch(&dir).unwrap();
-        assert!(take_show_marker(&dir));
-        assert!(!take_show_marker(&dir));
+        assert_eq!(take_launch_marker(&dir), None);
+        mark_next_launch(&dir, NextLaunch::Show).unwrap();
+        assert_eq!(take_launch_marker(&dir), Some(NextLaunch::Show));
+        assert_eq!(take_launch_marker(&dir), None);
+        mark_next_launch(&dir, NextLaunch::Hide).unwrap();
+        assert_eq!(take_launch_marker(&dir), Some(NextLaunch::Hide));
+        assert_eq!(take_launch_marker(&dir), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

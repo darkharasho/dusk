@@ -8,6 +8,7 @@
 //! same signing key.
 
 pub mod deb;
+pub mod unattended;
 
 use std::sync::Arc;
 
@@ -95,10 +96,20 @@ pub fn ensure_self_executable() {
 }
 
 /// Called just before the relaunch that finishes an update, so the new Dusk
-/// opens its window: see [`crate::startup::mark_show_next_launch`].
+/// opens its window: see [`crate::startup::mark_next_launch`].
 #[tauri::command]
 pub fn prepare_restart(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    crate::startup::mark_show_next_launch(&dir)
+    crate::startup::mark_next_launch(&dir, crate::startup::NextLaunch::Show)
+}
+
+/// Called when an update that [`prepare_restart`] was called for fails to
+/// install, so the marker does not decide some later launch instead.
+#[tauri::command]
+pub fn cancel_restart(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Ok(dir) = app.path().app_config_dir() {
+        let _ = crate::startup::take_launch_marker(&dir);
+    }
 }

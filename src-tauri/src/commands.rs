@@ -9,7 +9,7 @@ use crate::model::{Device, HostStatus, Snapshot};
 use crate::registry::split_address;
 use crate::startup;
 use crate::state::{emit_snapshot, AppState};
-use crate::store::{ClipboardSharing, Codec, ManualEntry, Resolution, BITRATE_RANGE};
+use crate::store::{AutoUpdate, ClipboardSharing, Codec, ManualEntry, Resolution, BITRATE_RANGE};
 use crate::sunshine::{self, Credentials, Known, SunshineApi};
 
 #[tauri::command]
@@ -1084,6 +1084,22 @@ pub async fn set_clipboard_sharing(
     Ok(())
 }
 
+/// Whether Dusk updates itself while nobody is streaming either way.
+#[tauri::command]
+pub async fn set_auto_update(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.auto_update = if on { AutoUpdate::On } else { AutoUpdate::Off };
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
 /// The first-run checklist for this machine.
 #[tauri::command]
 pub async fn get_setup(state: State<'_, Arc<AppState>>) -> Result<install::Setup, String> {
@@ -1414,6 +1430,38 @@ pub async fn quit_session(
     inner.request_refresh();
     emit_snapshot(&app, &inner).await;
     Ok(())
+}
+
+/// Ask another of your machines to update its Dusk, and restart into it.
+#[tauri::command]
+pub async fn update_device(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<crate::peer::UpdateOutcome, String> {
+    let inner = state.inner().clone();
+    let machine = {
+        let registry = inner.registry.read().await;
+        let device = registry
+            .devices()
+            .into_iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| "That machine is no longer in the list.".to_string())?;
+        let machine = device
+            .machine_id
+            .filter(|_| device.mine)
+            .ok_or_else(|| format!("{} isn't one of your machines.", device.name))?;
+        machine
+    };
+    // From the sessions, not the device: the registry's copy of whether
+    // this machine streams from it is only filled in for the snapshot.
+    let streaming = inner.is_streaming_from(&id).await;
+    let (address, _) = target_of(&inner, &id).await?;
+    let host = crate::peer::host_part(&address).to_string();
+    let outcome = crate::peer::ask_update(&inner, &host, &machine, streaming).await?;
+    inner.request_refresh();
+    emit_snapshot(&app, &inner).await;
+    Ok(outcome)
 }
 
 /// Whether Dusk opens at sign-in, and how it opens and closes.

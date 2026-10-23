@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::{
-    Activity, Device, DeviceId, PairingState, Reachability, DEFAULT_HTTPS_PORT, DEFAULT_HTTP_PORT,
-    OFFLINE_AFTER_MISSES,
+    Activity, Device, DeviceId, DuskInfo, PairingState, Reachability, DEFAULT_HTTPS_PORT,
+    DEFAULT_HTTP_PORT, OFFLINE_AFTER_MISSES,
 };
 use crate::moonlight::hosts::KnownHost;
 use crate::serverinfo::ServerInfo;
@@ -307,6 +307,21 @@ impl Registry {
         if let Some(device) = self.devices.get_mut(id) {
             device.machine_id = machine_id;
             device.mine = mine;
+        }
+    }
+
+    /// What a machine's Dusk said about itself, and when it was asked.
+    pub fn set_dusk(&mut self, id: &str, dusk: Option<DuskInfo>, asked_at: u64) {
+        if let Some(device) = self.devices.get_mut(id) {
+            device.dusk = dusk;
+            device.asked_at = Some(asked_at);
+        }
+    }
+
+    /// That a machine's Dusk was asked about itself and did not answer.
+    pub fn mark_asked(&mut self, id: &str, asked_at: u64) {
+        if let Some(device) = self.devices.get_mut(id) {
+            device.asked_at = Some(asked_at);
         }
     }
 
@@ -913,6 +928,23 @@ mod tests {
             info,
             pairing: None,
         }
+    }
+
+    #[test]
+    fn a_machine_that_misses_an_answer_keeps_the_version_it_last_gave() {
+        let mut r = registry();
+        let (id, _) =
+            r.upsert_mdns_noting_change("WORKSHOP", &["192.168.1.40".into()], DEFAULT_HTTP_PORT);
+        let dusk = DuskInfo {
+            version: "0.3.36".into(),
+            remote_update: true,
+        };
+        r.set_dusk(&id, Some(dusk.clone()), 1_000);
+        r.mark_asked(&id, 1_060);
+
+        let device = r.devices().into_iter().find(|d| d.id == id).unwrap();
+        assert_eq!(device.dusk, Some(dusk));
+        assert_eq!(device.asked_at, Some(1_060));
     }
 
     #[test]

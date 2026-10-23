@@ -215,8 +215,11 @@ pub fn run() {
             // unless this is a sign-in launch that should stay in the tray.
             // Hiding it after the fact would flash it on screen first.
             app.manage(startup::Live::new(&store.startup));
-            let restarted = startup::take_show_marker(&config_dir);
-            if !restarted && startup::starts_hidden(std::env::args(), &store.startup) {
+            let hidden = match startup::take_launch_marker(&config_dir) {
+                Some(next) => next == startup::NextLaunch::Hide,
+                None => startup::starts_hidden(std::env::args(), &store.startup),
+            };
+            if hidden {
                 // Already hidden; this takes the dock icon with it.
                 tray::hide_window(&handle);
             } else {
@@ -315,6 +318,7 @@ pub fn run() {
             if !mock_mode() {
                 discovery::spawn(handle.clone(), state.clone());
                 peer::spawn(handle.clone(), state.clone());
+                updates::unattended::spawn_idle_updates(handle.clone(), state.clone());
                 clipboard::host::spawn(handle.clone(), state.clone());
                 #[cfg(target_os = "linux")]
                 peer::watch_for_a_screen_left_resized(state.clone());
@@ -343,6 +347,8 @@ pub fn run() {
             commands::set_bitrate,
             commands::set_codec,
             commands::set_clipboard_sharing,
+            commands::set_auto_update,
+            commands::update_device,
             commands::answer_pair_request,
             commands::get_account,
             commands::sign_in_with_github,
@@ -367,6 +373,7 @@ pub fn run() {
             updates::install_deb_update,
             updates::ensure_self_executable,
             updates::prepare_restart,
+            updates::cancel_restart,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Dusk");

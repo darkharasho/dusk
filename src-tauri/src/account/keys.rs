@@ -19,6 +19,14 @@ pub(crate) fn pair_message(pin: &str) -> Vec<u8> {
     format!("dusk-pair-v1\n{pin}").into_bytes()
 }
 
+/// What a machine signs to ask another of the account's machines to update
+/// itself. Names the machine asked, so the request cannot be replayed to
+/// another, when it was made, so it cannot be replayed later, and whether
+/// the asker is streaming from it, which lets the request end that stream.
+pub(crate) fn update_message(host_machine: &str, at: u64, streaming: bool) -> Vec<u8> {
+    format!("dusk-update-v1\n{host_machine}\n{at}\n{streaming}").into_bytes()
+}
+
 /// A certificate's sha256, taken over its normalised PEM so line endings
 /// never make the same certificate look like another.
 pub(crate) fn sha256_hex(pem: &str) -> String {

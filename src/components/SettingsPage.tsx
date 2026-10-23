@@ -5,9 +5,11 @@ import { AccountSection } from "./AccountSection";
 import { HostingPanel } from "./HostingPanel";
 import { HostSettings } from "./HostSettings";
 import { SetupChecklist } from "./SetupChecklist";
-import { StartupSection } from "./StartupSection";
+import { StartupSection, Toggle } from "./StartupSection";
 import { StreamingSection } from "./StreamingSection";
 import { Icon, type IconName } from "./Icon";
+import { setAutoUpdate } from "../api";
+import { describe } from "../errors";
 import { checkForUpdate, restartToUpdate, useUpdateState, type UpdateState } from "../updates";
 
 export type SettingsSection = "account" | "startup" | "streaming" | "hosting" | "setup" | "host" | "about";
@@ -82,13 +84,13 @@ export function SettingsPage({ name, snapshot, section, onSection }: Props) {
             </div>
           ))}
 
-        {section === "about" && <About />}
+        {section === "about" && <About snapshot={snapshot} />}
       </section>
     </div>
   );
 }
 
-function About() {
+function About({ snapshot }: { snapshot: Snapshot }) {
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
@@ -105,6 +107,7 @@ function About() {
         of them stream from this one.
       </p>
       <Updates />
+      <AutoUpdate snapshot={snapshot} />
       {/* The notices the bundled open-source components require. Tucked away,
           not absent: their licences ask for them to be reachable. */}
       <details>
@@ -141,6 +144,41 @@ function updateLine(update: UpdateState): string {
     case "error":
       return `Could not update: ${update.message}`;
   }
+}
+
+/**
+ * Updating with nobody at the machine. The point is a host nobody sits at,
+ * which is also the machine where nobody would ever turn this on, so it
+ * starts on.
+ */
+function AutoUpdate({ snapshot }: { snapshot: Snapshot }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!snapshot.autoUpdatePossible) return null;
+  async function change(on: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      await setAutoUpdate(on);
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <Toggle
+        id="auto-update"
+        label="Update automatically when idle"
+        detail="When nobody is streaming to or from this machine, Dusk installs new versions and restarts in the background."
+        on={snapshot.autoUpdate}
+        disabled={busy}
+        onChange={(on) => void change(on)}
+      />
+      {error && <p className="axi-ink-danger">{error}</p>}
+    </>
+  );
 }
 
 /** Where the self-update is, and the buttons that move it along. */

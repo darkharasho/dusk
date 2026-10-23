@@ -435,7 +435,7 @@ async fn tls_acceptor(state: &AppState) -> Option<TlsAcceptor> {
 }
 
 /// Whether B's own host is streaming to a client right now.
-async fn hosting(state: &AppState) -> Hosting {
+pub(crate) async fn hosting(state: &AppState) -> Hosting {
     hosting_stream(state).await.0
 }
 

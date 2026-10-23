@@ -190,43 +190,76 @@ async fn hold_the_account_machines(state: &Arc<AppState>) {
 /// not already placed. A machine that never answers is never asked again on
 /// every tick for nothing.
 async fn ask_who_they_are(state: &Arc<AppState>) {
-    let unknown: Vec<(DeviceId, String)> = state
+    let now = crate::account::github::now_unix();
+    let unknown: Vec<(DeviceId, String, Option<String>)> = state
         .registry
         .read()
         .await
         .devices()
         .into_iter()
         // Claimed-by-name cards are still asked: the name is a fallback, and
-        // the id is what should replace it the moment it can be had.
-        .filter(|d| !d.is_self && d.machine_id.is_none())
+        // the id is what should replace it the moment it can be had. Your
+        // own machines are asked again now and then, for the Dusk version
+        // they run, which changes when they update.
+        .filter(|d| !d.is_self && (d.machine_id.is_none() || due_for_version(d, now)))
         .filter(|d| matches!(d.reachability, Reachability::Online { .. }))
-        .filter_map(|d| d.primary_address.clone().map(|a| (d.id, a)))
+        .filter_map(|d| d.primary_address.clone().map(|a| (d.id, a, d.machine_id)))
         .collect();
     if unknown.is_empty() {
         return;
     }
 
-    let asked = join_all(unknown.into_iter().map(|(id, address)| async move {
+    let asked = join_all(unknown.into_iter().map(|(id, address, known)| async move {
         let host = crate::peer::host_part(&address).to_string();
         let answer = crate::peer::identify(&host).await;
-        (id, answer)
+        (id, known, answer)
     }))
     .await;
 
-    for (id, answer) in asked {
-        let Some((machine, _name)) = answer else {
+    for (id, known, answer) in asked {
+        let Some(answer) = answer else {
+            // Asked all the same, so one of yours whose Dusk is not
+            // answering waits its minute rather than costing every tick
+            // the whole timeout. What it said last time stands: one missed
+            // answer, or a restart into an update, is not a change of version.
+            if known.is_some() {
+                state.registry.write().await.mark_asked(&id, now);
+            }
             continue;
         };
-        let mine = match &machine {
-            Some(m) => state.account.knows_machine(m).await,
-            None => false,
-        };
-        state
-            .registry
-            .write()
-            .await
-            .set_identity(&id, machine, mine);
+        match known {
+            // Asked again for its version. Its identity was settled on the
+            // first answer, and an answer saying less (a keystore not yet
+            // readable there) or naming another machine (an address that
+            // moved) does not unsettle it.
+            Some(known) => {
+                let dusk = answer
+                    .dusk
+                    .filter(|_| answer.machine.as_deref() == Some(&known));
+                state.registry.write().await.set_dusk(&id, dusk, now);
+            }
+            None => {
+                let mine = match &answer.machine {
+                    Some(m) => state.account.knows_machine(m).await,
+                    None => false,
+                };
+                let mut registry = state.registry.write().await;
+                registry.set_identity(&id, answer.machine, mine);
+                registry.set_dusk(&id, answer.dusk, now);
+            }
+        }
     }
+}
+
+/// How often one of your machines is asked which Dusk it runs.
+const VERSION_EVERY: u64 = 60;
+
+/// Whether one of your machines is due to be asked its version again.
+fn due_for_version(device: &crate::model::Device, now: u64) -> bool {
+    device.mine
+        && device
+            .asked_at
+            .map_or(true, |at| now.saturating_sub(at) >= VERSION_EVERY)
 }
 
 /// What the client holds for a host.
@@ -512,6 +545,18 @@ async fn probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_your_machines_are_asked_their_version_again_and_not_every_tick() {
+        let mut device = crate::model::Device::new("d".into(), "Mini".into());
+        device.asked_at = Some(1_000);
+        assert!(!due_for_version(&device, 2_000), "not one of yours");
+        device.mine = true;
+        assert!(!due_for_version(&device, 1_000 + VERSION_EVERY - 1));
+        assert!(due_for_version(&device, 1_000 + VERSION_EVERY));
+        device.asked_at = None;
+        assert!(due_for_version(&device, 0));
+    }
 
     fn pem(der: &[u8]) -> String {
         use base64::Engine;

@@ -12,6 +12,7 @@ import {
   type PairProgress,
 } from "../api";
 import { StreamStats } from "./StreamStats";
+import { RemoteUpdate } from "./RemoteUpdate";
 import { describe } from "../errors";
 
 interface Props {
@@ -190,6 +191,8 @@ export function DeviceDrawer({
           )}
 
           {!online && <p className="axi-ink-dim">This machine is not answering.</p>}
+
+          {online && <RemoteUpdate key={device.id} device={device} />}
 
           {/* Not knowing is not "not paired": a host that answered only on
               its plain port this tick says nothing either way, and offering

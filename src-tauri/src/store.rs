@@ -45,6 +45,10 @@ pub struct Store {
     /// other. An enum rather than a `bool` so a missing field, from a fresh
     /// install or an older settings file, reads as on.
     pub clipboard_sharing: ClipboardSharing,
+    /// Install updates and restart while nobody is streaming either way.
+    /// On unless turned off, like [`Store::clipboard_sharing`]: a host
+    /// nobody sits at is the machine this is for.
+    pub auto_update: AutoUpdate,
     /// What the file looked like when it was last read or written here, so
     /// a change another process made since can be told from this copy's
     /// own. Never in the file.
@@ -109,6 +113,21 @@ pub enum ClipboardSharing {
 impl ClipboardSharing {
     pub fn is_on(self) -> bool {
         self == ClipboardSharing::On
+    }
+}
+
+/// Whether Dusk updates itself while this machine is idle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AutoUpdate {
+    #[default]
+    On,
+    Off,
+}
+
+impl AutoUpdate {
+    pub fn is_on(self) -> bool {
+        self == AutoUpdate::On
     }
 }
 
@@ -379,6 +398,12 @@ fn config_base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_update_is_on_for_an_existing_file_without_it() {
+        let store: Store = serde_json::from_str(r#"{"codec":"auto"}"#).unwrap();
+        assert!(store.auto_update.is_on());
+    }
 
     #[test]
     fn clipboard_sharing_is_on_for_an_existing_file_without_it() {

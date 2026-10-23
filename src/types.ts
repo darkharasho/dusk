@@ -73,6 +73,14 @@ export interface Device {
   /** Only populated once paired — `applist` needs the client certificate. */
   apps: HostApp[];
   lastSeenMs: number | null;
+  /** What the machine's own Dusk said about itself; absent until it does. */
+  dusk?: DuskInfo;
+}
+
+export interface DuskInfo {
+  version: string;
+  /** It can update itself when another of your machines asks. */
+  remoteUpdate: boolean;
 }
 
 export type HostPlatform = "windows" | "linux" | "macos" | "mock";
@@ -194,6 +202,10 @@ export interface Snapshot {
   virtualScreenMechanism: ScreenMechanism;
   /** Whether text copied during a stream is shared with the other machine. */
   clipboardSharing: boolean;
+  /** Whether Dusk updates itself while nobody is streaming either way. */
+  autoUpdate: boolean;
+  /** Whether this copy can update with nobody at it at all. */
+  autoUpdatePossible: boolean;
   /**
    * Hosting owes a restart to load a change to its paired machines, and why
    * it has not happened yet. Null when nothing is owed. Until it happens a

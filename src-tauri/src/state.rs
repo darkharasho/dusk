@@ -368,6 +368,16 @@ impl AppState {
         self.streams_ended_within(grace).await;
     }
 
+    /// Whether this machine is streaming from the device `id` right now.
+    pub async fn is_streaming_from(&self, id: &str) -> bool {
+        self.sessions.read().await.contains_key(id)
+    }
+
+    /// Whether this machine is streaming from another one right now.
+    pub async fn has_streams(&self) -> bool {
+        !self.sessions.read().await.is_empty()
+    }
+
     /// Whether every stream's watcher has reported it ended, within `within`.
     async fn streams_ended_within(&self, within: Duration) -> bool {
         let deadline = tokio::time::Instant::now() + within;
@@ -410,6 +420,7 @@ impl AppState {
             codec,
             virtual_screen,
             clipboard_sharing,
+            auto_update,
             restart_owed,
         ) = {
             let store = self.store.lock().await;
@@ -420,6 +431,7 @@ impl AppState {
                 store.codec,
                 store.virtual_screen,
                 store.clipboard_sharing.is_on(),
+                store.auto_update.is_on(),
                 store.restart_owed,
             )
         };
@@ -460,6 +472,9 @@ impl AppState {
             virtual_screen,
             virtual_screen_mechanism: crate::host::virtual_screen::mechanism(),
             clipboard_sharing,
+            auto_update,
+            auto_update_possible: crate::updates::unattended::unattended()
+                == crate::updates::unattended::Unattended::Possible,
             host_restart,
         }
     }

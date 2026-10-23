@@ -169,12 +169,14 @@ export async function restartToUpdate() {
   const version = state.version;
   set({ kind: "installing", version });
   try {
-    await channel.install();
     // So the new Dusk opens its window even if this one was started in the
-    // tray at sign-in: the restart hands on the same command line.
+    // tray at sign-in: the restart hands on the same command line. Before
+    // the install, because on Windows the installer ends this process.
     await invoke("prepare_restart");
+    await channel.install();
     await relaunch();
   } catch (err) {
+    await invoke("cancel_restart").catch(() => {});
     set({ kind: "error", message: describe(err) });
   }
 }

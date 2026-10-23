@@ -118,6 +118,10 @@ pub struct Device {
     /// streaming when nothing is on screen.
     pub streaming_here: bool,
     pub last_seen_ms: Option<u64>,
+    /// What the machine's own Dusk said about itself over the peer port.
+    /// `None` until it answers, and for a Dusk too old to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dusk: Option<DuskInfo>,
 
     /// A name the user typed. Survives merges so discovery cannot overwrite
     /// the label someone chose. Internal to the backend.
@@ -129,6 +133,21 @@ pub struct Device {
     /// it. Internal to the backend.
     #[serde(skip)]
     pub misses: u8,
+    /// When the machine was last asked who it is, in Unix seconds, so a
+    /// machine of yours is asked again now and then for its version.
+    /// Internal to the backend.
+    #[serde(skip)]
+    pub asked_at: Option<u64>,
+}
+
+/// Another machine's Dusk, as it describes itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuskInfo {
+    pub version: String,
+    /// It can update itself with nobody at it, when another of the
+    /// account's machines asks.
+    pub remote_update: bool,
 }
 
 impl Device {
@@ -151,8 +170,10 @@ impl Device {
             apps: Vec::new(),
             streaming_here: false,
             last_seen_ms: None,
+            dusk: None,
             custom_name: None,
             misses: 0,
+            asked_at: None,
         }
     }
 
@@ -288,6 +309,11 @@ pub struct Snapshot {
     pub virtual_screen_mechanism: ScreenMechanism,
     /// Whether text copied during a stream is shared with the other machine.
     pub clipboard_sharing: bool,
+    /// Whether Dusk updates itself while nobody is streaming either way.
+    pub auto_update: bool,
+    /// Whether this copy can update with nobody at it at all: a `.deb`
+    /// needs an administrator password, and a debug build never updates.
+    pub auto_update_possible: bool,
     /// Hosting owes a restart to load a change to its paired machines, and
     /// why it has not happened yet, in words for the window. `None` when
     /// nothing is owed. Until it happens, a machine that paired with this

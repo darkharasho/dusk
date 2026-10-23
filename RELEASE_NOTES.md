@@ -1,5 +1,35 @@
 # Release Notes
 
+Version v0.3.36 — October 22, 2026
+
+Update your other machines from the one you're sitting at.
+
+## Changes
+
+- **Update a machine from here.** Each of your machines now shows which
+  version of Dusk it runs. When one is behind, its panel offers **Update Dusk
+  on this machine**: it fetches the release itself, installs it only if the
+  signature checks out, and comes back the way it was, hidden in the tray if
+  it was hidden. It says no if someone would lose a stream, apart from your
+  own stream from it, which the panel warns will end.
+- **Machines keep themselves up to date.** With **Update automatically when
+  idle** on in Settings, which it is by default, Dusk checks once an hour
+  and installs a new release only while nobody is streaming to or from that
+  machine.
+- **Restarting into an update brings the window back.** Pressing Restart
+  after an update now reopens Dusk instead of leaving it closed.
+
+This version has to be installed by hand once on each machine; from then on
+it can be updated from your others. Linux `.deb` installs and Windows `.msi`
+installs need someone at the machine to approve an update, so they can't be
+updated remotely; the panel says so. A Windows machine shows an installer
+progress window briefly while it updates.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.35 — October 22, 2026
 
 Copy and paste now work across a stream.

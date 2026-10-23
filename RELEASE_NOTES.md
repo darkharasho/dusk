@@ -1,5 +1,24 @@
 # Release Notes
 
+Version v0.3.39 — October 23, 2026
+
+Updating on Linux no longer leaves the old copy's files mounted.
+
+## Changes
+
+- **A restart into an update cleans up after itself on Linux.** Each update
+  of the AppImage used to leave the previous copy's files mounted under
+  `/var/tmp`, with a helper process to serve them, until the next sign-out.
+  A machine updated several times in a day had several of each. The
+  restart now lets go of them properly. The copy you update *from* still
+  runs the old code, so this one update leaves one behind; after that,
+  none.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.38 — October 23, 2026
 
 A machine whose hosting has stopped answering securely now fixes itself, and the other machine says what is wrong.

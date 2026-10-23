@@ -61,7 +61,7 @@ if [[ ! -e "$source_app" ]]; then
 error: no built client at $source_app
 
 Build the fork first, or pass its path:
-  git clone https://github.com/darkharasho/moonlight-qt ../moonlight-qt
+  git clone https://github.com/darkharasho/dusk-client ../moonlight-qt
   cd ../moonlight-qt && <its own build steps>
 
 Released builds are published by that repository under a dusk-v* tag; CI

@@ -7,7 +7,7 @@ version 3, whose text is in `GPL-3.0.txt` beside this file.
 
 | Program | What it does in Dusk | Source |
 | --- | --- | --- |
-| Dusk's Moonlight client, a fork of moonlight-qt | Shows the stream from another machine | <https://github.com/darkharasho/moonlight-qt> |
+| Dusk's Moonlight client, a fork of moonlight-qt | Shows the stream from another machine | <https://github.com/darkharasho/dusk-client> |
 | Sunshine | Lets other machines stream from this one | <https://github.com/LizardByte/Sunshine> |
 
 The exact versions in this copy of Dusk are listed in `versions.txt` beside

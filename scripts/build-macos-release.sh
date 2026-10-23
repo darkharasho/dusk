@@ -59,7 +59,7 @@ client="${DUSK_CLIENT_APP:-../moonlight-qt/app/Moonlight.app}"
 if [ ! -d "$client" ]; then
   echo "error: no Moonlight client at $client" >&2
   echo "       Set DUSK_CLIENT_APP, or download the dusk-v* release of" >&2
-  echo "       darkharasho/moonlight-qt and point at the .app inside it." >&2
+  echo "       darkharasho/dusk-client and point at the .app inside it." >&2
   exit 1
 fi
 

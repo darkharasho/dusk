@@ -6,7 +6,18 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.39 is released**: a restart into an update no longer leaks the old
+**v0.3.40 is released**, with client `dusk-v0.2.7`: the overlay's display
+picker lists only the host's screens. The host reports its screen count in
+`DisplaySize`, the client Dusk forwards it to the stream window as
+`host_displays {count}`, and the picker hides "Switch display" on a
+one-screen host. The client is now built and published from
+**darkharasho/dusk-client**, a plain (non-fork) copy of the fork: GitHub
+stopped starting any Actions run on darkharasho/moonlight-qt (dispatch
+answered `422 Actions has been disabled` with Actions enabled in its
+settings). Push the fork's `master` and `dusk-v*` tags to both; only
+dusk-client's release is downloaded by `release.yml`.
+
+Before that, **v0.3.39** was released: a restart into an update no longer leaks the old
 AppImage's mount. The runtime keeps its FUSE mount alive on a pipe whose
 read end Dusk inherits, and Tauri's relaunch passed it on to the next Dusk,
 so every self-update left a fuse process and a `/var/tmp/.mount_dusk.*`
@@ -675,7 +686,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.39>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.40>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon
@@ -771,7 +782,7 @@ FFmpeg and libplacebo from source — hours. Don't. Download the published
 client instead and put it where the search already looks:
 
 ```sh
-gh release download dusk-v0.2.3 --repo darkharasho/moonlight-qt \
+gh release download dusk-v0.2.7 --repo darkharasho/dusk-client \
   --pattern 'dusk-client-linux-x86_64.tar.gz'
 tar xzf dusk-client-linux-x86_64.tar.gz
 mkdir -p ../moonlight-qt/app && mv moonlight ../moonlight-qt/app/moonlight

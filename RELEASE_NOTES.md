@@ -1,5 +1,29 @@
 # Release Notes
 
+Version v0.3.40 — October 23, 2026
+
+The in-stream display picker now shows only the screens the other machine actually has.
+
+## Changes
+
+- **Switching displays lists the host's real screens.** The overlay used to
+  offer a fixed run of screens whether or not they existed. It now lists one
+  entry per screen on the machine you are streaming from, and switching
+  between them moves the stream to that screen.
+- **No display switch on a one-screen host.** When the other machine has a
+  single screen, "Switch display" no longer appears.
+- **End the session from the overlay.** A new row ends the session on the
+  other machine, not just this stream.
+- **A dropped session says it can be resumed.** The device drawer now says
+  so when a stream ended but the session is still running on the host.
+- The other machine needs v0.3.40 too to report its screens; with an older
+  one, the picker behaves as before.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.39 — October 23, 2026
 
 Updating on Linux no longer leaves the old copy's files mounted.

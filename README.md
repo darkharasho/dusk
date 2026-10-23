@@ -39,7 +39,7 @@ it in a browser gets you a page with no backend, so it is rarely what you want.
 backend. It exists because a Mac cannot usefully run Sunshine (see below), and
 the rest of the UI should not be blocked on that.
 
-Dusk streams through its own [fork of moonlight-qt](https://github.com/darkharasho/moonlight-qt),
+Dusk streams through its own [fork of moonlight-qt](https://github.com/darkharasho/dusk-client),
 which carries the in-stream overlay. A dev build finds it in a sibling
 checkout. A packaged build carries its own copy, and how it gets there
 differs by platform:
@@ -110,7 +110,7 @@ platforms in parallel. What ships:
 
 Each build stages the forked Moonlight client first, downloaded from the
 `CLIENT_TAG` release of
-[darkharasho/moonlight-qt](https://github.com/darkharasho/moonlight-qt). That
+[darkharasho/dusk-client](https://github.com/darkharasho/dusk-client). That
 tag is pinned in `release.yml` rather than tracking latest: the two are a
 matched pair, and a tagged Dusk should build the same way next year as it does
 today. Bumping the client is an edit to that one line.

@@ -89,6 +89,9 @@
 //! else declines. The identity answer says which Dusk a machine runs, and
 //! whether it can update this way, so the grid knows when to offer it.
 //!
+//! It is asked before every stream, whatever size the stream will be,
+//! because a Mac answering it also wakes its screen.
+//!
 //! `screen` is the asking machine's own, and is new in 0.3.10. A host
 //! streaming its virtual display answers with the size closest to it that
 //! the display has, so the stream is the asker's shape; one streaming its
@@ -372,12 +375,15 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
             streaming,
             proof,
         }) => handle_update(&app, &state, at, streaming, &proof).await,
-        Ok(Message::Display { screen }) => match display_answer(&app, &state, screen).await {
-            Some((width, height)) => Message::DisplaySize { width, height },
-            None => Message::Declined {
-                reason: "This machine could not tell its screen size.".into(),
-            },
-        },
+        Ok(Message::Display { screen }) => {
+            wake_screen();
+            match display_answer(&app, &state, screen).await {
+                Some((width, height)) => Message::DisplaySize { width, height },
+                None => Message::Declined {
+                    reason: "This machine could not tell its screen size.".into(),
+                },
+            }
+        }
         _ => Message::Declined {
             reason: UNDERSTOOD_NOTHING.into(),
         },
@@ -553,6 +559,27 @@ pub fn watch_for_a_screen_left_resized(state: Arc<AppState>) {
                     tauri::async_runtime::spawn_blocking(crate::host::screen_mode::put_back).await;
             }
         }
+    });
+}
+
+/// Turn this machine's screen on, because a stream from it is about to
+/// start.
+///
+/// A Mac whose display has gone to sleep streams black, and is slow to
+/// notice anyone connecting; one that is locked shows its lock screen,
+/// which the person streaming can type past. Declaring the user active is
+/// what touching a key would do. Held long enough for the stream to start,
+/// after which its input keeps the screen on. Only a Mac is known to need
+/// it.
+fn wake_screen() {
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(|| {
+        let _ = std::process::Command::new("/usr/bin/caffeinate")
+            .args(["-u", "-t", "30"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     });
 }
 

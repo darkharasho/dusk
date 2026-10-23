@@ -334,6 +334,15 @@ const FALLBACK_SIZE: (u32, u32) = (1920, 1080);
 /// The size to stream at, from the Streaming setting.
 async fn stream_size(app: &AppHandle, state: &Arc<AppState>, address: &str) -> (u32, u32) {
     let resolution = state.store.lock().await.resolution;
+    // Asked whatever the setting, since the question also wakes a Mac's
+    // screen; only Match host waits for the answer.
+    if resolution != Resolution::MatchHost {
+        let host = crate::peer::host_part(address).to_string();
+        let screen = this_display(app);
+        tauri::async_runtime::spawn(async move {
+            crate::peer::display_size(&host, screen).await;
+        });
+    }
     let size = match resolution {
         Resolution::MatchHost => {
             crate::peer::display_size(crate::peer::host_part(address), this_display(app)).await

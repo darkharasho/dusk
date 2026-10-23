@@ -119,6 +119,7 @@ dusk → helper   set_quality {bitrate, fps, resolution}
                 disconnect
                 show_overlay
                 host_display {id}
+                host_displays {count}
 ```
 
 This is what turns the floating handle into a real control rather than a

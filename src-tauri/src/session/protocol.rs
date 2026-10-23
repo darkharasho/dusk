@@ -146,6 +146,12 @@ pub enum ToClient {
     HostDisplay {
         id: String,
     },
+    /// How many displays the host has to switch between, so the overlay
+    /// offers those and no more. Sent once the host has said; a client
+    /// that never hears it cannot know, and falls back to its own guess.
+    HostDisplays {
+        count: u32,
+    },
     /// Text copied on the host, for the client to put on its clipboard.
     Clipboard {
         format: String,
@@ -174,6 +180,10 @@ impl std::fmt::Debug for ToClient {
             ToClient::Disconnect => f.write_str("Disconnect"),
             ToClient::ShowOverlay => f.write_str("ShowOverlay"),
             ToClient::HostDisplay { id } => f.debug_struct("HostDisplay").field("id", id).finish(),
+            ToClient::HostDisplays { count } => f
+                .debug_struct("HostDisplays")
+                .field("count", count)
+                .finish(),
             ToClient::Clipboard { format, text } => f
                 .debug_struct("Clipboard")
                 .field("format", format)
@@ -476,6 +486,7 @@ mod tests {
             ToClient::Disconnect,
             ToClient::ShowOverlay,
             ToClient::HostDisplay { id: "1".into() },
+            ToClient::HostDisplays { count: 2 },
             ToClient::Clipboard {
                 format: "text".into(),
                 text: "a\nb".into(),

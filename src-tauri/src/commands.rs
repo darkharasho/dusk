@@ -332,20 +332,33 @@ pub async fn open_sign_in_page() -> Result<(), String> {
 const FALLBACK_SIZE: (u32, u32) = (1920, 1080);
 
 /// The size to stream at, from the Streaming setting.
-async fn stream_size(app: &AppHandle, state: &Arc<AppState>, address: &str) -> (u32, u32) {
+///
+/// The host's answer also says how many displays it has, which goes to the
+/// client through `control` so its overlay offers only those.
+async fn stream_size(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    address: &str,
+    control: crate::session::Control,
+) -> (u32, u32) {
     let resolution = state.store.lock().await.resolution;
     // Asked whatever the setting, since the question also wakes a Mac's
-    // screen; only Match host waits for the answer.
+    // screen and counts its displays; only Match host waits for the answer.
     if resolution != Resolution::MatchHost {
         let host = crate::peer::host_part(address).to_string();
         let screen = this_display(app);
+        let control = control.clone();
         tauri::async_runtime::spawn(async move {
-            crate::peer::display_size(&host, screen).await;
+            let answer = crate::peer::display_size(&host, screen).await;
+            tell_host_displays(&control, answer);
         });
     }
     let size = match resolution {
         Resolution::MatchHost => {
-            crate::peer::display_size(crate::peer::host_part(address), this_display(app)).await
+            let answer =
+                crate::peer::display_size(crate::peer::host_part(address), this_display(app)).await;
+            tell_host_displays(&control, answer);
+            answer.map(|a| a.size)
         }
         Resolution::MatchThisDisplay => this_display(app),
         Resolution::Fixed { width, height } => Some((width, height)),
@@ -354,6 +367,14 @@ async fn stream_size(app: &AppHandle, state: &Arc<AppState>, address: &str) -> (
     // one pixel less is better than a stream that will not start.
     let (width, height) = size.unwrap_or(FALLBACK_SIZE);
     (width & !1, height & !1)
+}
+
+/// Pass on how many displays the host said it has. Nothing is sent when it
+/// did not say, which leaves the client to its own guess.
+fn tell_host_displays(control: &crate::session::Control, answer: Option<crate::peer::HostScreen>) {
+    if let Some(count) = answer.and_then(|a| a.displays) {
+        control.send(crate::session::ToClient::HostDisplays { count });
+    }
 }
 
 /// The screen Dusk's window is on, which is where the stream will open.
@@ -672,7 +693,7 @@ pub async fn launch_app(
         (store.bitrate_kbps, store.codec)
     };
     let options = crate::moonlight::cli::StreamOptions {
-        resolution: Some(stream_size(&app, &inner, &address).await),
+        resolution: Some(stream_size(&app, &inner, &address, session.control()).await),
         bitrate,
         codec: (codec != Codec::Auto).then_some(codec),
         ..Default::default()

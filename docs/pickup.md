@@ -863,7 +863,8 @@ rather than a summary. Where each side stands:
   has its own thread because `Session::exec` holds the main thread and Qt's
   event loop is suspended for the whole stream. Messages from Dusk come
   back as SDL events: `disconnect` quits, `show_overlay` opens the menu,
-  `host_display` presses Ctrl+Alt+Shift+F*n* on the host. `set_quality`
+  `host_display` presses Ctrl+Alt+Shift+F*n* on the host, `host_displays`
+  sizes the overlay's display picker to the host's screens. `set_quality`
   only logs that it is unsupported. Each time the decoder rolls its
   one-second stats window it sends `stats`, measured the way the debug
   overlay measures them.

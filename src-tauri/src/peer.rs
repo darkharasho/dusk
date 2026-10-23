@@ -192,6 +192,11 @@ pub enum Message {
     DisplaySize {
         width: u32,
         height: u32,
+        /// How many screens a stream from here can be switched between.
+        /// New in 0.3.40; older ones say nothing, and the overlay then
+        /// cannot know.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        displays: Option<u32>,
     },
     /// Which machine is this?
     ///
@@ -378,7 +383,11 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
         Ok(Message::Display { screen }) => {
             wake_screen();
             match display_answer(&app, &state, screen).await {
-                Some((width, height)) => Message::DisplaySize { width, height },
+                Some((width, height)) => Message::DisplaySize {
+                    width,
+                    height,
+                    displays: host_display_count(&app, &state).await,
+                },
                 None => Message::Declined {
                     reason: "This machine could not tell its screen size.".into(),
                 },
@@ -595,6 +604,21 @@ fn host_display(app: &AppHandle) -> Option<(u32, u32)> {
     };
     let size = monitor.size();
     (size.width > 0 && size.height > 0).then_some((size.width, size.height))
+}
+
+/// How many screens the host can switch a stream between.
+///
+/// Every screen the desktop has, since that is what the host lists for its
+/// display switch, except while the virtual display is on: Windows then
+/// turns the other screens off for the length of a stream, leaving the
+/// virtual one as the only one there is. `None` when the desktop will not
+/// say.
+async fn host_display_count(app: &AppHandle, state: &Arc<AppState>) -> Option<u32> {
+    if cfg!(windows) && state.store.lock().await.virtual_screen {
+        return Some(1);
+    }
+    let count = app.available_monitors().ok()?.len();
+    (count > 0).then_some(count as u32)
 }
 
 /// How [`pair_for_account`] went.
@@ -917,10 +941,19 @@ async fn ask_cert_at(address: &str, port: u16, request: Message) -> CertOutcome 
     }
 }
 
+/// What a host says about the screens a stream from it shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostScreen {
+    /// The size to stream at.
+    pub size: (u32, u32),
+    /// How many screens the stream can be switched between, if it said.
+    pub displays: Option<u32>,
+}
+
 /// Ask the Dusk at `address` what size to stream at, telling it the size of
 /// the screen here. `None` when there is no Dusk there, or one too old to
 /// say. Kept short: a stream is waiting.
-pub async fn display_size(address: &str, screen: Option<(u32, u32)>) -> Option<(u32, u32)> {
+pub async fn display_size(address: &str, screen: Option<(u32, u32)>) -> Option<HostScreen> {
     display_size_at(address, PORT, screen).await
 }
 
@@ -928,7 +961,7 @@ async fn display_size_at(
     address: &str,
     port: u16,
     screen: Option<(u32, u32)>,
-) -> Option<(u32, u32)> {
+) -> Option<HostScreen> {
     let budget = Duration::from_secs(2);
     let connect = TcpStream::connect((address, port));
     let stream = tokio::time::timeout(budget, connect).await.ok()?.ok()?;
@@ -943,10 +976,17 @@ async fn display_size_at(
     match serde_json::from_str::<Message>(&line).ok()? {
         // Nothing streams at a size like 0x0 or 100000 wide; a host saying
         // so is broken, and a fixed size serves better than believing it.
-        Message::DisplaySize { width, height }
-            if (320..=15360).contains(&width) && (240..=8640).contains(&height) =>
-        {
-            Some((width, height))
+        Message::DisplaySize {
+            width,
+            height,
+            displays,
+        } if (320..=15360).contains(&width) && (240..=8640).contains(&height) => {
+            Some(HostScreen {
+                size: (width, height),
+                // Sunshine switches on F1..F12, so a count past that, or
+                // none at all, is not one to offer.
+                displays: displays.filter(|n| (1..=12).contains(n)),
+            })
         }
         _ => None,
     }
@@ -1235,10 +1275,20 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Message::DisplaySize {
                 width: 2560,
-                height: 1440
+                height: 1440,
+                displays: None,
             })
             .unwrap(),
             r#"{"type":"display_size","width":2560,"height":1440}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Message::DisplaySize {
+                width: 2560,
+                height: 1440,
+                displays: Some(2),
+            })
+            .unwrap(),
+            r#"{"type":"display_size","width":2560,"height":1440,"displays":2}"#
         );
     }
 
@@ -1405,7 +1455,35 @@ mod tests {
         let port = host_answering(r#"{"type":"display_size","width":3440,"height":1440}"#).await;
         assert_eq!(
             display_size_at("127.0.0.1", port, Some((3440, 1440))).await,
-            Some((3440, 1440))
+            Some(HostScreen {
+                size: (3440, 1440),
+                displays: None
+            }),
+            "a host older than the display count still gives its size"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_host_says_how_many_screens_it_has() {
+        let port =
+            host_answering(r#"{"type":"display_size","width":3440,"height":1440,"displays":2}"#)
+                .await;
+        assert_eq!(
+            display_size_at("127.0.0.1", port, None).await,
+            Some(HostScreen {
+                size: (3440, 1440),
+                displays: Some(2)
+            })
+        );
+        // More than the host can switch between is not a count to offer.
+        let port =
+            host_answering(r#"{"type":"display_size","width":3440,"height":1440,"displays":40}"#)
+                .await;
+        assert_eq!(
+            display_size_at("127.0.0.1", port, None)
+                .await
+                .and_then(|h| h.displays),
+            None
         );
     }
 

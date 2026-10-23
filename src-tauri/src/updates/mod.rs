@@ -133,7 +133,11 @@ pub fn keep_descriptors_from_the_next_dusk() {
             return;
         };
         for entry in entries.flatten() {
-            let Some(fd) = entry.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else {
+            let Some(fd) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<i32>().ok())
+            else {
                 continue;
             };
             if fd <= 2 {
@@ -175,7 +179,10 @@ mod tests {
         let mut fds = [0i32; 2];
         // SAFETY: a fresh pipe, closed below.
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        assert!(!cloexec(fds[0]), "a pipe from libc starts inheritable, as the runtime's is");
+        assert!(
+            !cloexec(fds[0]),
+            "a pipe from libc starts inheritable, as the runtime's is"
+        );
 
         keep_descriptors_from_the_next_dusk();
 

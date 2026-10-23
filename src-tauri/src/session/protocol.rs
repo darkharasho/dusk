@@ -92,8 +92,12 @@ impl std::fmt::Debug for FromClient {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayAction {
-    /// End the session and come back to Dusk.
+    /// Leave the stream and come back to Dusk. The host keeps the session
+    /// running, so the next stream from any machine resumes it.
     Disconnect,
+    /// Leave the stream and close the session on the host too. The client
+    /// quits the host's app itself as it goes, so this is said, not asked.
+    EndSession,
     /// Bring Dusk's window up on this machine's settings.
     Settings,
     /// Ask Dusk for a different quality; Dusk answers with `SetQuality`.
@@ -374,6 +378,19 @@ mod tests {
         assert_eq!(
             c.accept(r#"{"type":"overlay_action","action":"settings"}"#),
             Effect::Overlay(OverlayAction::Settings)
+        );
+    }
+
+    #[test]
+    fn ending_the_session_is_its_own_intent_not_a_disconnect() {
+        // Disconnect leaves the host's session running for the next stream
+        // to resume; ending it closes it on the host. Folding the two
+        // together would lose which one the person asked for.
+        let mut c = Conversation::new("t");
+        c.accept(&ready("t"));
+        assert_eq!(
+            c.accept(r#"{"type":"overlay_action","action":"end_session"}"#),
+            Effect::Overlay(OverlayAction::EndSession)
         );
     }
 

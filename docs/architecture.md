@@ -112,7 +112,7 @@ else on the machine can drive it.
 ```
 helper → dusk   ready
                 stats {fps, bitrate, rtt, decodeMs, loss}
-                overlay_action {disconnect | settings | quality}
+                overlay_action {disconnect | end_session | settings | quality}
                 disconnected {reason}
 
 dusk → helper   set_quality {bitrate, fps, resolution}

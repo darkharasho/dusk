@@ -868,7 +868,10 @@ rather than a summary. Where each side stands:
   one-second stats window it sends `stats`, measured the way the debug
   overlay measures them.
 - **Overlay.** Disconnect sends `overlay_action: disconnect` and then quits
-  without waiting on Dusk. An **Open Dusk** row, shown only when Dusk
+  without waiting on Dusk, leaving the host's session running for the next
+  stream from any machine to resume. **End session** below it sends
+  `end_session` and quits the same way, but closes the session on the host
+  as it goes, through the client's own quit-and-exit path. An **Open Dusk** row, shown only when Dusk
   launched the stream, sends `settings`. It also releases the mouse and
   minimises a full-screen stream, so the window Dusk raises is not hidden.
 - **Dusk** logs the handshake and each overlay action (`dusk: the client

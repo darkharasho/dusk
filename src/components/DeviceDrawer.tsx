@@ -245,8 +245,9 @@ export function DeviceDrawer({
                       looks wrong and one that explains itself. */}
                   {!device.streamingHere && (
                     <p className="axi-ink-dim">
-                      This machine is holding a session open with no client
-                      attached. Streaming will resume it.
+                      Disconnected. The session is still running on this
+                      machine, and connecting from any of your devices picks
+                      it up.
                     </p>
                   )}
                   {device.streamingHere && <StreamStats deviceId={device.id} />}

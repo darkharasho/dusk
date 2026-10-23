@@ -764,6 +764,13 @@ pub async fn launch_app(
                         eprintln!("dusk: the overlay asked to disconnect");
                         session.send(crate::session::ToClient::Disconnect);
                     }
+                    // The client quits the host's app on its way out, as it
+                    // does for its own quit-and-exit combo, so there is
+                    // nothing to add here beyond seeing it go.
+                    crate::session::OverlayAction::EndSession => {
+                        eprintln!("dusk: the overlay asked to end the session on the host");
+                        session.send(crate::session::ToClient::Disconnect);
+                    }
                     crate::session::OverlayAction::Settings => {
                         eprintln!("dusk: the overlay asked for Dusk");
                         crate::tray::show_window(&overlay_app);

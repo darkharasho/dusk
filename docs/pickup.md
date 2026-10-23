@@ -6,7 +6,17 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.40 is released**, with client `dusk-v0.2.7`: the overlay's display
+**v0.3.41 is released**: the macOS host is Sunshine `v2026.1018.5342`
+(`SUNSHINE_MACOS_TAG`, an upstream prerelease) while Linux and Windows stay
+on `SUNSHINE_TAG`. 2026.914 kept the Mac pointer on the main display, so
+after switching the stream to a second screen the mouse was dead there;
+1018's libvirtualhid targets the captured display. Tested on Michaels-Mini
+over SSH (`ssh mini`). That Mac had also been running a standalone
+Sunshine 2026.516 from `/Applications`, which Dusk defers to and which
+ignores display switches outright; Dusk does not yet warn about an
+older installed host.
+
+Before that, **v0.3.40** was released, with client `dusk-v0.2.7`: the overlay's display
 picker lists only the host's screens. The host reports its screen count in
 `DisplaySize`, the client Dusk forwards it to the stream window as
 `host_displays {count}`, and the picker hides "Switch display" on a
@@ -686,7 +696,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.40>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.41>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon

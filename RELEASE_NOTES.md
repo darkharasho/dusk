@@ -1,5 +1,17 @@
 # Release Notes
 
+Version v0.3.41 — October 23, 2026
+
+On a Mac you stream from, the mouse now works on whichever screen you switch to.
+
+## Changes
+
+- **The mouse follows a display switch on macOS.** After switching the
+  stream to a Mac's second screen, the pointer stayed stuck on the main
+  one, so the other screen could not be used. The host bundled into Dusk
+  for Mac is updated and now moves the pointer on the screen being shown.
+- Linux and Windows hosts are unchanged.
+
 Version v0.3.40 — October 23, 2026
 
 The in-stream display picker now shows only the screens the other machine actually has.

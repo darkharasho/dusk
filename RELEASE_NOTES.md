@@ -1,5 +1,27 @@
 # Release Notes
 
+Version v0.3.37 — October 22, 2026
+
+Reach a Mac whose screen is asleep or locked.
+
+## Changes
+
+- **Connecting wakes a Mac's screen.** When you start a stream to a Mac,
+  its screen now turns on first, so a Mac whose display had gone to sleep
+  no longer refuses the stream. A locked Mac shows its lock screen in the
+  stream, and you can type your password there.
+
+A Mac that has gone fully to sleep still can't be reached. To help it wake
+when you connect, turn on **Wake for network access** in its System
+Settings › Energy (or Battery › Options on a laptop). The Mac has to run
+this version for its screen to wake; if it runs v0.3.36 you can update it
+from here.
+
+## Install
+
+macOS: the `.dmg`, signed and notarized, universal. Windows: the `.msi` or
+the `setup.exe`. Linux: the `.deb` where it fits, otherwise the `.AppImage`.
+
 Version v0.3.36 — October 22, 2026
 
 Update your other machines from the one you're sitting at.

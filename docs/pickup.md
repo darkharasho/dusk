@@ -6,7 +6,12 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.36 is released**: one machine can update another over the peer
+**v0.3.37 is released**: a Mac asked the `display` question on the peer
+port turns its screen on (`caffeinate -u`), and the question is now asked
+before every stream, so a Mac whose screen slept or locked can be reached.
+A Mac in full system sleep still can't. Not yet tried on a real Mac.
+
+Before that, **v0.3.36** was released: one machine can update another over the peer
 port (a signed, single-use `Update` request), and each updates itself when
 idle (`src-tauri/src/updates/unattended.rs`). `.deb` and `.msi` installs
 can't, as they need an administrator. Not yet tried live between two
@@ -653,7 +658,7 @@ size by default (Settings › Streaming › Resolution; the host's Dusk
 answers a `display` question on the peer port, and anything that can't
 gets 1080p). The rarer renderers (VA-API direct, DXVA2, DRM, MMAL,
 AVSampleLayer) still place the handle relative to the window.
-<https://github.com/darkharasho/dusk/releases/tag/v0.3.36>
+<https://github.com/darkharasho/dusk/releases/tag/v0.3.37>
 
 **Startup settings** (Settings › Startup): open at sign-in, start in the
 tray, keep running when the window is closed; on macOS the dock icon

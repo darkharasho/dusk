@@ -213,6 +213,7 @@ async fn install_and_restart(
         return Err(e.to_string());
     }
     super::ensure_self_executable();
+    super::keep_descriptors_from_the_next_dusk();
     app.restart();
 }
 

@@ -6,6 +6,14 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
+**Unreleased on main**: a restart into an update no longer leaks the old
+AppImage's mount. The runtime keeps its FUSE mount alive on a pipe whose
+read end Dusk inherits, and Tauri's relaunch passed it on to the next Dusk,
+so every self-update left a fuse process and a `/var/tmp/.mount_dusk.*`
+behind (five after a day of releases). Both restart paths now go through
+`updates::keep_descriptors_from_the_next_dusk` first, and the process
+plugin is gone.
+
 **v0.3.38 is released**: a host whose pairing port (47984) stops
 completing handshakes while its plain port still answers is restarted by
 its own Dusk (`src-tauri/src/host/watchdog.rs`: three 30 s looks with a

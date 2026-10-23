@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { describe } from "./errors";
 
 /**
@@ -174,7 +173,10 @@ export async function restartToUpdate() {
     // the install, because on Windows the installer ends this process.
     await invoke("prepare_restart");
     await channel.install();
-    await relaunch();
+    // Dusk's own relaunch rather than the process plugin's: on Linux it
+    // first keeps this Dusk's descriptors from the next one, or the
+    // AppImage it is leaving stays mounted for as long as the new one runs.
+    await invoke("restart_into_update");
   } catch (err) {
     await invoke("cancel_restart").catch(() => {});
     set({ kind: "error", message: describe(err) });

@@ -179,7 +179,6 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 startup::on_close_requested(window, api);
@@ -375,6 +374,7 @@ pub fn run() {
             updates::ensure_self_executable,
             updates::prepare_restart,
             updates::cancel_restart,
+            updates::restart_into_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Dusk");

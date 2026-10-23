@@ -59,7 +59,6 @@ tauri-plugin-single-instance = "2"
 # Self-update from the GitHub release's latest.json, signed with Dusk's own
 # key, and the relaunch that finishes one.
 tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
 minisign-verify = "0.3.0"
 base64 = "0.23.1"
 

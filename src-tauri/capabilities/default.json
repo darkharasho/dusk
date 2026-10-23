@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Dusk's own commands need no grant, but `listen` does: without core:event the backend's snapshot pushes are dropped and the grid only ever shows its first paint. The window grants are the titlebar's, which draws its own buttons and drag strip; updater and process are the self-update and the relaunch that finishes it.",
+  "description": "Dusk's own commands need no grant, but `listen` does: without core:event the backend's snapshot pushes are dropped and the grid only ever shows its first paint. The window grants are the titlebar's, which draws its own buttons and drag strip; updater is the self-update, and the relaunch that finishes it is a command of Dusk's own.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -10,7 +10,6 @@
     "core:window:allow-is-maximized",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
-    "updater:default",
-    "process:allow-restart"
+    "updater:default"
   ]
 }

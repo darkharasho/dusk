@@ -113,3 +113,78 @@ pub fn cancel_restart(app: tauri::AppHandle) {
         let _ = crate::startup::take_launch_marker(&dir);
     }
 }
+
+/// Marks every descriptor above the standard three close-on-exec, so the
+/// Dusk spawned by a restart inherits none of them. Only ever called on the
+/// way out, so nothing here needs them past the spawn.
+///
+/// The AppImage runtime keeps its mount alive on a pipe: the fuse process
+/// writes into it until the last read end closes, then unmounts and exits.
+/// That read end reaches Dusk through `exec`, inheritable, and Tauri's
+/// restart spawns the next Dusk with everything inheritable. The old mount
+/// then lives as long as the new Dusk does, and the Dusk after that, since
+/// each one hands the pipe on: a day of releases left five fuse processes
+/// and five mounts under /var/tmp on one machine. Each was `kill`ed by hand
+/// on 2026-10-23; from here the pipe breaks as the runtime expects.
+pub fn keep_descriptors_from_the_next_dusk() {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Some(fd) = entry.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else {
+                continue;
+            };
+            if fd <= 2 {
+                continue;
+            }
+            // SAFETY: fcntl on a descriptor this process owns, reading and
+            // setting only its close-on-exec flag.
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+        }
+    }
+}
+
+/// Restart into the update that has just been installed: the process
+/// plugin's relaunch, after [`keep_descriptors_from_the_next_dusk`], which
+/// Tauri's restart has no hook for.
+#[tauri::command]
+pub fn restart_into_update(app: tauri::AppHandle) {
+    keep_descriptors_from_the_next_dusk();
+    app.restart()
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    fn cloexec(fd: i32) -> bool {
+        // SAFETY: reads a flag of a descriptor the test owns, or of stdin.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        flags >= 0 && flags & libc::FD_CLOEXEC != 0
+    }
+
+    #[test]
+    fn an_inherited_pipe_is_kept_from_the_next_dusk() {
+        let mut fds = [0i32; 2];
+        // SAFETY: a fresh pipe, closed below.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        assert!(!cloexec(fds[0]), "a pipe from libc starts inheritable, as the runtime's is");
+
+        keep_descriptors_from_the_next_dusk();
+
+        assert!(cloexec(fds[0]) && cloexec(fds[1]));
+        assert!(!cloexec(0), "stdin still reaches the next Dusk");
+        // SAFETY: the pipe above, used by nothing else.
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+    }
+}

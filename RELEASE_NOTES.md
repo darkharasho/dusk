@@ -1,5 +1,21 @@
 # Release Notes
 
+Version v0.3.42 — October 27, 2026
+
+A stream that cannot reach the other machine now says so, instead of quietly
+going back to Ready.
+
+## Changes
+
+- **A failed stream gives its reason.** Starting a stream to a machine that
+  was asleep, or had gone off the network, put the card back to Ready as
+  though nothing had been asked — the reason existed, but nowhere you could
+  see it. The failure is now shown, in the client's own words: "Failed to
+  connect to 192.168.50.146".
+- **A session's log is worth keeping.** When a stream fails, Dusk's log for
+  that session now holds the reason and the streaming client's own account of
+  it, rather than a pointer to a file that a reboot deletes.
+
 Version v0.3.41 — October 23, 2026
 
 On a Mac you stream from, the mouse now works on whichever screen you switch to.

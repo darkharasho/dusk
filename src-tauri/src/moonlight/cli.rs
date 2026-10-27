@@ -5,9 +5,15 @@
 //! `applist` endpoint instead (see [`crate::applist`]): it is structured XML
 //! rather than CLI text, and Dusk already holds the certificate it needs.
 //!
-//! Two things measured against moonlight-qt 6.x rather than assumed:
+//! Things measured against moonlight-qt 6.x rather than assumed:
 //!
-//! - It exits **255** on failure, so the exit status is trustworthy.
+//! - The CLI actions — `pair`, `quit`, `list` — exit **255** on failure, so
+//!   there the exit status is trustworthy.
+//! - `stream` is not one of them. A launch that fails puts its reason in a
+//!   dialog, logs it, and then exits **0**, because the CLI segue reports
+//!   through QML rather than through a status. So a clean exit is no proof a
+//!   stream ran, and [`Moonlight::wait_for_session`] asks the client's log
+//!   before believing one.
 //! - Everything human-readable, including a `Redirecting log output to ...`
 //!   banner it prints on every run, goes to **stderr**. stdout carries only
 //!   data, which is why errors here are built from stderr with that banner
@@ -341,7 +347,11 @@ impl Moonlight {
         child: &mut Child,
         log: Option<super::stream_log::StreamLog>,
     ) -> Result<(), MoonlightError> {
+        // Shared rather than moved into the drain, so the client's own account
+        // of a failure can still be folded in once the session has ended.
+        let log = log.map(std::sync::Arc::new);
         let drain = child.stderr.take().map(|stderr| {
+            let log = log.clone();
             tokio::spawn(async move {
                 // Read bytes, not lines-as-strings: a `Lines` reader stops
                 // at the first line that is not UTF-8, and then nobody
@@ -386,13 +396,46 @@ impl Moonlight {
             None => String::new(),
         };
 
-        if status.success() {
-            return Ok(());
+        // A clean exit is not proof the stream ran. When a launch fails, the
+        // CLI segue puts the reason in a dialog, logs it through QML's
+        // `console.error`, and quits normally — so moonlight-qt exits 0 on a
+        // host it never reached. Trusting the status alone is what left the
+        // card flipping back to Ready with nothing said, while the reason sat
+        // in a log file nobody read. On that path only the client's log is
+        // consulted, never the last line of stderr: a session that genuinely
+        // ran leaves FFmpeg and SDL trace there, and any of it would read as
+        // a reason.
+        let failure = if status.success() {
+            dialog_failure(&stderr)
+        } else {
+            Some(
+                reason(&stderr)
+                    .or_else(|| {
+                        crashed(status).then(|| "The streaming client crashed.".to_string())
+                    })
+                    .unwrap_or_else(|| NO_REASON.into()),
+            )
+        };
+
+        // The client keeps its real account in a file of its own and puts
+        // only the banner naming it on stderr, so a failed session's log here
+        // held two lines and no reason. That file is under `/tmp` on most
+        // platforms, which a reboot empties — copying the tail across is what
+        // makes this log still worth reading tomorrow.
+        if let (Some(log), Some(message)) = (&log, &failure) {
+            log.line(&format!("dusk: the stream failed: {message}"));
+            if let Some(path) = log_path(&stderr) {
+                log.line(&format!("dusk: the client's own log was {path:?}"));
+                for line in read_tail(&path).as_deref().unwrap_or_default().lines() {
+                    log.line(line);
+                }
+            }
         }
-        let message = reason(&stderr)
-            .or_else(|| crashed(status).then(|| "The streaming client crashed.".to_string()))
-            .unwrap_or_else(|| NO_REASON.into());
-        Err(MoonlightError::Failed(message))
+
+        match failure {
+            Some(message) => Err(MoonlightError::Failed(message)),
+            None => Ok(()),
+        }
     }
 
     async fn run(&self, args: &[&str], budget: Duration) -> Result<String, MoonlightError> {
@@ -564,6 +607,26 @@ fn read_tail(path: &Path) -> Option<String> {
 /// last `SDL Error` — the streaming library's own account, terser but still
 /// better than nothing.
 fn reason_from_log(log: &str) -> Option<String> {
+    let entries = log_entries(log);
+    dialog_reason(&entries).or_else(|| sdl_reason(&entries))
+}
+
+/// A failure the client reported while still exiting cleanly.
+///
+/// Only an error it actually showed the person counts here. The library's
+/// own `SDL Error` lines are deliberately not consulted: a long session that
+/// ran perfectly well can log one in passing, and on this path there is no
+/// non-zero exit status to corroborate it, so it would turn an ordinary
+/// stream into a reported failure.
+fn dialog_failure(stderr: &str) -> Option<String> {
+    let log = read_tail(&log_path(stderr)?)?;
+    dialog_reason(&log_entries(&log))
+}
+
+/// A client log split into its entries. One entry starts `HH:MM:SS - ` and
+/// may run on over several lines: the client's error dialogs are written
+/// whole, blank lines included.
+fn log_entries(log: &str) -> Vec<Vec<&str>> {
     let mut entries: Vec<Vec<&str>> = Vec::new();
     for line in log.lines() {
         match line.get(8..11) {
@@ -575,28 +638,41 @@ fn reason_from_log(log: &str) -> Option<String> {
             }
         }
     }
+    entries
+}
 
-    let message = |entry: &Vec<&str>, prefixes: &[&str]| -> Option<String> {
-        let first = prefixes.iter().find_map(|p| entry[0].strip_prefix(p))?;
-        Some(sentence(
-            std::iter::once(first.trim_start_matches("qml: ")).chain(entry[1..].iter().copied()),
-        ))
-    };
-    let shown = ["Qt Critical: ", "Qt Fatal: "];
+/// The last error the client put in front of the person, which is what QML's
+/// `console.error` writes at `Qt Critical`.
+fn dialog_reason(entries: &[Vec<&str>]) -> Option<String> {
     entries
         .iter()
         .rev()
-        .find_map(|e| message(e, &shown))
-        .or_else(|| {
-            entries.iter().rev().find_map(|e| {
-                let rest = ["SDL Error (", "SDL Critical ("]
-                    .iter()
-                    .find_map(|p| e[0].strip_prefix(p))?;
-                let (_, text) = rest.split_once("): ")?;
-                Some(sentence(
-                    std::iter::once(text).chain(e[1..].iter().copied()),
-                ))
-            })
+        .find_map(|entry| {
+            let first = ["Qt Critical: ", "Qt Fatal: "]
+                .iter()
+                .find_map(|p| entry[0].strip_prefix(p))?;
+            Some(sentence(
+                std::iter::once(first.trim_start_matches("qml: "))
+                    .chain(entry[1..].iter().copied()),
+            ))
+        })
+        .filter(|m| !m.is_empty())
+}
+
+/// The streaming library's own account: terser, and only worth quoting when
+/// the client did not say something better.
+fn sdl_reason(entries: &[Vec<&str>]) -> Option<String> {
+    entries
+        .iter()
+        .rev()
+        .find_map(|entry| {
+            let rest = ["SDL Error (", "SDL Critical ("]
+                .iter()
+                .find_map(|p| entry[0].strip_prefix(p))?;
+            let (_, text) = rest.split_once("): ")?;
+            Some(sentence(
+                std::iter::once(text).chain(entry[1..].iter().copied()),
+            ))
         })
         .filter(|m| !m.is_empty())
 }
@@ -970,6 +1046,101 @@ mod tests {
     async fn a_session_the_person_ended_is_not_an_error() {
         let mut child = a_child_that("exit 0");
         assert!(Moonlight::wait_for_session(&mut child, None).await.is_ok());
+    }
+
+    /// The regression this exists for: moonlight-qt shows a launch failure in
+    /// a dialog, logs it, and then exits *0*. Taking that status at face
+    /// value reported the stream as fine, the card went back to Ready, and
+    /// the reason was left sitting in a file nobody read.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_launch_that_failed_is_not_hidden_by_a_clean_exit() {
+        let dir = super::super::stream_log::tests::Dir::new("clean-exit-failure");
+        let client_log = dir.path().join("Moonlight-2.log");
+        std::fs::write(
+            &client_log,
+            "00:00:00 - Qt Info: Dusk fork: add-host available\n\
+             00:00:30 - Qt Critical: Failed to connect to 192.168.50.146\n",
+        )
+        .unwrap();
+
+        let mut child = a_child_that(&format!(
+            "echo 'Redirecting log output to {}' 1>&2; exit 0",
+            client_log.display()
+        ));
+        let err = Moonlight::wait_for_session(&mut child, None)
+            .await
+            .expect_err("a failed launch is a failure whatever the exit status");
+        assert!(
+            matches!(&err, MoonlightError::Failed(m) if m == "Failed to connect to 192.168.50.146"),
+            "{err:?}"
+        );
+    }
+
+    /// The other half of that: a stream that really did run also exits 0, and
+    /// must not be turned into a failure by trace in its log. Only an error
+    /// the client showed the person counts, so an `SDL Error` logged in
+    /// passing is not one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_clean_session_is_not_failed_by_noise_in_its_log() {
+        let dir = super::super::stream_log::tests::Dir::new("clean-exit-noise");
+        let client_log = dir.path().join("Moonlight-3.log");
+        std::fs::write(
+            &client_log,
+            "00:00:06 - SDL Info (0): Starting RTSP handshake...\n\
+             00:00:09 - SDL Error (0): Frame queue is full\n\
+             00:04:00 - SDL Info (0): Connection terminated by user\n",
+        )
+        .unwrap();
+
+        let mut child = a_child_that(&format!(
+            "echo 'Redirecting log output to {}' 1>&2; exit 0",
+            client_log.display()
+        ));
+        assert!(Moonlight::wait_for_session(&mut child, None).await.is_ok());
+    }
+
+    /// A failed session's log used to hold two lines and no reason, because
+    /// the client writes its account to a file of its own and `/tmp` does not
+    /// survive the reboot that a bad stream can force.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_session_keeps_the_clients_own_log() {
+        let dir = super::super::stream_log::tests::Dir::new("failed-session-log");
+        let client_log = dir.path().join("Moonlight-4.log");
+        std::fs::write(
+            &client_log,
+            "00:00:29 - SDL Info (0): Initializing video stream...\n\
+             00:00:30 - Qt Critical: No video received from host.\n",
+        )
+        .unwrap();
+
+        let log = super::super::stream_log::StreamLog::create_in_for_tests(dir.path());
+        let path = log.path().to_owned();
+        let mut child = a_child_that(&format!(
+            "echo 'Redirecting log output to {}' 1>&2; exit 0",
+            client_log.display()
+        ));
+        Moonlight::wait_for_session(&mut child, Some(log))
+            .await
+            .expect_err("the launch failed");
+
+        let mut text = String::new();
+        for _ in 0..50 {
+            text = std::fs::read_to_string(&path).unwrap();
+            if text.contains("Initializing video stream") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            text.contains("dusk: the stream failed: No video received from host."),
+            "{text}"
+        );
+        assert!(text.contains("Moonlight-4.log"), "{text}");
+        // The client's own lines, carried across before /tmp loses them.
+        assert!(text.contains("Initializing video stream"), "{text}");
     }
 
     /// moonlight-qt writes several lines per decoded frame, so an unread

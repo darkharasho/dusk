@@ -337,11 +337,10 @@ const FALLBACK_SIZE: (u32, u32) = (1920, 1080);
 /// client through `control` so its overlay offers only those.
 async fn stream_size(
     app: &AppHandle,
-    state: &Arc<AppState>,
     address: &str,
+    resolution: Resolution,
     control: crate::session::Control,
 ) -> (u32, u32) {
-    let resolution = state.store.lock().await.resolution;
     // Asked whatever the setting, since the question also wakes a Mac's
     // screen and counts its displays; only Match host waits for the answer.
     if resolution != Resolution::MatchHost {
@@ -716,12 +715,20 @@ pub async fn launch_app(
         .await
         .map_err(|e| format!("could not open a control channel: {e}"))?;
 
-    let (bitrate, codec, fps) = {
+    // Per-machine overrides win over the global Streaming settings, each field
+    // on its own: a machine with nothing set streams exactly as the globals.
+    let (bitrate, codec, fps, resolution) = {
         let store = inner.store.lock().await;
-        (store.bitrate_kbps, store.codec, store.fps)
+        let over = store.device_streams.get(&id);
+        (
+            over.and_then(|o| o.bitrate_kbps).or(store.bitrate_kbps),
+            over.and_then(|o| o.codec).unwrap_or(store.codec),
+            over.and_then(|o| o.fps).or(store.fps),
+            over.and_then(|o| o.resolution).unwrap_or(store.resolution),
+        )
     };
     let options = crate::moonlight::cli::StreamOptions {
-        resolution: Some(stream_size(&app, &inner, &address, session.control()).await),
+        resolution: Some(stream_size(&app, &address, resolution, session.control()).await),
         bitrate,
         fps,
         codec: (codec != Codec::Auto).then_some(codec),
@@ -1084,6 +1091,44 @@ pub async fn set_resolution(
     {
         let mut store = state.store.lock().await;
         store.resolution = resolution;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// Streaming overrides for one machine, over the global Streaming settings.
+/// Each field left unset inherits the global; an entry with nothing set is
+/// dropped, so the machine falls back to the globals entirely.
+#[tauri::command]
+pub async fn set_device_stream(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    settings: crate::store::DeviceStream,
+) -> Result<(), String> {
+    if settings
+        .bitrate_kbps
+        .is_some_and(|k| !BITRATE_RANGE.contains(&k))
+    {
+        return Err("Bitrate has to be between 0.5 and 500 Mbps.".into());
+    }
+    if settings
+        .fps
+        .is_some_and(|f| !crate::store::FPS_RANGE.contains(&f))
+    {
+        return Err("Frame rate has to be between 24 and 480.".into());
+    }
+    if settings.resolution.is_some_and(|r| !r.is_valid()) {
+        return Err("That is not a size a stream can be.".into());
+    }
+    {
+        let mut store = state.store.lock().await;
+        if settings.is_empty() {
+            store.device_streams.remove(&id);
+        } else {
+            store.device_streams.insert(id, settings);
+        }
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;

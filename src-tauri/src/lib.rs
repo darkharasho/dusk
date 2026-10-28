@@ -347,6 +347,7 @@ pub fn run() {
             commands::set_bitrate,
             commands::set_fps,
             commands::set_codec,
+            commands::set_device_stream,
             commands::set_clipboard_sharing,
             commands::set_auto_update,
             commands::update_device,

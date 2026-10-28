@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { Device } from "../types";
+import type { Codec, Device, DeviceStream, Resolution } from "../types";
+import { DeviceStreamSection } from "./DeviceStreamSection";
 import { cardState, pairingOf } from "../deviceState";
 import {
   generatePin,
@@ -19,6 +20,14 @@ interface Props {
   device: Device;
   moonlightAvailable: boolean;
   overlayAvailable: boolean | null;
+  /** This machine's streaming overrides, and the globals they fall back to. */
+  deviceStream: DeviceStream | undefined;
+  streamDefaults: {
+    resolution: Resolution;
+    bitrateKbps: number | null;
+    fps: number | null;
+    codec: Codec;
+  };
   onClose(): void;
 }
 
@@ -35,6 +44,8 @@ export function DeviceDrawer({
   device,
   moonlightAvailable,
   overlayAvailable,
+  deviceStream,
+  streamDefaults,
   onClose,
 }: Props) {
   const [busy, setBusy] = useState<Busy>(null);
@@ -300,6 +311,12 @@ export function DeviceDrawer({
                   ))}
                 </div>
               )}
+
+              <DeviceStreamSection
+                deviceId={device.id}
+                override={deviceStream}
+                defaults={streamDefaults}
+              />
             </>
           )}
 

@@ -203,6 +203,12 @@ export interface Snapshot {
   /** Which video format a stream asks the host for. */
   codec: Codec;
   /**
+   * Per-machine overrides over the four settings above, keyed by device id.
+   * A machine absent here, or whose fields are all null, streams at the
+   * globals.
+   */
+  deviceStreams: Record<string, DeviceStream>;
+  /**
    * Whether streams from this machine are given a screen the size of the
    * connecting machine's.
    */
@@ -242,6 +248,17 @@ export type Resolution =
   | { kind: "matchHost" }
   | { kind: "matchThisDisplay" }
   | { kind: "fixed"; width: number; height: number };
+
+/**
+ * Per-machine streaming overrides. Each field is null to inherit the global
+ * Streaming setting, or set to override it just for one machine.
+ */
+export interface DeviceStream {
+  resolution: Resolution | null;
+  bitrateKbps: number | null;
+  fps: number | null;
+  codec: Codec | null;
+}
 
 export interface GithubUser {
   id: number;

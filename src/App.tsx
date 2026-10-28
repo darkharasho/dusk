@@ -355,6 +355,13 @@ function Body() {
           device={open}
           moonlightAvailable={snapshot.moonlightAvailable}
           overlayAvailable={snapshot.overlayAvailable}
+          deviceStream={snapshot.deviceStreams?.[open.id]}
+          streamDefaults={{
+            resolution: snapshot.resolution,
+            bitrateKbps: snapshot.bitrateKbps,
+            fps: snapshot.fps,
+            codec: snapshot.codec,
+          }}
           onClose={() => setOpenId(null)}
         />
       )}

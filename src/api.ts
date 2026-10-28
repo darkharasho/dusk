@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AccountView,
   Device,
+  DeviceStream,
   DownloadPreview,
   Codec,
   Resolution,
@@ -216,6 +217,13 @@ export function setBitrate(kbps: number | null): Promise<void> {
 
 export function setFps(fps: number | null): Promise<void> {
   return invoke("set_fps", { fps });
+}
+
+export function setDeviceStream(
+  id: string,
+  settings: DeviceStream,
+): Promise<void> {
+  return invoke("set_device_stream", { id, settings });
 }
 
 /** Which video format streams from this machine ask for. */

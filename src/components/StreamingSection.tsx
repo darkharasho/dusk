@@ -5,7 +5,7 @@ import type { Codec, Resolution, Snapshot } from "../types";
 import { describe } from "../errors";
 
 /** The choices, keyed by what the select holds. */
-const CHOICES: { value: string; label: string; resolution: Resolution }[] = [
+export const CHOICES: { value: string; label: string; resolution: Resolution }[] = [
   { value: "host", label: "Match the host's screen", resolution: { kind: "matchHost" } },
   { value: "here", label: "Match this screen", resolution: { kind: "matchThisDisplay" } },
   { value: "720", label: "720p · 1280 × 720", resolution: { kind: "fixed", width: 1280, height: 720 } },
@@ -14,7 +14,7 @@ const CHOICES: { value: string; label: string; resolution: Resolution }[] = [
   { value: "2160", label: "4K · 3840 × 2160", resolution: { kind: "fixed", width: 3840, height: 2160 } },
 ];
 
-function valueOf(resolution: Resolution): string {
+export function valueOf(resolution: Resolution): string {
   const match = CHOICES.find(
     (c) =>
       c.resolution.kind === resolution.kind &&
@@ -38,7 +38,7 @@ function detail(resolution: Resolution): string {
 }
 
 /** Fixed rates, in Mbps. Automatic is offered alongside. */
-const BITRATES = [5, 10, 20, 30, 50, 80, 120, 150];
+export const BITRATES = [5, 10, 20, 30, 50, 80, 120, 150];
 
 function bitrateDetail(kbps: number | null): string {
   if (kbps === null) {
@@ -48,7 +48,7 @@ function bitrateDetail(kbps: number | null): string {
 }
 
 /** Fixed frame rates. Automatic is offered alongside. */
-const FRAME_RATES = [30, 60, 90, 120, 144, 240];
+export const FRAME_RATES = [30, 60, 90, 120, 144, 240];
 
 function fpsDetail(fps: number | null): string {
   if (fps === null) {
@@ -57,7 +57,7 @@ function fpsDetail(fps: number | null): string {
   return `Streams ask for up to ${fps} frames a second. The host sends fewer if it cannot encode that fast, so a cap higher than it can reach does no harm.`;
 }
 
-const CODECS: { value: Codec; label: string; detail: string }[] = [
+export const CODECS: { value: Codec; label: string; detail: string }[] = [
   { value: "auto", label: "Automatic", detail: "The two machines settle on the best format both can handle in hardware." },
   { value: "h264", label: "H.264", detail: "Every machine can play it, but it needs the most data for a sharp picture." },
   {

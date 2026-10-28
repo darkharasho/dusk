@@ -1,5 +1,19 @@
 # Release Notes
 
+Version v0.3.45 — October 28, 2026
+
+Streaming settings can now be set per machine, so a fast host and a modest
+one no longer have to share one set.
+
+## Changes
+
+- **Per-machine streaming settings.** A machine's drawer gains a "Streaming
+  for this machine" section: Resolution, Bitrate, Frame rate and Video codec,
+  each starting at "Use default" — which shows the global value and inherits
+  it — or set to override it for that machine alone. So a host with a strong
+  GPU can be pinned to 120 fps and HEVC while a weaker one keeps the defaults.
+  A machine you set nothing on streams exactly as before.
+
 Version v0.3.44 — October 28, 2026
 
 A stream that failed to connect no longer locks out the next one.

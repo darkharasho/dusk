@@ -40,6 +40,12 @@ pub struct Store {
     /// one they cannot reach streams at whatever they manage, so raising it
     /// never hurts a setup that cannot use it.
     pub fps: Option<u32>,
+    /// Per-machine overrides over the four settings above. Keyed by device id;
+    /// a machine with no entry, or an entry whose fields are all `None`,
+    /// streams exactly as the globals say. The id is stable while a machine
+    /// is online, which is the only time a stream is launched.
+    #[serde(default)]
+    pub device_streams: std::collections::HashMap<String, DeviceStream>,
     /// Streams from this machine are given a screen the size of the device
     /// watching: the virtual display on Windows, once the driver is
     /// installed, and the real output resized or scaled on Linux. Keeps its
@@ -86,6 +92,31 @@ pub struct AccountPairing {
     /// The id of its entry in the host's list. Minted by Dusk, so an entry
     /// it did not make is never one it takes out.
     pub uuid: String,
+}
+
+/// Per-machine streaming overrides over the global settings.
+///
+/// Each field is `None` to inherit the global, or set to override it just for
+/// one machine — so a fast host gets 120 fps and HEVC while everything else
+/// keeps the defaults. A machine whose fields are all `None` is the same as
+/// having no entry at all. See [`Store::device_streams`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DeviceStream {
+    pub resolution: Option<Resolution>,
+    pub bitrate_kbps: Option<u32>,
+    pub fps: Option<u32>,
+    pub codec: Option<Codec>,
+}
+
+impl DeviceStream {
+    /// Nothing is overridden, so the entry can be dropped rather than stored.
+    pub fn is_empty(&self) -> bool {
+        self.resolution.is_none()
+            && self.bitrate_kbps.is_none()
+            && self.fps.is_none()
+            && self.codec.is_none()
+    }
 }
 
 /// The lowest and highest bitrates the client accepts, in Kbps.
@@ -500,6 +531,34 @@ mod tests {
         assert_eq!(store.bitrate_kbps, None);
         assert_eq!(store.fps, None);
         assert_eq!(store.codec, Codec::Auto);
+        assert!(store.device_streams.is_empty());
+    }
+
+    #[test]
+    fn a_device_override_round_trips_and_knows_when_it_is_empty() {
+        assert!(DeviceStream::default().is_empty());
+
+        let set = DeviceStream {
+            fps: Some(120),
+            codec: Some(Codec::Hevc),
+            ..Default::default()
+        };
+        assert!(!set.is_empty());
+        assert!(set.resolution.is_none());
+
+        let json = serde_json::to_string(&set).unwrap();
+        let back: DeviceStream = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, set);
+    }
+
+    #[test]
+    fn a_device_override_reads_only_the_fields_present() {
+        // The window sends just the fields it means to set; the rest inherit.
+        let over: DeviceStream = serde_json::from_str(r#"{"fps":120}"#).unwrap();
+        assert_eq!(over.fps, Some(120));
+        assert_eq!(over.bitrate_kbps, None);
+        assert_eq!(over.codec, None);
+        assert!(over.resolution.is_none());
     }
 
     #[test]

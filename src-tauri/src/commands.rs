@@ -666,6 +666,15 @@ pub async fn launch_app(
     let inner = state.inner().clone();
     let (address, _) = target_of(&inner, &id).await?;
 
+    // The streaming client is single-instance: a stream that failed to
+    // connect leaves its client open on the error, and a fresh launch would
+    // be turned away by it with nothing on screen to say why. Clear any
+    // client already running here first, so this launch has the field to
+    // itself. Ordinary launches have nothing to clear.
+    inner
+        .clear_running_clients(std::time::Duration::from_secs(3))
+        .await;
+
     let (app_name, host_hosting) = {
         let registry = inner.registry.read().await;
         let device = registry
@@ -679,7 +688,10 @@ pub async fn launch_app(
             .find(|a| a.id == app_id)
             .map(|a| a.name.clone())
             .ok_or_else(|| "That app is no longer on this machine.".to_string())?;
-        (app_name, matches!(device.activity, Activity::Hosting { .. }))
+        (
+            app_name,
+            matches!(device.activity, Activity::Hosting { .. }),
+        )
     };
 
     // A client that exited without cancelling leaves Sunshine hosting a
@@ -689,7 +701,9 @@ pub async fn launch_app(
     // not own is cleared; best-effort, since a host that will not answer the
     // quit is no worse off than if this were skipped.
     if host_hosting && inner.session_control(&id).await.is_none() {
-        eprintln!("dusk: {address} is hosting a session Dusk does not own; clearing it before launch");
+        eprintln!(
+            "dusk: {address} is hosting a session Dusk does not own; clearing it before launch"
+        );
         if let Err(e) = moonlight(&inner)?.quit(&address).await {
             eprintln!("dusk: could not clear the stale session on {address}: {e}");
         }

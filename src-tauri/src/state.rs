@@ -356,6 +356,26 @@ impl AppState {
     /// ends its tabs. Each client is asked first, so it can take its stream
     /// down cleanly, and given `grace` to do so before it is stopped.
     pub async fn end_streams(&self, grace: Duration) {
+        self.end_running_streams(grace, "ending {} stream(s) to quit")
+            .await;
+    }
+
+    /// End any stream client already running here before a new one starts.
+    ///
+    /// The streaming client is single-instance: a second copy exits rather
+    /// than taking over. A stream that failed to connect leaves its client
+    /// open on the error, holding that instance, so the next launch is turned
+    /// away with nothing on screen to say why. Clearing it first means a
+    /// launch always has the field to itself. Does nothing when nothing is
+    /// running, which is the ordinary case.
+    pub async fn clear_running_clients(&self, grace: Duration) {
+        self.end_running_streams(grace, "clearing {} open client(s) before a new stream")
+            .await;
+    }
+
+    /// Ask every running client to disconnect, then stop any that did not,
+    /// within `grace`. `announce` is logged with the count when there is work.
+    async fn end_running_streams(&self, grace: Duration, announce: &str) {
         let running: Vec<(DeviceId, Running)> = self
             .sessions
             .read()
@@ -366,7 +386,10 @@ impl AppState {
         if running.is_empty() {
             return;
         }
-        eprintln!("dusk: ending {} stream(s) to quit", running.len());
+        eprintln!(
+            "dusk: {}",
+            announce.replace("{}", &running.len().to_string())
+        );
         for (_, r) in &running {
             r.control.send(crate::session::ToClient::Disconnect);
         }
@@ -627,6 +650,31 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "did not wait out the sleep"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stuck_client_is_cleared_before_the_next_stream() {
+        let state = Arc::new(state());
+        let mut child = a_stream_that_ignores_disconnect()
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        state
+            .session_started("dev", crate::session::Control::detached(), pid)
+            .await;
+        let watched = state.clone();
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+            watched.session_ended("dev").await;
+        });
+        state
+            .clear_running_clients(Duration::from_millis(300))
+            .await;
+        assert!(
+            state.session_control("dev").await.is_none(),
+            "the stale client was not let go"
         );
     }
 

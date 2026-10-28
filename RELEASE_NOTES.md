@@ -1,5 +1,20 @@
 # Release Notes
 
+Version v0.3.44 — October 28, 2026
+
+A stream that failed to connect no longer locks out the next one.
+
+## Changes
+
+- **A stuck client no longer blocks the next stream.** The streaming client
+  runs one at a time: when a stream could not reach the other machine, its
+  client stayed open on the error, and every stream started after that was
+  turned away by it — with nothing on screen to say why. Dusk now clears a
+  client still open from a previous stream before it starts the next one, so
+  a stream always has the field to itself. Paired with the stale-session
+  clearing from v0.3.43, a stream that went wrong on either side no longer
+  has to be untangled by hand.
+
 Version v0.3.43 — October 28, 2026
 
 A machine left hosting a session nobody is in no longer turns away the next

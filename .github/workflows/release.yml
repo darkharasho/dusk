@@ -34,7 +34,7 @@ env:
   # macOS runs ahead: 2026.914's input code keeps the pointer on the main
   # display, so after switching the stream to another screen the mouse is
   # dead. 2026.1018 (a prerelease) moves it within the captured display.
-  SUNSHINE_MACOS_TAG: v2026.1018.5342
+  SUNSHINE_MACOS_TAG: v2026.1028.122642
 
   # The GitHub OAuth app behind "Sign in with GitHub". A client ID, not a
   # secret: the device flow has none, so it is baked into the binary. Set it

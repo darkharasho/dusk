@@ -35,6 +35,11 @@ pub struct Store {
     pub bitrate_kbps: Option<u32>,
     /// Which video format a stream asks the host for.
     pub codec: Codec,
+    /// How many frames a second a stream asks for. `None` lets the client use
+    /// its own default. A cap the host and link can beat is only a ceiling;
+    /// one they cannot reach streams at whatever they manage, so raising it
+    /// never hurts a setup that cannot use it.
+    pub fps: Option<u32>,
     /// Streams from this machine are given a screen the size of the device
     /// watching: the virtual display on Windows, once the driver is
     /// installed, and the real output resized or scaled on Linux. Keeps its
@@ -85,6 +90,10 @@ pub struct AccountPairing {
 
 /// The lowest and highest bitrates the client accepts, in Kbps.
 pub const BITRATE_RANGE: std::ops::RangeInclusive<u32> = 500..=500_000;
+
+/// The lowest and highest frame rates a stream may ask for. Wide enough for
+/// a 24fps film cap at one end and a 480Hz panel at the other.
+pub const FPS_RANGE: std::ops::RangeInclusive<u32> = 24..=480;
 
 /// Which video format a stream asks the host for.
 ///
@@ -489,6 +498,7 @@ mod tests {
         let stored = r#"{"manual":[],"resolution":{"kind":"matchHost"}}"#;
         let store: Store = serde_json::from_str(stored).unwrap();
         assert_eq!(store.bitrate_kbps, None);
+        assert_eq!(store.fps, None);
         assert_eq!(store.codec, Codec::Auto);
     }
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::install;
-use crate::model::{Device, HostStatus, Snapshot};
+use crate::model::{Activity, Device, HostStatus, Snapshot};
 use crate::registry::split_address;
 use crate::startup;
 use crate::state::{emit_snapshot, AppState};
@@ -666,20 +666,34 @@ pub async fn launch_app(
     let inner = state.inner().clone();
     let (address, _) = target_of(&inner, &id).await?;
 
-    let app_name = {
+    let (app_name, host_hosting) = {
         let registry = inner.registry.read().await;
-        registry
+        let device = registry
             .devices()
             .into_iter()
             .find(|d| d.id == id)
-            .and_then(|d| {
-                d.apps
-                    .iter()
-                    .find(|a| a.id == app_id)
-                    .map(|a| a.name.clone())
-            })
-            .ok_or_else(|| "That app is no longer on this machine.".to_string())?
+            .ok_or_else(|| "That machine is no longer here.".to_string())?;
+        let app_name = device
+            .apps
+            .iter()
+            .find(|a| a.id == app_id)
+            .map(|a| a.name.clone())
+            .ok_or_else(|| "That app is no longer on this machine.".to_string())?;
+        (app_name, matches!(device.activity, Activity::Hosting { .. }))
     };
+
+    // A client that exited without cancelling leaves Sunshine hosting a
+    // session nobody is in, and the next connection fails its control stream
+    // rather than taking over — the host has to be told to let go first. Our
+    // own live stream keeps a session control, so only a session Dusk does
+    // not own is cleared; best-effort, since a host that will not answer the
+    // quit is no worse off than if this were skipped.
+    if host_hosting && inner.session_control(&id).await.is_none() {
+        eprintln!("dusk: {address} is hosting a session Dusk does not own; clearing it before launch");
+        if let Err(e) = moonlight(&inner)?.quit(&address).await {
+            eprintln!("dusk: could not clear the stale session on {address}: {e}");
+        }
+    }
 
     // The control channel is bound before the client is started, so the
     // socket is there by the time it is told where to find it. A client that
@@ -688,13 +702,14 @@ pub async fn launch_app(
         .await
         .map_err(|e| format!("could not open a control channel: {e}"))?;
 
-    let (bitrate, codec) = {
+    let (bitrate, codec, fps) = {
         let store = inner.store.lock().await;
-        (store.bitrate_kbps, store.codec)
+        (store.bitrate_kbps, store.codec, store.fps)
     };
     let options = crate::moonlight::cli::StreamOptions {
         resolution: Some(stream_size(&app, &inner, &address, session.control()).await),
         bitrate,
+        fps,
         codec: (codec != Codec::Auto).then_some(codec),
         ..Default::default()
     };
@@ -1075,6 +1090,26 @@ pub async fn set_bitrate(
     {
         let mut store = state.store.lock().await;
         store.bitrate_kbps = kbps;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// How many frames a second streams from this machine ask for. `None` leaves
+/// it to the client's own default.
+#[tauri::command]
+pub async fn set_fps(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    fps: Option<u32>,
+) -> Result<(), String> {
+    if fps.is_some_and(|f| !crate::store::FPS_RANGE.contains(&f)) {
+        return Err("Frame rate has to be between 24 and 480.".into());
+    }
+    {
+        let mut store = state.store.lock().await;
+        store.fps = fps;
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;

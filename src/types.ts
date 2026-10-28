@@ -198,6 +198,8 @@ export interface Snapshot {
   resolution: Resolution;
   /** Kbps, or null to let the stream pick from its size and frame rate. */
   bitrateKbps: number | null;
+  /** Frames a second a stream asks for, or null for the client's default. */
+  fps: number | null;
   /** Which video format a stream asks the host for. */
   codec: Codec;
   /**

@@ -214,6 +214,10 @@ export function setBitrate(kbps: number | null): Promise<void> {
   return invoke("set_bitrate", { kbps });
 }
 
+export function setFps(fps: number | null): Promise<void> {
+  return invoke("set_fps", { fps });
+}
+
 /** Which video format streams from this machine ask for. */
 export function setCodec(codec: Codec): Promise<void> {
   return invoke("set_codec", { codec });

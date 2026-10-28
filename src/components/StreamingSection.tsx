@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { setBitrate, setClipboardSharing, setCodec, setResolution } from "../api";
+import { setBitrate, setClipboardSharing, setCodec, setFps, setResolution } from "../api";
 import { Toggle } from "./StartupSection";
 import type { Codec, Resolution, Snapshot } from "../types";
 import { describe } from "../errors";
@@ -47,6 +47,16 @@ function bitrateDetail(kbps: number | null): string {
   return `Streams use up to ${kbps / 1000} Mbps. Lower it if the picture stutters or freezes; raise it if it looks blocky and your network has room.`;
 }
 
+/** Fixed frame rates. Automatic is offered alongside. */
+const FRAME_RATES = [30, 60, 90, 120, 144, 240];
+
+function fpsDetail(fps: number | null): string {
+  if (fps === null) {
+    return "Each stream uses the client's own default, usually 60. Raise it for smoother motion on a fast screen; a host or network that cannot keep up just sends fewer frames.";
+  }
+  return `Streams ask for up to ${fps} frames a second. The host sends fewer if it cannot encode that fast, so a cap higher than it can reach does no harm.`;
+}
+
 const CODECS: { value: Codec; label: string; detail: string }[] = [
   { value: "auto", label: "Automatic", detail: "The two machines settle on the best format both can handle in hardware." },
   { value: "h264", label: "H.264", detail: "Every machine can play it, but it needs the most data for a sharp picture." },
@@ -71,6 +81,9 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
   const bitrate = snapshot.bitrateKbps;
   // A rate set some other way still shows as itself.
   const bitrateCustom = bitrate !== null && !BITRATES.includes(bitrate / 1000);
+  const fps = snapshot.fps;
+  // A rate set some other way still shows as itself.
+  const fpsCustom = fps !== null && !FRAME_RATES.includes(fps);
   const codec = CODECS.find((c) => c.value === snapshot.codec) ?? CODECS[0];
 
   async function save(change: () => Promise<void>) {
@@ -142,6 +155,31 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
           </select>
         </div>
         <p className="axi-ink-dim">{bitrateDetail(bitrate)}</p>
+      </div>
+
+      <div className="dusk-setting">
+        <div className="dusk-field">
+          <label htmlFor="stream-fps">Frame rate</label>
+          <select
+            id="stream-fps"
+            className="axi-select"
+            value={fps === null ? "auto" : String(fps)}
+            disabled={busy}
+            onChange={(e) => {
+              const next = e.target.value === "auto" ? null : Number(e.target.value);
+              void save(() => setFps(next));
+            }}
+          >
+            <option value="auto">Automatic</option>
+            {fpsCustom && <option value={String(fps)}>{fps} fps</option>}
+            {FRAME_RATES.map((rate) => (
+              <option key={rate} value={String(rate)}>
+                {rate} fps
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="axi-ink-dim">{fpsDetail(fps)}</p>
       </div>
 
       <div className="dusk-setting">

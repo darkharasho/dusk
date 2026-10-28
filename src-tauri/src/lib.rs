@@ -345,6 +345,7 @@ pub fn run() {
             commands::set_virtual_screen,
             commands::set_resolution,
             commands::set_bitrate,
+            commands::set_fps,
             commands::set_codec,
             commands::set_clipboard_sharing,
             commands::set_auto_update,

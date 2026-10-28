@@ -1,5 +1,24 @@
 # Release Notes
 
+Version v0.3.43 — October 28, 2026
+
+A machine left hosting a session nobody is in no longer turns away the next
+stream, and how smooth a stream looks is now yours to set.
+
+## Changes
+
+- **A stale session no longer blocks the next stream.** When a streaming
+  client went away without bowing out — a crash, a force quit, a dropped
+  network — the host kept the old session running, and the next attempt to
+  stream from it failed to connect rather than taking over. Dusk now clears
+  a session the host is holding that nothing here is in, just before it
+  starts, so the stream connects instead of being turned away. A stream you
+  really are in is left alone.
+- **Frame rate is a setting.** Streaming settings gains a Frame rate, beside
+  Bitrate: leave it Automatic, or ask for up to 240 a second on a fast
+  screen. A host that cannot encode that quickly simply sends fewer, so a
+  rate higher than it can reach does no harm.
+
 Version v0.3.42 — October 27, 2026
 
 A stream that cannot reach the other machine now says so, instead of quietly

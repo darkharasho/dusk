@@ -324,6 +324,8 @@ pub struct Snapshot {
     pub resolution: crate::store::Resolution,
     /// Kbps, or `None` for the client's own choice.
     pub bitrate_kbps: Option<u32>,
+    /// Frames a second, or `None` for the client's own default.
+    pub fps: Option<u32>,
     pub codec: crate::store::Codec,
     /// Whether streams from here are given a screen the size of the device
     /// watching, and by what means this machine could do it.

@@ -31,7 +31,13 @@ set -euo pipefail
 
 tag="${1:?usage: stage-host-macos.sh <sunshine tag> <out dir>}"
 out="${2:?usage: stage-host-macos.sh <sunshine tag> <out dir>}"
-repo="LizardByte/Sunshine"
+# Where the Sunshine-macOS-*.dmg assets come from. Defaults to upstream, but
+# the release pipeline points this at our own mirror: LizardByte publishes
+# the builds carrying the macOS fixes as pre-releases and garbage-collects
+# them within days, which left a pinned tag "release not found" and broke the
+# macOS build. scripts/mirror-sunshine-macos.sh copies a build into a release
+# we control so the pin cannot vanish. See SUNSHINE_MACOS_REPO in release.yml.
+repo="${SUNSHINE_MACOS_REPO:-LizardByte/Sunshine}"
 [[ "$(uname -s)" == Darwin ]] || { echo "error: this needs macOS (hdiutil, lipo)" >&2; exit 1; }
 
 work="$(mktemp -d)"

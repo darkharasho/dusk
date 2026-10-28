@@ -33,8 +33,16 @@ env:
   SUNSHINE_TAG: v2026.914.233613
   # macOS runs ahead: 2026.914's input code keeps the pointer on the main
   # display, so after switching the stream to another screen the mouse is
-  # dead. 2026.1018 (a prerelease) moves it within the captured display.
-  SUNSHINE_MACOS_TAG: v2026.1028.122642
+  # dead. A later prerelease moves it within the captured display.
+  #
+  # These prereleases are garbage-collected by LizardByte within days, which
+  # once left a pinned tag "release not found" and broke a macOS build that
+  # had worked the day before. So macOS pulls from our own mirror of the
+  # build, which nothing but us deletes. To bump: run
+  #   ./scripts/mirror-sunshine-macos.sh <upstream tag>
+  # then point the tag below at the sunshine-macos-<upstream tag> it makes.
+  SUNSHINE_MACOS_REPO: ${{ github.repository }}
+  SUNSHINE_MACOS_TAG: sunshine-macos-v2026.1028.122642
 
   # The GitHub OAuth app behind "Sign in with GitHub". A client ID, not a
   # secret: the device flow has none, so it is baked into the binary. Set it
@@ -194,11 +202,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/stage-host-macos.sh "$SUNSHINE_MACOS_TAG" /tmp/host
 
-      # The source offer in licenses/ names exact versions.
+      # The source offer in licenses/ names exact versions. The upstream
+      # Sunshine version is the mirror tag with its "sunshine-macos-" prefix
+      # removed, so the doc names LizardByte's build, not our copy of it.
       - name: Record shipped versions
         run: |
           printf 'moonlight-qt fork  %s\nSunshine           %s\n' \
-            "$CLIENT_TAG" "$SUNSHINE_MACOS_TAG" > src-tauri/licenses/versions.txt
+            "$CLIENT_TAG" "${SUNSHINE_MACOS_TAG#sunshine-macos-}" > src-tauri/licenses/versions.txt
 
       # The app only. The disk image is built afterwards, by package-macos.sh,
       # because the client has to be inside the app before an image is made

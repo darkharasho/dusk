@@ -464,9 +464,7 @@ async fn unit_version(unit: &str) -> Option<String> {
             )
             .await
         }
-        Some(path) => {
-            service::run_with_env(path, &["--version"], &env, service::TIMEOUT).await
-        }
+        Some(path) => service::run_with_env(path, &["--version"], &env, service::TIMEOUT).await,
     }
     .ok()?;
 
@@ -761,7 +759,10 @@ mod tests {
         // order drove the older one.
         assert!(version_key("2026.914.233613") > version_key("2026.516.143833"));
         // The tag Dusk pins is the same version wearing a `v`.
-        assert_eq!(version_key("v2026.914.233613"), version_key("2026.914.233613"));
+        assert_eq!(
+            version_key("v2026.914.233613"),
+            version_key("2026.914.233613")
+        );
         // A version that will not parse sorts below one that does, rather
         // than panicking or winning.
         assert!(version_key("2026.914") > version_key("what"));

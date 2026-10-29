@@ -1,11 +1,21 @@
 # Telling the truth about the host that is actually running
 
-Date: 2026-10-29. Status: **built on the Mac this was written on, not yet
-run against the Bazzite host.** All four changes compile, `cargo clippy` is
-clean and 536 tests pass, but every Linux path here — the version read, the
-provenance comparison, the sandbox check — has only been exercised by unit
-tests over captured output. It needs a run on a real Linux host before it is
-believed.
+Date: 2026-10-29. Status: **built and verified on the Bazzite host**,
+shipped in v0.3.48. Observed there: the version read (`None` →
+`2026.516.143833`, then `2026.914.233613`), provenance reported `Foreign`
+for the Homebrew host and `Dusk` after the swap, and `InputPath::Ready`.
+
+Two paths remain unexercised on hardware, and that machine cannot produce
+either: `InputPath::Blocked` — its `/dev/uinput` is writable and nothing
+there is sandboxed — and the newest-wins comparison in `installed_unit`,
+which needs two units present where only one has ever existed.
+
+One correction to the reasoning below. The design argued that the Flatpak
+sat "installed and unused beside" the running host, implying Dusk had picked
+the older of two candidates. It had not: the Flatpak ships its unit under
+its application id and **no such unit existed**, so `installed_unit` only
+ever found one. The newest-wins change stands on its own merits; the example
+used to justify it was wrong.
 
 ## Why
 

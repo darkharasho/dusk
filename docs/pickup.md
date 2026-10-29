@@ -6,7 +6,66 @@ what to set up, and what bit hard enough to be worth not rediscovering.
 
 ## Where things stand
 
-**v0.3.41 is released**: the macOS host is Sunshine `v2026.1018.5342`
+**v0.3.48 is released**: Dusk says which Sunshine is running and stops
+calling blocked input done. `probe` reports the host's version on Linux
+(it was always `None`) and its provenance — Dusk's own service or one Dusk
+deferred to — compared from the unit's `Description` against what
+`apply::user_unit` writes. The input step now checks whether the *running*
+host can open `/dev/uinput` instead of whether some udev rule exists, with a
+third outcome, `StepState::Blocked`, for a host no rule can help.
+`installed_unit` picks the newest of several units rather than the first.
+Verified on the Bazzite machine: both provenance states observed, the
+version read working, `InputPath::Ready` returned. `InputPath::Blocked` and
+the newest-wins comparison have still never run on hardware — nothing here
+produces either.
+
+**The thing that cost the day was none of that.** A fullscreen game streamed
+to the Mac had no mouse, and the cause was one value in the client's own
+preferences. Absolute mouse mode is serialized under the key
+**`mouseacceleration`** (`streamingpreferences.cpp:33`,
+`#define SER_ABSMOUSEMODE "mouseacceleration"`) — a legacy misnomer. It read
+as `1`, so the client sent absolute positions; the desktop followed them and
+every pointer-locked game ignored them, which is exactly the "works
+everywhere except in a game" shape. `defaults write
+com.moonlight-stream.Moonlight mouseacceleration -bool false` fixed it.
+Four hypotheses died first — the overlay eating capture, a stale
+`SUNSHINE_TAG`, a Flatpak sandbox that could not reach `/dev/uinput`, and
+portal-versus-uinput input injection. Read the client's config before
+reasoning about its defaults.
+
+**Asking Sunshine its version truncates the log of the running service.**
+Measured here: a host up since the previous night came back with 244 KB of
+file holding 59 lines and a hole of NUL bytes where its history had been,
+starting at the moment the version was read. `unit_version` therefore runs
+the probe with `HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` pointed at a
+scratch directory (`service::run_with_env`). Do not undo that to save a few
+lines; the feature exists to diagnose a host and would otherwise destroy the
+first thing anyone reads.
+
+**The Bazzite host is now Dusk's own.** It had been a *pinned* Homebrew
+Sunshine 2026.516 (`lizardbyte/homebrew` tap) started by a hand-written user
+unit, with an unused 2026.914 Flatpak beside it and no unit of its own.
+Dusk had never installed its Sunshine there, because `register_user_unit`
+found that unit and stepped aside — the deferring behaviour, caught in the
+act. Now Dusk-managed 2026.914 at `~/.local/bin/sunshine`; brew unpinned and
+removed, Flatpak uninstalled. `~/.config/sunshine` is shared between a brew
+and an AppImage Sunshine, so the swap kept both pairings; only the Flatpak
+has a config directory of its own. Old config and unit are in
+`~/sunshine-backup-20261029-122639`. `capture = portal` survives in the
+conf, and the host injects input through uinput regardless — it holds three
+`/dev/uinput` fds and creates `libvirtualhid Keyboard`, `Mouse` and
+`Mouse (Absolute)`.
+
+**A dragged fullscreen Space can strand a Mac display.** Moving the stream's
+Space between displays in Mission Control left one monitor black with the
+dock, and it stayed that way after the client exited, with both displays
+online and `com.apple.spaces spans-displays` unset (so "Displays have
+separate Spaces" was already on). `killall Dock` fixes it — Dock owns Spaces,
+and that is where the stale state lives. Not something Dusk or the fork can
+intercept: WindowServer moves the Space without asking the app. Borderless
+windowed avoids the whole class, at the cost of the separate Space.
+
+Before that, **v0.3.41** was released: the macOS host is Sunshine `v2026.1018.5342`
 (`SUNSHINE_MACOS_TAG`, an upstream prerelease) while Linux and Windows stay
 on `SUNSHINE_TAG`. 2026.914 kept the Mac pointer on the main display, so
 after switching the stream to a second screen the mouse was dead there;
@@ -14,7 +73,9 @@ after switching the stream to a second screen the mouse was dead there;
 over SSH (`ssh mini`). That Mac had also been running a standalone
 Sunshine 2026.516 from `/Applications`, which Dusk defers to and which
 ignores display switches outright; Dusk does not yet warn about an
-older installed host.
+older installed host. *(As of v0.3.48 it does — see above. That gap was
+recorded here and left, and it cost an afternoon on Bazzite before being
+fixed.)*
 
 Before that, **v0.3.40** was released, with client `dusk-v0.2.7`: the overlay's display
 picker lists only the host's screens. The host reports its screen count in

@@ -50,6 +50,7 @@ impl HostBackend for MockHost {
         Ok(HostStatus::Installed {
             version: Some("0.23.1".into()),
             running: self.running.load(Ordering::Relaxed),
+            provenance: crate::model::HostProvenance::Dusk,
         })
     }
 

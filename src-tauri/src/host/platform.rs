@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use super::service::{self, Run};
 use super::{HostBackend, HostError};
 use crate::install::embedded;
-use crate::model::{HostCapabilities, HostPlatform, HostStatus, SupportTier};
+use crate::model::{HostCapabilities, HostPlatform, HostProvenance, HostStatus, SupportTier};
 use crate::sunshine::{provision, Credentials};
 
 // ------------------------------------------------------------------ windows
@@ -55,6 +55,10 @@ impl HostBackend for WindowsHost {
         Ok(HostStatus::Installed {
             version: None, // Comes from the config API once credentials exist.
             running: parse_sc_running(&run.stdout),
+            // Sunshine's own installer registers `SunshineService` whether
+            // Dusk ran it or a person did, so there is nothing here to tell
+            // the two apart.
+            provenance: HostProvenance::Unknown,
         })
     }
 
@@ -216,8 +220,9 @@ impl HostBackend for LinuxHost {
         let active = service::run("systemctl", &["--user", "is-active", unit]).await?;
 
         Ok(HostStatus::Installed {
-            version: None,
+            version: unit_version(unit).await,
             running: active.stdout.trim() == "active",
+            provenance: unit_provenance(unit).await,
         })
     }
 
@@ -298,16 +303,207 @@ fn exec_start_path(show: &str) -> Option<String> {
 ///
 /// Resolved per call rather than cached, so Sunshine installed while Dusk is
 /// running is picked up on the next tick instead of at the next launch.
+/// Where both exist the newer wins. It used to be whichever came first in
+/// [`LINUX_UNITS`], which on the Bazzite machine meant driving the image's
+/// 2026.516 while a 2026.914 Flatpak sat installed and unused beside it.
 async fn installed_unit() -> Option<&'static str> {
+    let mut present = Vec::new();
     for unit in LINUX_UNITS {
         // Sunshine ships a *user* unit, so every call needs --user; the
         // system manager does not know these units exist.
         let known = service::run("systemctl", &["--user", "cat", unit]).await;
         if known.is_ok_and(|run| run.ok()) {
-            return Some(unit);
+            present.push(unit);
         }
     }
-    None
+
+    // One unit is the common case, and asking a host its version costs a
+    // subprocess — so only a genuine ambiguity pays for the comparison.
+    if present.len() < 2 {
+        return present.first().copied();
+    }
+
+    let mut best: Option<(&'static str, Vec<u64>)> = None;
+    for &unit in &present {
+        let Some(key) = unit_version(unit).await.map(|v| version_key(&v)) else {
+            continue;
+        };
+        let better = match &best {
+            None => true,
+            Some((_, found)) => key > *found,
+        };
+        if better {
+            best = Some((unit, key));
+        }
+    }
+
+    // A version nothing would report falls back to the list's order, so a
+    // host that will not answer behaves exactly as it always did.
+    best.map(|(unit, _)| unit)
+        .or_else(|| present.first().copied())
+}
+
+/// Whether the host running here is sandboxed. A sandbox decides for itself
+/// which devices it can see, and the seat's permissions do not reach inside
+/// it — so this changes what a `/dev/uinput` rule is worth.
+pub async fn linux_host_sandboxed() -> bool {
+    match installed_unit().await {
+        None => false,
+        Some(unit) if unit == LINUX_UNITS[1] => true,
+        // A hand-written unit that runs `flatpak run …` is the same
+        // situation wearing the other unit's name.
+        Some(unit) => unit_program(unit)
+            .await
+            .is_some_and(|program| program == "flatpak" || program.ends_with("/flatpak")),
+    }
+}
+
+/// Whether the sandboxed host has been handed every device.
+///
+/// `all` is the only permission that includes `/dev/uinput`. `input` sounds
+/// like the one that would and does not: it covers `/dev/input` and stops
+/// there.
+pub async fn linux_sandbox_grants_devices() -> bool {
+    let shown = service::run("flatpak", &["info", "--show-permissions", FLATPAK_ID]).await;
+    shown.is_ok_and(|run| {
+        run.ok()
+            && run.stdout.lines().any(|line| {
+                let line = line.trim();
+                line.starts_with("devices")
+                    && line
+                        .split_once('=')
+                        .is_some_and(|(_, list)| list.split(';').any(|dev| dev.trim() == "all"))
+            })
+    })
+}
+
+/// What Dusk writes into the unit it registers — see
+/// `install::apply::user_unit`. Comparing it is the only way to tell Dusk's
+/// own service from one that was already on the machine, because both are
+/// called `sunshine.service` and live in the same directory.
+const DUSK_UNIT_DESCRIPTION: &str = "Sunshine, managed by Dusk";
+
+/// Whether this is the service Dusk registered, or one it deferred to.
+async fn unit_provenance(unit: &str) -> HostProvenance {
+    let shown = service::run(
+        "systemctl",
+        &["--user", "show", "-p", "Description", "--value", unit],
+    )
+    .await;
+
+    match shown {
+        Ok(run) if run.ok() => {
+            if run.stdout.trim() == DUSK_UNIT_DESCRIPTION {
+                HostProvenance::Dusk
+            } else {
+                HostProvenance::Foreign
+            }
+        }
+        // Not knowing is its own answer: claiming `Foreign` here would put a
+        // warning in front of someone whose host is fine.
+        _ => HostProvenance::Unknown,
+    }
+}
+
+/// The `ExecStart` program of a unit, which is the host binary Dusk should
+/// ask about rather than whatever `sunshine` is on `PATH`. On the Bazzite
+/// machine those were two different Sunshines, five months apart.
+async fn unit_program(unit: &str) -> Option<String> {
+    let show = service::run(
+        "systemctl",
+        &["--user", "show", "-p", "ExecStart", "--value", unit],
+    )
+    .await
+    .ok()?;
+    exec_start_path(&show.stdout)
+}
+
+/// The version of the Sunshine a unit actually runs.
+///
+/// Cached, because `probe` runs on every poller tick and this costs starting
+/// Sunshine far enough for it to print. The key carries the program's mtime,
+/// so an upgrade in place is picked up rather than remembered wrong.
+async fn unit_version(unit: &str) -> Option<String> {
+    let program = if unit == LINUX_UNITS[1] {
+        None
+    } else {
+        Some(unit_program(unit).await?)
+    };
+
+    let key = match &program {
+        Some(path) => format!("{path}@{}", mtime_key(path)),
+        None => format!("flatpak:{FLATPAK_ID}"),
+    };
+    if let Some(hit) = version_cache().lock().await.get(&key) {
+        return Some(hit.clone());
+    }
+
+    let run = match &program {
+        // A Flatpak's binary is only reachable inside its sandbox, the same
+        // reason `set_credentials` goes through `flatpak run`.
+        None => {
+            service::run(
+                "flatpak",
+                &["run", "--command=sunshine", FLATPAK_ID, "--version"],
+            )
+            .await
+        }
+        Some(path) => service::run(path, &["--version"]).await,
+    }
+    .ok()?;
+
+    // Deliberately not gated on `run.ok()`: the text is what was wanted and
+    // some builds exit non-zero after printing it.
+    let found = parse_version(&run.stdout).or_else(|| parse_version(&run.stderr))?;
+
+    // Only successes are remembered. A host mid-install answers nothing, and
+    // caching that would keep it blank until Dusk restarted.
+    version_cache().lock().await.insert(key, found.clone());
+    Some(found)
+}
+
+type VersionCache = tokio::sync::Mutex<std::collections::HashMap<String, String>>;
+
+fn version_cache() -> &'static VersionCache {
+    static CACHE: std::sync::OnceLock<VersionCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn mtime_key(path: &str) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
+}
+
+/// The version out of `sunshine --version`.
+///
+/// Sunshine logs its whole configuration before it says what it is, so the
+/// line is matched rather than the first one taken.
+fn parse_version(out: &str) -> Option<String> {
+    out.lines()
+        .filter_map(|line| line.split_once("Sunshine version:"))
+        .find_map(|(_, rest)| rest.split_whitespace().next())
+        .map(str::to_string)
+}
+
+/// A dotted numeric version, comparable. `v2026.914.233613` and
+/// `2026.914.233613` are one version written two ways.
+pub fn version_key(version: &str) -> Vec<u64> {
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .map(|part| {
+            part.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        })
+        .collect()
 }
 
 fn not_installed() -> HostError {
@@ -357,6 +553,25 @@ impl MacosHost {
     fn bundle_version() -> Option<String> {
         embedded::version(&Self::installed_bundle()?)
     }
+
+    /// Whether the bundle being driven is the helper Dusk's own launch agent
+    /// points at, or a Sunshine.app that was already installed.
+    ///
+    /// Only `install::embedded` ever writes that agent, so its presence is
+    /// the signal. This is the case `docs/pickup.md:14` recorded: a Mac
+    /// running a standalone 2026.516 from `/Applications` that Dusk drove
+    /// without ever saying it was not the one Dusk ships.
+    fn provenance() -> HostProvenance {
+        let from_agent = Self::agent_plist()
+            .and_then(|plist| embedded::agent_program(&plist))
+            .is_some_and(|program| program.is_file());
+
+        if from_agent {
+            HostProvenance::Dusk
+        } else {
+            HostProvenance::Foreign
+        }
+    }
 }
 
 #[async_trait]
@@ -399,6 +614,7 @@ impl HostBackend for MacosHost {
         Ok(HostStatus::Installed {
             version: Self::bundle_version(),
             running,
+            provenance: Self::provenance(),
         })
     }
 
@@ -496,6 +712,33 @@ pub fn current() -> Box<dyn HostBackend> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_version_is_found_past_the_configuration_sunshine_prints_first() {
+        // Measured output from the Bazzite host, 2026-10-29. Sunshine logs
+        // its whole config before it says what it is, and an earlier line
+        // contains a number — so taking the first line, or the first
+        // number, both give the wrong answer.
+        let out = "\
+[2026-10-29 11:51:07.751562] [info]    config: 'output_name' = 0\n\
+[2026-10-29 11:51:07.753]: Info: Sunshine version: 2026.516.143833 commit: 14ffa6fd\n\
+[2026-10-29 11:51:07.753]: Info: Package Publisher: LizardByte\n";
+        assert_eq!(parse_version(out).as_deref(), Some("2026.516.143833"));
+        assert_eq!(parse_version("nothing of the sort\n"), None);
+    }
+
+    #[test]
+    fn the_newer_of_two_hosts_is_the_bigger_key() {
+        // The pair actually installed on the Bazzite machine: the image's
+        // Sunshine and an unused Flatpak five months newer. Picking by list
+        // order drove the older one.
+        assert!(version_key("2026.914.233613") > version_key("2026.516.143833"));
+        // The tag Dusk pins is the same version wearing a `v`.
+        assert_eq!(version_key("v2026.914.233613"), version_key("2026.914.233613"));
+        // A version that will not parse sorts below one that does, rather
+        // than panicking or winning.
+        assert!(version_key("2026.914") > version_key("what"));
+    }
 
     #[test]
     fn sc_state_is_read_from_the_code_not_the_word() {

@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::apply::InputPath;
 use crate::model::{HostPlatform, HostStatus, SupportTier};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +33,14 @@ pub enum StepState {
     Unknown,
     /// Not applicable on this machine, with the reason.
     NotNeeded {
+        reason: String,
+    },
+    /// Needed here, not done, and not something Dusk can put right — the
+    /// machine is arranged in a way that forecloses it. Distinct from
+    /// [`StepState::Todo`] because offering to carry it out would fail, and
+    /// distinct from [`StepState::Unknown`] because Dusk knows exactly what
+    /// is wrong and says so in `reason`.
+    Blocked {
         reason: String,
     },
 }
@@ -79,7 +88,7 @@ pub fn build(
     status: &HostStatus,
     tier: SupportTier,
     managed: bool,
-    input_ready: bool,
+    input: &InputPath,
     virtual_display: bool,
 ) -> Setup {
     let installed = !matches!(status, HostStatus::NotInstalled);
@@ -173,17 +182,25 @@ pub fn build(
             steps.push(vd);
         }
         HostPlatform::Linux => {
-            steps.push(step(
+            let mut input_step = step(
                 StepId::Input,
                 "Let other machines control this one",
                 "Adds the system rule that lets hosting create a keyboard, mouse and controllers for whoever is streaming. Asks for your password.",
-                if input_ready {
-                    StepState::Done
-                } else {
-                    StepState::Todo
+                match input {
+                    InputPath::Ready => StepState::Done,
+                    InputPath::NeedsRule => StepState::Todo,
+                    InputPath::Blocked { reason } => StepState::Blocked {
+                        reason: reason.clone(),
+                    },
                 },
                 true,
-            ));
+            );
+            // Dusk cannot talk a sandbox into handing over a device, so it
+            // must not offer to try. The reason says what would.
+            if matches!(input, InputPath::Blocked { .. }) {
+                input_step.automatable = false;
+            }
+            steps.push(input_step);
             steps.push(step(
                 StepId::VirtualDisplay,
                 "Set up a virtual display",
@@ -251,7 +268,43 @@ mod tests {
         HostStatus::Installed {
             version: Some("2026.914".into()),
             running,
+            provenance: crate::model::HostProvenance::Dusk,
         }
+    }
+
+    /// The Input step on Linux, whichever of the three it landed in.
+    fn input_step(input: &InputPath) -> Step {
+        build(
+            HostPlatform::Linux,
+            &installed(true),
+            SupportTier::Supported,
+            true,
+            input,
+            false,
+        )
+        .steps
+        .into_iter()
+        .find(|s| s.id == StepId::Input)
+        .expect("Linux has an input step")
+    }
+
+    #[test]
+    fn input_dusk_cannot_fix_is_blocked_rather_than_to_do() {
+        // The case this exists for: a sandboxed host that cannot reach
+        // /dev/uinput. Offering "Do this" would install a udev rule that
+        // changes nothing, and marking it Done — which is what the old
+        // rule-presence check did — argues against looking further.
+        let blocked = input_step(&InputPath::Blocked {
+            reason: "a sandbox cannot reach the device".into(),
+        });
+        assert!(matches!(blocked.state, StepState::Blocked { .. }));
+        assert!(!blocked.automatable);
+
+        // And the two cases that were always right still are.
+        assert_eq!(input_step(&InputPath::Ready).state, StepState::Done);
+        let needs = input_step(&InputPath::NeedsRule);
+        assert_eq!(needs.state, StepState::Todo);
+        assert!(needs.automatable);
     }
 
     #[test]
@@ -261,7 +314,7 @@ mod tests {
             &HostStatus::NotInstalled,
             SupportTier::Supported,
             false,
-            false,
+            &InputPath::NeedsRule,
             false,
         );
         let install = setup
@@ -281,7 +334,7 @@ mod tests {
             &installed(true),
             SupportTier::Supported,
             false,
-            false,
+            &InputPath::NeedsRule,
             false,
         );
         let by = |id: StepId| {
@@ -305,7 +358,7 @@ mod tests {
             &installed(true),
             SupportTier::Experimental,
             true,
-            true,
+            &InputPath::Ready,
             false,
         );
         for id in [StepId::ScreenRecording, StepId::Accessibility] {
@@ -324,7 +377,7 @@ mod tests {
             &installed(true),
             SupportTier::Experimental,
             true,
-            true,
+            &InputPath::Ready,
             false,
         );
         let vd = setup.steps.iter().find(|s| s.id == StepId::VirtualDisplay);
@@ -340,7 +393,7 @@ mod tests {
             &installed(true),
             SupportTier::Supported,
             true,
-            true,
+            &InputPath::Ready,
             false,
         );
         let vd = win
@@ -356,7 +409,7 @@ mod tests {
             &installed(true),
             SupportTier::Supported,
             true,
-            true,
+            &InputPath::Ready,
             false,
         );
         let vd = linux
@@ -374,7 +427,7 @@ mod tests {
             &installed(true),
             SupportTier::Supported,
             true,
-            true,
+            &InputPath::Ready,
             true,
         );
         let vd = setup

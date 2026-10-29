@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { HostState, Snapshot } from "../types";
 import {
   acceptPin,
+  previewSunshineDownload,
   provisionHost,
   setAllowOtherDevices,
   setVirtualScreen,
@@ -31,6 +32,26 @@ function statusLine(host: HostState): string {
     case "unknown":
       return host.status.reason;
   }
+}
+
+/** A dotted numeric version, comparable. `v2026.914` and `2026.914` match. */
+function versionKey(version: string): number[] {
+  return version
+    .trim()
+    .replace(/^v/, "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function olderThan(host: string, shipped: string): boolean {
+  const left = versionKey(host);
+  const right = versionKey(shipped);
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const l = left[i] ?? 0;
+    const r = right[i] ?? 0;
+    if (l !== r) return l < r;
+  }
+  return false;
 }
 
 function virtualScreenDetail(snapshot: Snapshot): string {
@@ -71,6 +92,31 @@ export function HostingPanel({ name, snapshot, onSetup }: Props) {
   const managed = snapshot.hostSignedIn === true;
   const managedKnown = snapshot.hostSignedIn !== null;
 
+  // Hosting Dusk did not install. Dusk drives it anyway — overwriting
+  // someone's own service would discard what is in it — but it says so,
+  // because otherwise that host's age and quirks read as Dusk's own.
+  const foreign = status.kind === "installed" && status.provenance === "foreign";
+  const hostVersion = status.kind === "installed" ? status.version : null;
+  const [shipped, setShipped] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!foreign) return;
+    let live = true;
+    previewSunshineDownload()
+      .then((preview) => {
+        if (live) setShipped(preview.version || null);
+      })
+      // A version Dusk cannot read is not worth an error in front of
+      // anyone. The note below stands without the comparison.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [foreign]);
+
+  const stale =
+    hostVersion && shipped && olderThan(hostVersion, shipped) ? shipped : null;
+
   const [panel, setPanel] = useState<Panel>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,8 +151,23 @@ export function HostingPanel({ name, snapshot, onSetup }: Props) {
                 Experimental host
               </span>
             )}
+            {foreign && (
+              <span
+                className="axi-chip axi-chip--meta"
+                title="Dusk drives the hosting service that was already on this machine rather than replacing it."
+              >
+                Not installed by Dusk
+              </span>
+            )}
           </div>
           <p className="axi-ink-dim">{statusLine(host)}</p>
+          {foreign && (
+            <p className="axi-ink-dim">
+              {stale
+                ? `This machine's hosting was already here, and Dusk is driving it rather than replacing it. It is version ${hostVersion}, older than the ${stale} Dusk ships. Hosting that misbehaves in ways Dusk's own screens cannot explain is worth suspecting here first.`
+                : "This machine's hosting was already here, and Dusk is driving it rather than replacing it. Its version and settings are not Dusk's own."}
+            </p>
+          )}
         </div>
 
         <div className="axi-row dusk-row__end">

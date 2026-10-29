@@ -108,9 +108,24 @@ export interface HostCapabilities {
   caveats: string[];
 }
 
+/**
+ * Who installed the host Dusk is driving.
+ *
+ * Dusk leaves an existing service alone rather than overwriting what may be
+ * someone's own. That is right; staying quiet about it was not. A Dusk
+ * driving a stranger's Sunshine presents its age and its quirks as Dusk's
+ * own behaviour, which has now cost two debugging sessions.
+ */
+export type HostProvenance = "dusk" | "foreign" | "unknown";
+
 export type HostStatus =
   | { kind: "notInstalled" }
-  | { kind: "installed"; version: string | null; running: boolean }
+  | {
+      kind: "installed";
+      version: string | null;
+      running: boolean;
+      provenance: HostProvenance;
+    }
   | { kind: "unknown"; reason: string };
 
 export interface HostState {
@@ -135,7 +150,13 @@ export type StepState =
   | { kind: "todo" }
   /** Dusk cannot tell from here; the person confirms it themselves. */
   | { kind: "unknown" }
-  | { kind: "notNeeded"; reason: string };
+  | { kind: "notNeeded"; reason: string }
+  /**
+   * Needed here, not done, and not something Dusk can put right. Distinct
+   * from `todo` because offering to carry it out would fail, and from
+   * `unknown` because Dusk knows what is wrong and `reason` says so.
+   */
+  | { kind: "blocked"; reason: string };
 
 export interface Step {
   id: StepId;

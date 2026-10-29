@@ -30,6 +30,10 @@ function stateChip(step: Step): { className: string; label: string } {
         : { className: "axi-chip axi-chip--warn", label: "To do" };
     case "notNeeded":
       return { className: "axi-chip", label: "Not needed" };
+    case "blocked":
+      // Not "To do": nothing anyone presses here will help until the reason
+      // is dealt with, and a button that cannot work is worse than none.
+      return { className: "axi-chip axi-chip--warn", label: "Blocked" };
     case "unknown":
       // Genuinely commentary rather than a verdict: Dusk cannot see this
       // one, which is a different thing from it being undone.
@@ -365,6 +369,7 @@ export function SetupChecklist() {
           const chip = stateChip(step);
           const done = step.state.kind === "done";
           const skip = step.state.kind === "notNeeded";
+          const blocked = step.state.kind === "blocked";
           return (
             <div className="axi-panel axi-panel--tile axi-stack" key={step.id}>
               <div className="axi-row">
@@ -374,11 +379,12 @@ export function SetupChecklist() {
                 </span>
               </div>
               <p className="axi-ink-dim">
-                {step.state.kind === "notNeeded"
+                {step.state.kind === "notNeeded" ||
+                step.state.kind === "blocked"
                   ? step.state.reason
                   : step.detail}
               </p>
-              {!done && !skip && (
+              {!done && !skip && !blocked && (
                 <div className="axi-row">
                   <button
                     type="button"

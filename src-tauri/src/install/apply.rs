@@ -411,10 +411,79 @@ const UINPUT_RULE: &str =
     "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", OPTIONS+=\"static_node=uinput\", TAG+=\"uaccess\"\n\
                            KERNEL==\"uhid\", TAG+=\"uaccess\"\n";
 
+/// What the host that actually runs on this machine can do about input.
+///
+/// Three outcomes rather than two, and the third is the whole point. Dusk
+/// used to ask only whether *some* udev rule granted the seat `/dev/uinput`,
+/// which is a true statement about the machine and can be an irrelevant one
+/// about the host: a sandboxed Sunshine never opens that device whatever any
+/// rule says. Calling that "Done" is worse than saying nothing, because it
+/// argues against looking further — which is exactly what it did on a
+/// Bazzite host whose fullscreen games had no working mouse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputPath {
+    /// The host can open `/dev/uinput`. Nothing to do.
+    Ready,
+    /// It would use `/dev/uinput`, but nothing grants the device to the seat.
+    /// This is the one case [`linux_allow_input`] was written for.
+    NeedsRule,
+    /// It cannot reach `/dev/uinput` at all, and no udev rule changes that.
+    Blocked { reason: String },
+}
+
+/// Which of the three this machine is in.
+pub async fn linux_input_path() -> InputPath {
+    if !cfg!(target_os = "linux") {
+        return InputPath::Ready;
+    }
+
+    // A sandbox decides for itself which devices it can see, and the seat's
+    // permissions do not reach inside it. Checked before the device itself,
+    // because Dusk opening `/dev/uinput` successfully says nothing about
+    // whether the host inside a sandbox can.
+    if crate::host::platform::linux_host_sandboxed().await
+        && !crate::host::platform::linux_sandbox_grants_devices().await
+    {
+        return InputPath::Blocked {
+            reason: "This machine's hosting runs inside a Flatpak sandbox that cannot reach \
+                     /dev/uinput, so no system rule will let it create a keyboard, mouse or \
+                     controllers. It is the first thing to suspect when input works on the \
+                     desktop but not inside a game that captures the mouse. To hand it the \
+                     device: flatpak override --user --device=all dev.lizardbyte.app.Sunshine"
+                .into(),
+        };
+    }
+
+    if uinput_openable() {
+        return InputPath::Ready;
+    }
+    if !uinput_rule_present() {
+        return InputPath::NeedsRule;
+    }
+
+    // A rule is installed and the device still will not open. Saying "To do"
+    // here would offer to install the rule that is already there.
+    InputPath::Blocked {
+        reason: "A system rule for /dev/uinput is installed and this machine still cannot open \
+                 the device. The usual cause is the rule not having been applied yet, which a \
+                 restart settles."
+            .into(),
+    }
+}
+
+/// Whether the account the host runs as can open the device. The user unit
+/// runs as us, so on any unsandboxed Linux this is the host's own answer.
+fn uinput_openable() -> bool {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/uinput")
+        .is_ok()
+}
+
 /// Whether some rule already grants the seat `/dev/uinput`. Any file will
 /// do, not only Sunshine's: distributions ship their own under other names,
 /// Bazzite's among them.
-pub fn linux_input_ready() -> bool {
+fn uinput_rule_present() -> bool {
     UDEV_RULE_DIRS.iter().any(|dir| {
         std::fs::read_dir(dir).is_ok_and(|entries| {
             entries

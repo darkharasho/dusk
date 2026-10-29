@@ -21,7 +21,7 @@ use crate::install::{
     self,
     steps::{Step, StepId, StepState},
 };
-use crate::model::HostStatus;
+use crate::model::{HostProvenance, HostStatus};
 use crate::sunshine::CredentialStore;
 
 const USAGE: &str = "\
@@ -266,13 +266,24 @@ async fn status() -> i32 {
     println!("Platform:  {:?}", state.platform);
     match &state.status {
         HostStatus::NotInstalled => println!("Hosting:   not installed"),
-        HostStatus::Installed { version, running } => println!(
-            "Hosting:   installed{}, {}",
+        HostStatus::Installed {
+            version,
+            running,
+            provenance,
+        } => println!(
+            "Hosting:   installed{}, {}{}",
             version
                 .as_deref()
                 .map(|v| format!(" (version {v})"))
                 .unwrap_or_default(),
-            if *running { "running" } else { "stopped" }
+            if *running { "running" } else { "stopped" },
+            // Worth a headless run saying out loud: a host Dusk did not
+            // install is the first thing to suspect when hosting misbehaves
+            // in ways Dusk's own screens cannot explain.
+            match provenance {
+                HostProvenance::Foreign => " — not installed by Dusk",
+                HostProvenance::Dusk | HostProvenance::Unknown => "",
+            }
         ),
         HostStatus::Unknown { reason } => println!("Hosting:   unknown — {reason}"),
     }
@@ -485,7 +496,7 @@ async fn build(host: &dyn HostBackend, credentials: &CredentialStore) -> install
         &state.status,
         state.capabilities.support_tier,
         credentials.load().await.is_some(),
-        install::apply::linux_input_ready(),
+        &install::apply::linux_input_path().await,
         install::display_driver::installed(),
     )
 }
@@ -583,9 +594,15 @@ fn report(steps: &[Step]) {
             StepState::Todo => "optional",
             StepState::Unknown => "needs you",
             StepState::NotNeeded { .. } => "n/a",
+            StepState::Blocked { .. } => "BLOCKED",
         };
         println!("  [{mark:^9}] {}", step.title);
-        if matches!(step.state, StepState::Unknown)
+        // A blocked step prints its reason rather than its detail: the
+        // detail describes work Dusk would do, and the reason is why it
+        // cannot. On a headless host this line is the whole diagnosis.
+        if let StepState::Blocked { reason } = &step.state {
+            println!("              {reason}");
+        } else if matches!(step.state, StepState::Unknown)
             || (step.state == StepState::Todo && !step.automatable)
         {
             println!("              {}", step.detail);
@@ -596,6 +613,7 @@ fn report(steps: &[Step]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::install::apply::InputPath;
     use crate::model::{HostPlatform, HostStatus, SupportTier};
 
     fn steps(status: HostStatus, managed: bool) -> Vec<Step> {
@@ -604,7 +622,7 @@ mod tests {
             &status,
             SupportTier::Supported,
             managed,
-            true,
+            &InputPath::Ready,
             false,
         )
         .steps
@@ -631,6 +649,7 @@ mod tests {
             HostStatus::Installed {
                 version: None,
                 running: true,
+                provenance: HostProvenance::Unknown,
             },
             false,
         );
@@ -643,6 +662,7 @@ mod tests {
             HostStatus::Installed {
                 version: None,
                 running: true,
+                provenance: HostProvenance::Unknown,
             },
             true,
         );
@@ -659,10 +679,11 @@ mod tests {
             &HostStatus::Installed {
                 version: None,
                 running: true,
+                provenance: HostProvenance::Unknown,
             },
             SupportTier::Supported,
             true,
-            true,
+            &InputPath::Ready,
             false,
         )
         .steps;
@@ -696,10 +717,11 @@ mod tests {
             &HostStatus::Installed {
                 version: None,
                 running: true,
+                provenance: HostProvenance::Unknown,
             },
             SupportTier::Experimental,
             true,
-            true,
+            &InputPath::Ready,
             false,
         )
         .steps;

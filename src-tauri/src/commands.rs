@@ -1262,7 +1262,7 @@ pub async fn get_setup(state: State<'_, Arc<AppState>>) -> Result<install::Setup
         &host.status,
         host.capabilities.support_tier,
         inner.credentials.load().await.is_some(),
-        install::apply::linux_input_ready(),
+        &install::apply::linux_input_path().await,
         install::display_driver::installed(),
     ))
 }

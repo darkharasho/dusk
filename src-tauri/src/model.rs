@@ -260,6 +260,27 @@ pub struct HostCapabilities {
     pub caveats: Vec<String>,
 }
 
+/// Who installed the host Dusk is driving.
+///
+/// Dusk deliberately leaves an existing service alone — it may be the
+/// person's own, and overwriting it would discard what is in it. That is the
+/// right call and it stays. What was missing is saying so: a Dusk that
+/// quietly drives someone else's Sunshine presents its age and its quirks as
+/// Dusk's own behaviour. Measured twice now, on a Mac deferring to a
+/// standalone 2026.516 and on Bazzite deferring to the image's, both times
+/// costing an afternoon to the same confusion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostProvenance {
+    /// The service Dusk registered, recognised by what Dusk wrote into it.
+    Dusk,
+    /// Someone else's: the distribution's, a package manager's, or installed
+    /// by hand before Dusk arrived.
+    Foreign,
+    /// Dusk cannot tell on this platform.
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -271,10 +292,17 @@ pub enum HostStatus {
     Installed {
         version: Option<String>,
         running: bool,
+        /// Defaulted so a snapshot persisted by an older Dusk still reads.
+        #[serde(default = "unknown_provenance")]
+        provenance: HostProvenance,
     },
     Unknown {
         reason: String,
     },
+}
+
+fn unknown_provenance() -> HostProvenance {
+    HostProvenance::Unknown
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

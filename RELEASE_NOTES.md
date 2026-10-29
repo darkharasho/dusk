@@ -1,5 +1,21 @@
 # Release Notes
 
+Version v0.3.47 — October 29, 2026
+
+A stream you are in keeps its controls, whatever the other machine has got
+round to saying.
+
+## Changes
+
+- **A stream's stats and its End control no longer wait on the host.** The
+  drawer showed what you were streaming — the live stats, the clipboard note
+  and the button that ends the session — only once the other machine's own
+  state said it was hosting. That state is the grid's last poll, up to five
+  seconds old, so at the start of a stream the controls for it could be
+  missing for the moment the host had not caught up: the one moment they are
+  most wanted. What you are streaming is not something the host has to
+  confirm, so a session Dusk is in now shows its own controls immediately.
+
 Version v0.3.46 — October 29, 2026
 
 A stream that failed no longer leaves the next one to fail the same way, and

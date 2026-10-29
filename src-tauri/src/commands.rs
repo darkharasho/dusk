@@ -674,7 +674,7 @@ pub async fn launch_app(
         .clear_running_clients(std::time::Duration::from_secs(3))
         .await;
 
-    let (app_name, host_hosting) = {
+    let (app_name, polled_hosting, http_port) = {
         let registry = inner.registry.read().await;
         let device = registry
             .devices()
@@ -690,7 +690,22 @@ pub async fn launch_app(
         (
             app_name,
             matches!(device.activity, Activity::Hosting { .. }),
+            device.http_port,
         )
+    };
+
+    // Whether the host is hosting is asked now rather than read from the
+    // grid's last poll, because the moment this matters most is the moment
+    // the snapshot is least likely to be right: a retry seconds after a
+    // failure, when the card can still say Ready while Sunshine is already
+    // holding the session the dead client left behind. Believing the
+    // snapshot there skipped the clear below, and the retry then failed for
+    // the very reason the clear exists to remove. A host that will not
+    // answer falls back to the grid's last word, which is no worse than the
+    // guess this replaces.
+    let host_hosting = match crate::serverinfo::query_http(&inner.http, &address, http_port).await {
+        Ok(info) => matches!(info.activity(), Activity::Hosting { .. }),
+        Err(_) => polled_hosting,
     };
 
     // A client that exited without cancelling leaves Sunshine hosting a
@@ -734,6 +749,11 @@ pub async fn launch_app(
         codec: (codec != Codec::Auto).then_some(codec),
         ..Default::default()
     };
+
+    // Kept for the stream log, which is written by the watcher below once the
+    // client is away. Built here because `options` is borrowed by the launch
+    // and this is the one place that still has it.
+    let command_line = crate::moonlight::cli::command_line(&address, &app_name, &options);
 
     // moonlight-qt takes the app's title, not its id.
     let child = moonlight(&inner)?
@@ -865,6 +885,7 @@ pub async fn launch_app(
         let log = crate::moonlight::stream_log::StreamLog::create();
         if let Some(log) = &log {
             log.line(&format!("dusk: streaming {app_name} from {address}"));
+            log.line(&format!("dusk: the client was asked for {command_line}"));
         }
         let ended = crate::moonlight::Moonlight::wait_for_session(&mut child, log).await;
 

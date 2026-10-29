@@ -148,6 +148,20 @@ fn stream_args(host: &str, app: &str, options: &StreamOptions) -> Vec<String> {
     args
 }
 
+/// The client's command line, for the stream log.
+///
+/// A failure read back a day later has to be told from the settings that
+/// caused it, and those are not in the log: the size, rate and codec asked
+/// for live in the store, where the next change overwrites them. Diagnosing
+/// one meant reconstructing the arguments from `devices.json` and hoping
+/// nothing had moved since — so the stream now records what it actually
+/// asked for, rather than what the settings say today.
+pub fn command_line(host: &str, app: &str, options: &StreamOptions) -> String {
+    // Debug-formatted, so an app title with spaces in it — "Steam Big
+    // Picture" — reads as one argument rather than three.
+    format!("{:?}", stream_args(host, app, options))
+}
+
 impl Moonlight {
     /// A client at a known path. Only tests construct one this way —
     /// everything else arrives through [`Moonlight::discover`], which is also
@@ -888,6 +902,24 @@ mod tests {
         );
         assert_eq!(codec_arg(crate::store::Codec::Hevc), "HEVC");
         assert_eq!(codec_arg(crate::store::Codec::Av1), "AV1");
+    }
+
+    /// The log line is read by a person diagnosing a stream that failed days
+    /// ago, so what was asked for has to survive in it — including an app
+    /// title with spaces, which must not read as extra arguments.
+    #[test]
+    fn the_logged_command_line_keeps_a_spaced_title_in_one_piece() {
+        let options = StreamOptions {
+            resolution: Some((3440, 1440)),
+            fps: Some(120),
+            bitrate: Some(150_000),
+            ..Default::default()
+        };
+        let line = command_line("192.168.50.146", "Steam Big Picture", &options);
+        assert!(line.contains(r#""Steam Big Picture""#), "{line}");
+        assert!(line.contains("3440x1440"), "{line}");
+        assert!(line.contains("120"), "{line}");
+        assert!(line.contains("150000"), "{line}");
     }
 
     /// Stand-ins for moonlight-qt, so the timeout and success paths are

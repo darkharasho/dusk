@@ -438,17 +438,35 @@ async fn unit_version(unit: &str) -> Option<String> {
         return Some(hit.clone());
     }
 
+    // Asking Sunshine its version makes it open its log, which truncates the
+    // log the running service has open — so the child is pointed at a
+    // directory of its own. Without this, reading the version on a poll tick
+    // destroys the history anyone would need to diagnose that same host.
+    let scratch = version_scratch_dir();
+    let scratch = scratch.to_string_lossy();
+    let env = [
+        ("XDG_CONFIG_HOME", scratch.as_ref()),
+        ("XDG_STATE_HOME", scratch.as_ref()),
+        // `HOME` too: a build that resolves its config without the XDG
+        // variables lands here rather than in the real one.
+        ("HOME", scratch.as_ref()),
+    ];
+
     let run = match &program {
         // A Flatpak's binary is only reachable inside its sandbox, the same
         // reason `set_credentials` goes through `flatpak run`.
         None => {
-            service::run(
+            service::run_with_env(
                 "flatpak",
                 &["run", "--command=sunshine", FLATPAK_ID, "--version"],
+                &env,
+                service::TIMEOUT,
             )
             .await
         }
-        Some(path) => service::run(path, &["--version"]).await,
+        Some(path) => {
+            service::run_with_env(path, &["--version"], &env, service::TIMEOUT).await
+        }
     }
     .ok()?;
 
@@ -460,6 +478,15 @@ async fn unit_version(unit: &str) -> Option<String> {
     // caching that would keep it blank until Dusk restarted.
     version_cache().lock().await.insert(key, found.clone());
     Some(found)
+}
+
+/// A throwaway config directory for the version probe, so the host's own one
+/// is never written to. Created if it is missing; its contents do not matter
+/// and are never read.
+fn version_scratch_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("dusk-host-version");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }
 
 type VersionCache = tokio::sync::Mutex<std::collections::HashMap<String, String>>;

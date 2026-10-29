@@ -16,7 +16,7 @@ use super::HostError;
 ///
 /// This is the budget for *asking*: `is-active`, `sc query`, `launchctl
 /// list`. Measured at 0.01s on a working machine.
-const TIMEOUT: Duration = Duration::from_secs(10);
+pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Starting, stopping or restarting is not asking, and cannot share a budget
 /// with it.
@@ -68,9 +68,27 @@ pub async fn run(program: &str, args: &[&str]) -> Result<Run, HostError> {
 }
 
 pub async fn run_for(program: &str, args: &[&str], budget: Duration) -> Result<Run, HostError> {
+    run_with_env(program, args, &[], budget).await
+}
+
+/// As [`run_for`], with environment variables set for the child only.
+///
+/// Needed because asking Sunshine its version has a side effect: it opens
+/// its log file, which truncates the one the *running* service already has
+/// open. Measured on the Bazzite host — a service up since the night before
+/// came back with 244 KB of file holding 59 lines and a hole of NUL bytes
+/// where its history had been. Pointing the child at a config directory of
+/// its own is what keeps a read from destroying the thing worth reading.
+pub async fn run_with_env(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    budget: Duration,
+) -> Result<Run, HostError> {
     let mut command = tokio::process::Command::new(program);
     command
         .args(args)
+        .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

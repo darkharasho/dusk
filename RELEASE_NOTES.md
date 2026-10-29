@@ -1,5 +1,43 @@
 # Release Notes
 
+Version v0.3.48 — October 29, 2026
+
+Dusk says which hosting service is actually running, and stops reporting
+input as set up on a machine where it is not.
+
+## Changes
+
+- **Dusk says when it did not install the hosting service it is driving.**
+  Dusk deliberately leaves an existing service alone, because overwriting
+  one would discard whatever is in it. But it said nothing about having done
+  so, and a Dusk quietly driving someone else's Sunshine presents that
+  service's age and quirks as Dusk's own behaviour. This machine's panel now
+  shows "Not installed by Dusk" when that is the case, and names the version
+  alongside the one Dusk ships when the installed one is older.
+
+- **Hosting's version is read on Linux.** It had never been reported there
+  at all, so "this host is older than the one Dusk ships" could not be
+  noticed even in principle. Dusk now asks the service's own program rather
+  than whatever is first on the path — on the machine this was found on,
+  those were two different Sunshines five months apart.
+
+- **The input step checks the hosting service, not the machine.** It used to
+  ask whether *some* system rule granted `/dev/uinput` — a true statement
+  about the machine that can be an irrelevant one about the service, which
+  may be sandboxed and never able to open that device. Marking it Done
+  argued against looking further. There are three answers now, and the new
+  one says what is wrong, what would fix it, and offers no button that
+  cannot work.
+
+- **Where two hosting services are installed, Dusk drives the newer.** It
+  took whichever came first in a fixed list.
+
+- **Reading hosting's version no longer destroys its log.** Asking Sunshine
+  what version it is makes it open its log file, which truncated the log the
+  running service already had open — so the first thing anyone would read
+  while diagnosing a host was being wiped by Dusk looking at it. The version
+  check now writes somewhere disposable.
+
 Version v0.3.47 — October 29, 2026
 
 A stream you are in keeps its controls, whatever the other machine has got

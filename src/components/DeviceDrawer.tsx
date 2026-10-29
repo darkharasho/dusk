@@ -248,36 +248,41 @@ export function DeviceDrawer({
 
           {online && paired && (
             <>
-              {hosting && (
-                <>
-                  {/* A host holds its session open after the client goes
-                      away, so this is routinely a session nobody is in.
-                      Saying so is the difference between a control that
-                      looks wrong and one that explains itself. */}
-                  {!device.streamingHere && (
-                    <p className="axi-ink-dim">
-                      Disconnected. The session is still running on this
-                      machine, and connecting from any of your devices picks
-                      it up.
-                    </p>
-                  )}
-                  {device.streamingHere && <StreamStats deviceId={device.id} />}
-                  {device.streamingHere && clipboardNote && (
-                    <p className="axi-ink-dim">{clipboardNote}</p>
-                  )}
-                  <button
-                    type="button"
-                    className="axi-btn axi-btn--sm dusk-drawer__end"
-                    disabled={busy !== null}
-                    onClick={() => run("quitting", () => quitSession(device.id))}
-                  >
-                    {busy === "quitting"
-                      ? "Ending session"
-                      : device.streamingHere
-                        ? "End the session"
-                        : "End it on the host"}
-                  </button>
-                </>
+              {/* A host holds its session open after the client goes
+                  away, so this is routinely a session nobody is in.
+                  Saying so is the difference between a control that
+                  looks wrong and one that explains itself. */}
+              {hosting && !device.streamingHere && (
+                <p className="axi-ink-dim">
+                  Disconnected. The session is still running on this machine,
+                  and connecting from any of your devices picks it up.
+                </p>
+              )}
+
+              {/* Keyed off our own session rather than the host's, which is
+                  the grid's last poll and so up to five seconds old. Nested
+                  under that flag, a stream we are in lost its stats and its
+                  End control for the moment the host had not caught up —
+                  the one moment they are most wanted. What we are streaming
+                  is not something the host has to confirm. */}
+              {device.streamingHere && <StreamStats deviceId={device.id} />}
+              {device.streamingHere && clipboardNote && (
+                <p className="axi-ink-dim">{clipboardNote}</p>
+              )}
+
+              {(hosting || device.streamingHere) && (
+                <button
+                  type="button"
+                  className="axi-btn axi-btn--sm dusk-drawer__end"
+                  disabled={busy !== null}
+                  onClick={() => run("quitting", () => quitSession(device.id))}
+                >
+                  {busy === "quitting"
+                    ? "Ending session"
+                    : device.streamingHere
+                      ? "End the session"
+                      : "End it on the host"}
+                </button>
               )}
 
               {/* Said here rather than only in the log. A stock Moonlight

@@ -1,5 +1,27 @@
 # Release Notes
 
+Version v0.3.46 — October 29, 2026
+
+A stream that failed no longer leaves the next one to fail the same way, and
+a failure now says what it was asked for.
+
+## Changes
+
+- **A retry is no longer answered by the first failure's leftovers.** When a
+  stream failed, the other machine could be left hosting a session nobody was
+  in, and the next stream had to tell it to let go before it could start.
+  Whether it needed to was read from the grid's last poll — which, on a retry
+  seconds after a failure, could still say the machine was free while it was
+  already holding the dead stream's session. The clear was skipped and the
+  retry failed for the very reason the clear exists to remove. The machine is
+  now asked directly, at the moment it matters. A stream dropped by the
+  network is still left resumable, exactly as before.
+- **A failed stream records what it asked for.** The log for a session kept
+  the machine and the app but not the size, frame rate, bitrate or codec it
+  asked for — those live in settings, where the next change overwrites them,
+  so a failure read back a day later could not be told from the settings that
+  caused it. Each stream now writes the client's arguments to its own log.
+
 Version v0.3.45 — October 28, 2026
 
 Streaming settings can now be set per machine, so a fast host and a modest

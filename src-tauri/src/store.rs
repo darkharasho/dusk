@@ -40,6 +40,22 @@ pub struct Store {
     /// one they cannot reach streams at whatever they manage, so raising it
     /// never hurts a setup that cannot use it.
     pub fps: Option<u32>,
+    /// Let the pointer leave a stream instead of being held inside it.
+    ///
+    /// A stream normally takes the mouse away from this machine entirely —
+    /// the cursor stops existing here and every movement goes to the host,
+    /// which is what a game turning its camera needs. On a desk with two
+    /// screens that is a trap: a fullscreen stream on one of them cannot be
+    /// moved out of without a keyboard, and on macOS where every fullscreen
+    /// is a Space, that means Cmd+Tab out of the stream.
+    ///
+    /// On, the pointer is sent as a position rather than as movement, so it
+    /// stays a pointer on this machine: it can walk off the edge of the
+    /// stream onto the next monitor and the local cursor reappears when it
+    /// does. The cost is real and belongs to games — a camera driven by
+    /// mouse movement has nowhere to move once the pointer reaches the edge
+    /// of the window — so this is off unless asked for.
+    pub free_cursor: bool,
     /// Per-machine overrides over the four settings above. Keyed by device id;
     /// a machine with no entry, or an entry whose fields are all `None`,
     /// streams exactly as the globals say. The id is stable while a machine
@@ -459,6 +475,21 @@ mod tests {
         };
         let back: Store = serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
         assert!(!back.clipboard_sharing.is_on());
+    }
+
+    /// The pointer is held by the stream unless someone asks otherwise:
+    /// that is what a game needs, and an existing settings file never said.
+    #[test]
+    fn the_cursor_is_held_by_the_stream_until_asked_and_then_stays_free() {
+        let store: Store = serde_json::from_str(r#"{"codec":"auto"}"#).unwrap();
+        assert!(!store.free_cursor);
+
+        let asked = Store {
+            free_cursor: true,
+            ..Store::default()
+        };
+        let back: Store = serde_json::from_str(&serde_json::to_string(&asked).unwrap()).unwrap();
+        assert!(back.free_cursor);
     }
 
     #[test]

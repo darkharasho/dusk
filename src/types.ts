@@ -224,6 +224,10 @@ export interface Snapshot {
   /** Which video format a stream asks the host for. */
   codec: Codec;
   /**
+   * Whether the pointer may leave a stream rather than being held inside it.
+   */
+  freeCursor: boolean;
+  /**
    * Per-machine overrides over the four settings above, keyed by device id.
    * A machine absent here, or whose fields are all null, streams at the
    * globals.

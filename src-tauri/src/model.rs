@@ -355,6 +355,9 @@ pub struct Snapshot {
     /// Frames a second, or `None` for the client's own default.
     pub fps: Option<u32>,
     pub codec: crate::store::Codec,
+    /// Whether the pointer may leave a stream rather than being held inside
+    /// it. See [`crate::store::Store::free_cursor`].
+    pub free_cursor: bool,
     /// Per-machine overrides over the four settings above, keyed by device id.
     /// A machine absent here streams at the globals; the drawer reads its
     /// entry to show what a particular machine is set to.

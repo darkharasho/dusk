@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { setBitrate, setClipboardSharing, setCodec, setFps, setResolution } from "../api";
+import {
+  setBitrate,
+  setClipboardSharing,
+  setCodec,
+  setFps,
+  setFreeCursor,
+  setResolution,
+} from "../api";
 import { Toggle } from "./StartupSection";
 import type { Codec, Resolution, Snapshot } from "../types";
 import { describe } from "../errors";
@@ -204,6 +211,15 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
         </div>
         <p className="axi-ink-dim">{codec.detail}</p>
       </div>
+
+      <Toggle
+        id="stream-free-cursor"
+        label="Let the pointer leave the stream"
+        detail="The mouse stays a pointer rather than being taken over by the stream, so it can move off a fullscreen stream onto another screen without leaving it. Turn it off for games that turn the camera with the mouse."
+        on={snapshot.freeCursor}
+        disabled={busy}
+        onChange={(on) => void save(() => setFreeCursor(on))}
+      />
 
       <Toggle
         id="stream-clipboard"

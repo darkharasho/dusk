@@ -231,6 +231,14 @@ export function setCodec(codec: Codec): Promise<void> {
   return invoke("set_codec", { codec });
 }
 
+/**
+ * Whether the pointer may leave a stream instead of being captured by it, so
+ * a fullscreen stream can be stepped out of onto another monitor.
+ */
+export function setFreeCursor(on: boolean): Promise<void> {
+  return invoke("set_free_cursor", { on });
+}
+
 /** Whether text copied during a stream is shared with the other machine. */
 export function setClipboardSharing(on: boolean): Promise<void> {
   return invoke("set_clipboard_sharing", { on });

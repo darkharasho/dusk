@@ -732,7 +732,7 @@ pub async fn launch_app(
 
     // Per-machine overrides win over the global Streaming settings, each field
     // on its own: a machine with nothing set streams exactly as the globals.
-    let (bitrate, codec, fps, resolution) = {
+    let (bitrate, codec, fps, resolution, free_cursor) = {
         let store = inner.store.lock().await;
         let over = store.device_streams.get(&id);
         (
@@ -740,6 +740,7 @@ pub async fn launch_app(
             over.and_then(|o| o.codec).unwrap_or(store.codec),
             over.and_then(|o| o.fps).or(store.fps),
             over.and_then(|o| o.resolution).unwrap_or(store.resolution),
+            store.free_cursor,
         )
     };
     let options = crate::moonlight::cli::StreamOptions {
@@ -747,6 +748,7 @@ pub async fn launch_app(
         bitrate,
         fps,
         codec: (codec != Codec::Auto).then_some(codec),
+        free_cursor,
         ..Default::default()
     };
 
@@ -1206,6 +1208,22 @@ pub async fn set_codec(
     {
         let mut store = state.store.lock().await;
         store.codec = codec;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// Whether the pointer may leave a stream instead of being captured by it.
+#[tauri::command]
+pub async fn set_free_cursor(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.free_cursor = on;
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;

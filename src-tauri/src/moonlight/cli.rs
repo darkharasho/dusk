@@ -108,6 +108,14 @@ pub struct StreamOptions {
     /// Left out for Automatic, so a stock client too old to know a codec
     /// name is only ever handed one somebody chose.
     pub codec: Option<crate::store::Codec>,
+    /// Whether the pointer may leave the stream rather than being captured
+    /// by it. See [`crate::store::Store::free_cursor`].
+    ///
+    /// Always passed, both ways, unlike everything else here: the client
+    /// remembers this one across runs and a person may have set it there
+    /// themselves, so leaving it out would let Dusk's toggle read Off while
+    /// the stream behaves as On.
+    pub free_cursor: bool,
 }
 
 /// The client's name for a codec on its command line.
@@ -145,6 +153,17 @@ fn stream_args(host: &str, app: &str, options: &StreamOptions) -> Vec<String> {
         args.push("--video-codec".into());
         args.push(codec_arg(codec).into());
     }
+    // The client's own name for this is "remote desktop optimized mouse
+    // control", which is the same switch seen from the other end: a pointer
+    // that stays a pointer is one the stream cannot hold on to.
+    args.push(
+        if options.free_cursor {
+            "--absolute-mouse"
+        } else {
+            "--no-absolute-mouse"
+        }
+        .into(),
+    );
     args
 }
 
@@ -877,8 +896,34 @@ mod tests {
         };
         assert_eq!(
             stream_args("host", "Desktop", &options),
-            ["stream", "host", "Desktop", "--resolution", "1920x1080"]
+            [
+                "stream",
+                "host",
+                "Desktop",
+                "--resolution",
+                "1920x1080",
+                "--no-absolute-mouse"
+            ]
         );
+    }
+
+    /// The pointer setting is the one thing stated both ways. The client
+    /// keeps its own copy of it between runs, so saying nothing would leave
+    /// a stream behaving as whatever was last chosen in the client while
+    /// Dusk's toggle said otherwise.
+    #[test]
+    fn the_pointer_is_told_whether_it_may_leave_either_way() {
+        let free = StreamOptions {
+            free_cursor: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            stream_args("host", "Desktop", &free),
+            ["stream", "host", "Desktop", "--absolute-mouse"]
+        );
+
+        let held = StreamOptions::default();
+        assert!(stream_args("host", "Desktop", &held).contains(&"--no-absolute-mouse".to_string()));
     }
 
     #[test]
@@ -897,7 +942,8 @@ mod tests {
                 "--bitrate",
                 "40000",
                 "--video-codec",
-                "H.264"
+                "H.264",
+                "--no-absolute-mouse"
             ]
         );
         assert_eq!(codec_arg(crate::store::Codec::Hevc), "HEVC");

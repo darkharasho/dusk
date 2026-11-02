@@ -28,6 +28,10 @@ as `1`, so the client sent absolute positions; the desktop followed them and
 every pointer-locked game ignored them, which is exactly the "works
 everywhere except in a game" shape. `defaults write
 com.moonlight-stream.Moonlight mouseacceleration -bool false` fixed it.
+**Since v0.3.49 that value cannot strand a stream again**: Dusk states
+`--absolute-mouse` or `--no-absolute-mouse` on every launch, so whatever is
+in the client's own preferences is overridden by the Streaming toggle. It is
+the one stream option passed both ways, for exactly this reason.
 Four hypotheses died first — the overlay eating capture, a stale
 `SUNSHINE_TAG`, a Flatpak sandbox that could not reach `/dev/uinput`, and
 portal-versus-uinput input injection. Read the client's config before

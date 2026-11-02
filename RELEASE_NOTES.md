@@ -1,5 +1,30 @@
 # Release Notes
 
+Version v0.3.49 — November 2, 2026
+
+The pointer can leave a fullscreen stream, so a second monitor is reachable
+without stepping out of the stream first.
+
+## Changes
+
+- **"Let the pointer leave the stream", in Settings › Streaming.** A stream
+  takes the mouse away from this machine entirely: the cursor stops existing
+  here and every movement goes to the host. That is what a game turning its
+  camera needs, and on a desk with two screens it is a trap — a fullscreen
+  stream cannot be stepped out of without a keyboard, and on macOS, where
+  every fullscreen is a Space, that means Cmd+Tab out of the stream. Turned
+  on, the pointer is sent as a position rather than as movement, so it stays
+  a pointer here: it walks off the edge of the stream onto the next monitor
+  and the local cursor comes back when it does. Off by default, because the
+  cost belongs to games — a camera driven by mouse movement has nowhere left
+  to move once the pointer reaches the window edge.
+
+- **The client is told which pointer mode to use on every stream.** It is the
+  one stream setting Dusk states both ways rather than leaving alone. The
+  client remembers this one between runs, so a value set there previously
+  would have left Dusk's toggle reading Off while the stream behaved as On —
+  which is the shape of a fullscreen game with no mouse at all.
+
 Version v0.3.48 — October 29, 2026
 
 Dusk says which hosting service is actually running, and stops reporting

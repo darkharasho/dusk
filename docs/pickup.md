@@ -37,6 +37,68 @@ Four hypotheses died first — the overlay eating capture, a stale
 portal-versus-uinput input injection. Read the client's config before
 reasoning about its defaults.
 
+### A client preference Dusk does not state is a bug waiting its turn
+
+This has now happened twice, and the second time was worse than the first,
+so treat it as a class rather than as two incidents.
+
+On **2026-11-03** a pair of Bluetooth earbuds paired to both the Mac and the
+Bazzite host went silent on the Mac whenever the host was in use. The cause
+was **`hostaudio = 1`** in the same preferences file, set by some press years
+ago and sent on every launch because Dusk never said otherwise. Sunshine only
+reads the host's *real* output device when the client asks for host audio;
+otherwise it captures one of the silent sinks it makes for itself
+(`sink-sunshine-stereo`, `factory.name = "support.null-audio-sink"`). Asking
+for it made the host hold the earbuds open, the earbuds handed their audio to
+the host, and the Mac went quiet.
+
+Caught by watching the host rather than by reasoning: connect the buds and
+`pactl get-default-sink` moves to `bluez_output.*`, and Sunshine's existing
+capture *migrates* onto that sink's monitor. It does not pick a sink at stream
+start — wireplumber moves the stream under it. No session need be running.
+
+Note the shape, because it is what makes this class expensive:
+
+- The setting lives in **a third program's memory**, not in Dusk and not in
+  the host's config, so neither place Dusk shows you is wrong.
+- It changed what the **host** did, over the network.
+- The symptom landed on a **fourth thing** — earbuds — with no error anywhere.
+
+The fix in both cases is the same and it is cheap: **state it on every launch,
+both ways**. `stream_args` passes `--absolute-mouse`/`--no-absolute-mouse` and
+`--audio-on-host`/`--no-audio-on-host` unconditionally. Everything else Dusk
+sends is omitted when unset, which is right for a value, and wrong for any
+toggle whose stale value can reach the host.
+
+**Fifteen toggles are still unstated.** The client has seventeen
+(`addToggleOption` in `app/cli/commandlineparser.cpp:349`), and Dusk states
+two. All fifteen sat at their client defaults on this Mac when audited on
+2026-11-03, so none is currently diverged — but that is luck, not design. The
+three that cross the network and change host behaviour are the ones to fix
+next, in this order:
+
+1. **`quit-after`** (`quitAppAfter`) — the worst, because it contradicts
+   something Dusk documents. It closes the app on the host when a session
+   ends gracefully (`session.cpp:1276`). The overlay's Disconnect is supposed
+   to leave the host's session running for the next machine to resume; a
+   stale `1` makes it behave like End session instead, and Dusk's two
+   controls collapse into one with no sign on screen.
+2. **`game-optimization`** (`gameopts`) — asks the host to change its own
+   settings for streaming.
+3. **`hdr`** — changes what the host encodes.
+
+The rest (`vsync`, `frame-pacing`, `yuv444`, `multi-controller`,
+`background-gamepad`, `swap-gamepad-buttons`, `reverse-scroll-direction`,
+`mouse-buttons-swap`, `touchscreen-trackpad`, `keep-awake`,
+`mute-on-focus-loss`, `performance-overlay`) only affect this machine. Still
+worth stating eventually, but a stale one is a local annoyance rather than a
+mystery spanning two computers.
+
+To audit again: `defaults read com.moonlight-stream.Moonlight` on macOS, and
+compare against the defaults in `reload()`
+(`app/settings/streamingpreferences.cpp:125`). Anything that differs is a
+divergence Dusk is not overriding.
+
 **Asking Sunshine its version truncates the log of the running service.**
 Measured here: a host up since the previous night came back with 244 KB of
 file holding 59 lines and a hole of NUL bytes where its history had been,

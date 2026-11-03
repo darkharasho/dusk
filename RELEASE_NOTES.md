@@ -1,5 +1,21 @@
 # Release Notes
 
+Version v0.3.51 — November 3, 2026
+
+Leaving a stream no longer risks closing what is running on the other
+machine.
+
+## Changes
+
+- **Leaving a stream never closes the app on the host.** Dusk offers these
+  as two separate presses — leave the stream and the session stays up for
+  any of your machines to pick up, or end the session and it closes. The
+  streaming client has a remembered setting of its own that closes the app
+  whenever a session ends, and left to itself it could quietly turn the
+  first press into the second, with nothing on screen admitting the two had
+  become the same button. Dusk now says what it wants on every launch.
+  Ending a session on purpose is unaffected.
+
 Version v0.3.50 — November 3, 2026
 
 A stream no longer takes a Bluetooth headset away from the machine you are

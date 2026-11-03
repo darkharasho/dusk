@@ -732,7 +732,7 @@ pub async fn launch_app(
 
     // Per-machine overrides win over the global Streaming settings, each field
     // on its own: a machine with nothing set streams exactly as the globals.
-    let (bitrate, codec, fps, resolution, free_cursor) = {
+    let (bitrate, codec, fps, resolution, free_cursor, host_audio) = {
         let store = inner.store.lock().await;
         let over = store.device_streams.get(&id);
         (
@@ -741,6 +741,7 @@ pub async fn launch_app(
             over.and_then(|o| o.fps).or(store.fps),
             over.and_then(|o| o.resolution).unwrap_or(store.resolution),
             store.free_cursor,
+            store.host_audio,
         )
     };
     let options = crate::moonlight::cli::StreamOptions {
@@ -749,6 +750,7 @@ pub async fn launch_app(
         fps,
         codec: (codec != Codec::Auto).then_some(codec),
         free_cursor,
+        host_audio,
         ..Default::default()
     };
 
@@ -768,8 +770,11 @@ pub async fn launch_app(
     // The card follows *our* session, not Sunshine's. Marked before the
     // watcher so the grid does not have a window where the stream is up
     // and the card still says Ready.
+    // `options.free_cursor` rather than the store's: this is the value that
+    // actually went on the command line, and the store can move under a
+    // running stream without the stream changing.
     inner
-        .session_started(&id, session.control(), child.id())
+        .session_started(&id, session.control(), child.id(), options.free_cursor)
         .await;
 
     // What the in-stream overlay asks for. The overlay raises an intent and
@@ -1224,6 +1229,22 @@ pub async fn set_free_cursor(
     {
         let mut store = state.store.lock().await;
         store.free_cursor = on;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// Whether a stream also plays its sound on the host's own speakers.
+#[tauri::command]
+pub async fn set_host_audio(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.host_audio = on;
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;

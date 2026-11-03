@@ -237,6 +237,12 @@ export interface Snapshot {
    */
   freeCursor: boolean;
   /**
+   * Whether a stream also plays its sound on the host's own speakers. Off
+   * by default: asking for it makes the host hold its real output device
+   * open for the length of the stream.
+   */
+  hostAudio: boolean;
+  /**
    * Per-machine overrides over the four settings above, keyed by device id.
    * A machine absent here, or whose fields are all null, streams at the
    * globals.

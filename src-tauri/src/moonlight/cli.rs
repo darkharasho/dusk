@@ -116,6 +116,16 @@ pub struct StreamOptions {
     /// themselves, so leaving it out would let Dusk's toggle read Off while
     /// the stream behaves as On.
     pub free_cursor: bool,
+    /// Whether the host also plays the stream's sound on its own speakers.
+    /// See [`crate::store::Store::host_audio`].
+    ///
+    /// Stated both ways for the same reason as `free_cursor`, and with more
+    /// at stake: the client remembers this one too, and a stray `hostaudio`
+    /// of `1` makes the host capture its real output device instead of its
+    /// own silent sink. That is not a preference about where sound comes
+    /// out — it changes which device the host holds open, and it can take
+    /// a shared Bluetooth headset away from the machine you are sitting at.
+    pub host_audio: bool,
 }
 
 /// The client's name for a codec on its command line.
@@ -161,6 +171,20 @@ fn stream_args(host: &str, app: &str, options: &StreamOptions) -> Vec<String> {
             "--absolute-mouse"
         } else {
             "--no-absolute-mouse"
+        }
+        .into(),
+    );
+    // Stated both ways as well, and for a sharper reason than the pointer:
+    // this one decides what the *host* captures, not just where sound comes
+    // out. Left unsaid, a `hostaudio` left at `1` in the client's own
+    // settings has the host read its real output device for the length of
+    // the stream — which is how a Bluetooth headset shared with this
+    // machine ends up answering to the host instead.
+    args.push(
+        if options.host_audio {
+            "--audio-on-host"
+        } else {
+            "--no-audio-on-host"
         }
         .into(),
     );
@@ -902,7 +926,8 @@ mod tests {
                 "Desktop",
                 "--resolution",
                 "1920x1080",
-                "--no-absolute-mouse"
+                "--no-absolute-mouse",
+                "--no-audio-on-host"
             ]
         );
     }
@@ -919,11 +944,40 @@ mod tests {
         };
         assert_eq!(
             stream_args("host", "Desktop", &free),
-            ["stream", "host", "Desktop", "--absolute-mouse"]
+            [
+                "stream",
+                "host",
+                "Desktop",
+                "--absolute-mouse",
+                "--no-audio-on-host"
+            ]
         );
 
         let held = StreamOptions::default();
         assert!(stream_args("host", "Desktop", &held).contains(&"--no-absolute-mouse".to_string()));
+    }
+
+    /// Host audio is stated both ways too, and this is the one where saying
+    /// nothing did real damage: the client remembered `hostaudio = 1`, so
+    /// every stream had Sunshine capture the host's real output device
+    /// instead of its own silent sink. With a Bluetooth headset paired to
+    /// both machines that was enough to take the headset away from the
+    /// machine the person was sitting at, with nothing anywhere saying why.
+    #[test]
+    fn the_host_is_told_whether_to_play_the_sound_too_either_way() {
+        let aloud = StreamOptions {
+            host_audio: true,
+            ..Default::default()
+        };
+        assert!(stream_args("host", "Desktop", &aloud).contains(&"--audio-on-host".to_string()));
+
+        let quiet = StreamOptions::default();
+        let args = stream_args("host", "Desktop", &quiet);
+        assert!(args.contains(&"--no-audio-on-host".to_string()));
+        assert!(
+            !args.contains(&"--audio-on-host".to_string()),
+            "the two spellings must never both appear"
+        );
     }
 
     #[test]
@@ -943,7 +997,8 @@ mod tests {
                 "40000",
                 "--video-codec",
                 "H.264",
-                "--no-absolute-mouse"
+                "--no-absolute-mouse",
+                "--no-audio-on-host"
             ]
         );
         assert_eq!(codec_arg(crate::store::Codec::Hevc), "HEVC");

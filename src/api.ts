@@ -239,6 +239,16 @@ export function setFreeCursor(on: boolean): Promise<void> {
   return invoke("set_free_cursor", { on });
 }
 
+/**
+ * Whether a stream also plays its sound on the host's own speakers.
+ *
+ * Not only a question of where the sound comes out: asking for it makes the
+ * host capture its real output device instead of its own silent one.
+ */
+export function setHostAudio(on: boolean): Promise<void> {
+  return invoke("set_host_audio", { on });
+}
+
 /** Whether text copied during a stream is shared with the other machine. */
 export function setClipboardSharing(on: boolean): Promise<void> {
   return invoke("set_clipboard_sharing", { on });

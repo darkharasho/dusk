@@ -5,6 +5,7 @@ import {
   setCodec,
   setFps,
   setFreeCursor,
+  setHostAudio,
   setResolution,
 } from "../api";
 import { Toggle } from "./StartupSection";
@@ -255,6 +256,15 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
         on={snapshot.freeCursor}
         disabled={busy}
         onChange={(on) => void save(() => setFreeCursor(on))}
+      />
+
+      <Toggle
+        id="stream-host-audio"
+        label="Play the sound on the host too"
+        detail="The machine you are streaming plays the sound through its own speakers as well as sending it here. Leave it off unless someone is sitting at that machine: it makes the host hold its own sound device open for the whole stream, which can take a Bluetooth headset shared between the two machines away from this one."
+        on={snapshot.hostAudio}
+        disabled={busy}
+        onChange={(on) => void save(() => setHostAudio(on))}
       />
 
       <Toggle

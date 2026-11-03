@@ -56,6 +56,22 @@ pub struct Store {
     /// mouse movement has nowhere to move once the pointer reaches the edge
     /// of the window — so this is off unless asked for.
     pub free_cursor: bool,
+    /// Also play a stream's sound on the host's own speakers, rather than
+    /// only here.
+    ///
+    /// Off is not merely the quieter choice, it is the safer one, and the
+    /// reason is worth writing down because it cost an afternoon on
+    /// 2026-11-03. Asking for host audio changes what the *host* captures:
+    /// Sunshine stops using the silent sink it makes for itself and reads
+    /// the host's real output device instead. Whatever that device is, the
+    /// host now holds it open for the whole stream.
+    ///
+    /// When it is a Bluetooth headset paired to both machines — the case
+    /// that found this — the host monitoring it is enough to make the
+    /// headset hand its audio to the host, and the machine you are sitting
+    /// at goes silent. Nothing in either program says so; the sound simply
+    /// stops. So Dusk asks for host audio only when someone wants it.
+    pub host_audio: bool,
     /// Per-machine overrides over the four settings above. Keyed by device id;
     /// a machine with no entry, or an entry whose fields are all `None`,
     /// streams exactly as the globals say. The id is stable while a machine
@@ -490,6 +506,22 @@ mod tests {
         };
         let back: Store = serde_json::from_str(&serde_json::to_string(&asked).unwrap()).unwrap();
         assert!(back.free_cursor);
+    }
+
+    /// The host stays quiet unless someone asks, and an existing settings
+    /// file never asked. Defaulting the other way would hand every upgrade
+    /// the Bluetooth bug this setting exists to stop.
+    #[test]
+    fn the_host_is_silent_until_asked_and_then_stays_asked() {
+        let store: Store = serde_json::from_str(r#"{"codec":"auto"}"#).unwrap();
+        assert!(!store.host_audio);
+
+        let asked = Store {
+            host_audio: true,
+            ..Store::default()
+        };
+        let back: Store = serde_json::from_str(&serde_json::to_string(&asked).unwrap()).unwrap();
+        assert!(back.host_audio);
     }
 
     #[test]

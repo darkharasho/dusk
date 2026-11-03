@@ -64,28 +64,38 @@ Note the shape, because it is what makes this class expensive:
 - It changed what the **host** did, over the network.
 - The symptom landed on a **fourth thing** — earbuds — with no error anywhere.
 
-The fix in both cases is the same and it is cheap: **state it on every launch,
-both ways**. `stream_args` passes `--absolute-mouse`/`--no-absolute-mouse` and
-`--audio-on-host`/`--no-audio-on-host` unconditionally. Everything else Dusk
-sends is omitted when unset, which is right for a value, and wrong for any
-toggle whose stale value can reach the host.
+The fix in both cases is the same and it is cheap: **state it on every
+launch**. `stream_args` passes `--absolute-mouse`/`--no-absolute-mouse`,
+`--audio-on-host`/`--no-audio-on-host` and `--no-quit-after` unconditionally.
+Everything else Dusk sends is omitted when unset, which is right for a value,
+and wrong for any toggle whose stale value can reach the host.
 
-**Fifteen toggles are still unstated.** The client has seventeen
-(`addToggleOption` in `app/cli/commandlineparser.cpp:349`), and Dusk states
-two. All fifteen sat at their client defaults on this Mac when audited on
-2026-11-03, so none is currently diverged — but that is luck, not design. The
-three that cross the network and change host behaviour are the ones to fix
-next, in this order:
+Note that the third of those takes no setting, and that is the other half of
+the lesson. Both ways is right when a person could genuinely want either.
+`quit-after` is not that: Dusk already offers both of its outcomes as two
+separate presses, so the only thing a preference could add is the chance of
+one press silently doing the other's job. **When Dusk already owns the
+policy, state it one way and offer nothing.**
 
-1. **`quit-after`** (`quitAppAfter`) — the worst, because it contradicts
-   something Dusk documents. It closes the app on the host when a session
-   ends gracefully (`session.cpp:1276`). The overlay's Disconnect is supposed
-   to leave the host's session running for the next machine to resume; a
-   stale `1` makes it behave like End session instead, and Dusk's two
-   controls collapse into one with no sign on screen.
-2. **`game-optimization`** (`gameopts`) — asks the host to change its own
+**Fourteen toggles are still unstated.** The client has seventeen
+(`addToggleOption` in `app/cli/commandlineparser.cpp:349`), and Dusk now
+states three. All fourteen sat at their client defaults on this Mac when
+audited on 2026-11-03, so none is currently diverged — but that is luck, not
+design. Two still cross the network and change host behaviour, and are the
+ones to fix next:
+
+1. **`game-optimization`** (`gameopts`) — asks the host to change its own
    settings for streaming.
-3. **`hdr`** — changes what the host encodes.
+2. **`hdr`** — changes what the host encodes.
+
+Done, for the record: **`quit-after`** (`quitAppAfter`) was the worst of the
+three, because it contradicted something Dusk documents. It closes the app on
+the host when a session ends on its own (`session.cpp:1276`), so a stale `1`
+turned the overlay's Disconnect — which is supposed to leave the session up
+for the next machine to resume — into End session, collapsing two controls
+into one with no sign on screen. Forcing it off does not cost the deliberate
+case: End session calls `setShouldExit(true)` (`keyboard.cpp:169`), which
+overrides the preference at the call.
 
 The rest (`vsync`, `frame-pacing`, `yuv444`, `multi-controller`,
 `background-gamepad`, `swap-gamepad-buttons`, `reverse-scroll-direction`,

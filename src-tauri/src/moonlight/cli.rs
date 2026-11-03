@@ -188,6 +188,21 @@ fn stream_args(host: &str, app: &str, options: &StreamOptions) -> Vec<String> {
         }
         .into(),
     );
+    // Always off, and with no setting behind it, unlike the two above.
+    //
+    // `quitAppAfter` closes the app on the host when a session ends on its
+    // own (`session.cpp:1276` in the fork). Dusk already offers both
+    // outcomes as two separate things a person presses: leaving a stream
+    // keeps the session up for any machine to resume, and End the session
+    // closes it. A remembered `1` here silently turns the first into the
+    // second, so the two controls do the same thing with nothing on screen
+    // admitting it.
+    //
+    // There is nothing to configure, because what it would configure is
+    // already a button. Ending the session deliberately still works: the
+    // overlay's End session calls `setShouldExit(true)`, which overrides
+    // this at the call rather than reading the preference.
+    args.push("--no-quit-after".into());
     args
 }
 
@@ -927,7 +942,8 @@ mod tests {
                 "--resolution",
                 "1920x1080",
                 "--no-absolute-mouse",
-                "--no-audio-on-host"
+                "--no-audio-on-host",
+                "--no-quit-after"
             ]
         );
     }
@@ -949,7 +965,8 @@ mod tests {
                 "host",
                 "Desktop",
                 "--absolute-mouse",
-                "--no-audio-on-host"
+                "--no-audio-on-host",
+                "--no-quit-after"
             ]
         );
 
@@ -980,6 +997,31 @@ mod tests {
         );
     }
 
+    /// Leaving a stream must never close what is running on the host. That
+    /// is End the session, a different press, and the client's remembered
+    /// `quitAppAfter` is perfectly able to turn the first into the second
+    /// with nothing on screen saying so. Stated on every launch, one way
+    /// only: there is nothing to configure here, because what it would
+    /// configure is already two buttons.
+    #[test]
+    fn leaving_a_stream_never_closes_the_app_on_the_host() {
+        for options in [
+            StreamOptions::default(),
+            StreamOptions {
+                free_cursor: true,
+                host_audio: true,
+                ..Default::default()
+            },
+        ] {
+            let args = stream_args("host", "Desktop", &options);
+            assert!(args.contains(&"--no-quit-after".to_string()));
+            assert!(
+                !args.contains(&"--quit-after".to_string()),
+                "the host's app is never closed by a stream merely ending"
+            );
+        }
+    }
+
     #[test]
     fn a_chosen_bitrate_and_codec_are_passed_in_the_clients_own_words() {
         let options = StreamOptions {
@@ -998,7 +1040,8 @@ mod tests {
                 "--video-codec",
                 "H.264",
                 "--no-absolute-mouse",
-                "--no-audio-on-host"
+                "--no-audio-on-host",
+                "--no-quit-after"
             ]
         );
         assert_eq!(codec_arg(crate::store::Codec::Hevc), "HEVC");

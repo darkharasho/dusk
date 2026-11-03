@@ -10,6 +10,7 @@ import {
 import { Toggle } from "./StartupSection";
 import type { Codec, Resolution, Snapshot } from "../types";
 import { describe } from "../errors";
+import { OVERLAY_HOTKEY } from "../hotkeys";
 
 /** The choices, keyed by what the select holds. */
 export const CHOICES: { value: string; label: string; resolution: Resolution }[] = [
@@ -64,6 +65,35 @@ function fpsDetail(fps: number | null): string {
   return `Streams ask for up to ${fps} frames a second. The host sends fewer if it cannot encode that fast, so a cap higher than it can reach does no harm.`;
 }
 
+/**
+ * What letting the pointer go buys and costs, including the two parts that
+ * are each easy to mistake for a bug.
+ *
+ * The mode reaches the client as a launch argument, so a stream already
+ * running keeps whatever it started with: flipping this and watching a live
+ * stream ignore it reads as a switch that does nothing.
+ *
+ * And it decides whether the floating in-stream handle can be clicked at
+ * all. A stream that holds the pointer locks the cursor, so there is nothing
+ * to aim at the handle with and the client hit-tests nothing — the hotkey is
+ * the only way into the overlay. Nothing about this screen hints at that
+ * unless it is said here.
+ *
+ * `contradicted` is a stream running right now in the other mode, which is
+ * the only time the gap between this switch and what is on screen is worth
+ * spending a sentence on. Merely streaming is not enough: a stream that
+ * already agrees needs no explaining.
+ */
+export function cursorDetail(contradicted: boolean): string {
+  return [
+    "The mouse stays a pointer rather than being taken over by the stream, so it can move off a fullscreen stream onto another screen without leaving it.",
+    `Turn it off for games that turn the camera with the mouse — with it off the floating in-stream handle cannot be clicked, and ${OVERLAY_HOTKEY} opens its menu instead.`,
+    contradicted
+      ? "The stream running now launched the other way and keeps it until it ends; this takes effect the next time you connect."
+      : "Takes effect the next time you connect.",
+  ].join(" ");
+}
+
 export const CODECS: { value: Codec; label: string; detail: string }[] = [
   { value: "auto", label: "Automatic", detail: "The two machines settle on the best format both can handle in hardware." },
   { value: "h264", label: "H.264", detail: "Every machine can play it, but it needs the most data for a sharp picture." },
@@ -92,6 +122,12 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
   // A rate set some other way still shows as itself.
   const fpsCustom = fps !== null && !FRAME_RATES.includes(fps);
   const codec = CODECS.find((c) => c.value === snapshot.codec) ?? CODECS[0];
+  // A stream on screen right now in the mode this switch does not say. Read
+  // from the stream rather than from `streamingHere` and the setting, because
+  // the stream is the only thing that knows what it was launched with.
+  const contradicted = snapshot.devices.some(
+    (d) => d.streamFreeCursor != null && d.streamFreeCursor !== snapshot.freeCursor,
+  );
 
   async function save(change: () => Promise<void>) {
     setBusy(true);
@@ -215,7 +251,7 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
       <Toggle
         id="stream-free-cursor"
         label="Let the pointer leave the stream"
-        detail="The mouse stays a pointer rather than being taken over by the stream, so it can move off a fullscreen stream onto another screen without leaving it. Turn it off for games that turn the camera with the mouse."
+        detail={cursorDetail(contradicted)}
         on={snapshot.freeCursor}
         disabled={busy}
         onChange={(on) => void save(() => setFreeCursor(on))}

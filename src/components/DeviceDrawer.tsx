@@ -15,6 +15,7 @@ import {
 import { StreamStats } from "./StreamStats";
 import { RemoteUpdate } from "./RemoteUpdate";
 import { describe } from "../errors";
+import { OVERLAY_HOTKEY } from "../hotkeys";
 
 interface Props {
   device: Device;
@@ -32,6 +33,28 @@ interface Props {
 }
 
 type Busy = null | "pairing" | "launching" | "quitting";
+
+/**
+ * How to reach the in-stream controls of the stream that is up, given the
+ * pointer mode it launched with.
+ *
+ * The hotkey leads in every case because it is the one way in that works in
+ * both modes. Whether the floating handle answers a click does not: a stream
+ * holding the pointer locks the cursor, so there is nothing to aim with and
+ * the client hit-tests nothing. `null` is a staged session with no client
+ * behind it, where the handle is not ours to promise either way.
+ */
+export function overlayReach(freeCursor: boolean | null): string {
+  const press = `Press ${OVERLAY_HOTKEY} in the stream for the in-stream controls.`;
+  switch (freeCursor) {
+    case true:
+      return `${press} Or click the floating handle — this stream is letting the pointer leave.`;
+    case false:
+      return `${press} This stream is holding the pointer, so the floating handle cannot be clicked; Streaming settings can let it leave.`;
+    default:
+      return press;
+  }
+}
 
 /**
  * One machine, opened.
@@ -294,6 +317,18 @@ export function DeviceDrawer({
                   The in-stream controls are unavailable with this streaming
                   client, so ending a session means coming back here.
                 </p>
+              )}
+
+              {/* The other half of the same thing, and the more useful half:
+                  when the controls do exist, how to reach them. The floating
+                  handle looks like the way in and is not always clickable —
+                  a stream that holds the pointer locks the cursor, so there
+                  is nothing to aim at it with and the client hit-tests
+                  nothing. The hotkey works in either mode, which is why it
+                  leads. Keyed to what this stream launched with rather than
+                  to the setting, which can have moved under it. */}
+              {device.streamingHere && overlayAvailable !== false && (
+                <p className="axi-ink-dim">{overlayReach(device.streamFreeCursor)}</p>
               )}
 
               <h3 className="axi-eyebrow">Apps</h3>

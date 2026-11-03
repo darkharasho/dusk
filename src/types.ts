@@ -66,6 +66,15 @@ export interface Device {
   /** True when this Dusk is streaming from the machine right now. */
   streamingHere: boolean;
   /**
+   * Whether the stream running here let the pointer out, as that stream was
+   * launched, and null when nothing is streaming from this machine.
+   *
+   * Not the same as the snapshot's `freeCursor`, which is what the *next*
+   * stream will use: the mode is fixed by a launch argument, so the two
+   * differ for the whole of a stream whose setting moved under it.
+   */
+  streamFreeCursor: boolean | null;
+  /**
    * The machine answers on its plain port, but its pairing port has not
    * completed a handshake for a while. Pairing, streaming and ending a
    * session all go through that port, so nothing works until its hosting

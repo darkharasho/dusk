@@ -25,6 +25,16 @@ pub struct Running {
     pub control: crate::session::Control,
     /// The client's process, for a quit that it does not answer.
     pub pid: Option<u32>,
+    /// Whether the pointer was let out of *this* stream, as it was launched.
+    ///
+    /// Kept per stream rather than read from the store, because the store is
+    /// what the next stream will use and the two drift the moment someone
+    /// changes the setting mid-stream. The mode reaches the client as a
+    /// launch argument and nothing can move it afterwards, so a screen that
+    /// quoted the store would tell a running stream it is in a mode it is
+    /// not — which is precisely the confusion the setting already caused
+    /// once. See [`crate::store::Store::free_cursor`].
+    pub free_cursor: bool,
 }
 
 /// How long a stream is given to end on its own when Dusk quits, before
@@ -340,11 +350,16 @@ impl AppState {
         id: &str,
         control: crate::session::Control,
         pid: Option<u32>,
+        free_cursor: bool,
     ) {
-        self.sessions
-            .write()
-            .await
-            .insert(id.to_string(), Running { control, pid });
+        self.sessions.write().await.insert(
+            id.to_string(),
+            Running {
+                control,
+                pid,
+                free_cursor,
+            },
+        );
     }
 
     /// End every stream running from here, because Dusk is quitting.
@@ -450,8 +465,16 @@ impl AppState {
     }
 
     pub async fn snapshot(&self) -> Snapshot {
-        let sessions: std::collections::HashSet<DeviceId> =
-            self.sessions.read().await.keys().cloned().collect();
+        // Id to the pointer mode that stream launched with, rather than a
+        // bare set of ids: the drawer says which mode the running stream is
+        // in, and only the stream itself knows.
+        let sessions: std::collections::HashMap<DeviceId, bool> = self
+            .sessions
+            .read()
+            .await
+            .iter()
+            .map(|(id, r)| (id.clone(), r.free_cursor))
+            .collect();
         let mut devices = self.registry.read().await.devices();
         // Copied out under one short lock. Two `lock().await`s in the
         // literal below would deadlock: the first guard lives until the
@@ -463,6 +486,7 @@ impl AppState {
             fps,
             codec,
             free_cursor,
+            host_audio,
             device_streams,
             virtual_screen,
             clipboard_sharing,
@@ -477,6 +501,7 @@ impl AppState {
                 store.fps,
                 store.codec,
                 store.free_cursor,
+                store.host_audio,
                 store.device_streams.clone(),
                 store.virtual_screen,
                 store.clipboard_sharing.is_on(),
@@ -497,7 +522,10 @@ impl AppState {
             // Or-ed rather than assigned: mock fixtures set this directly
             // to stage a mid-session card, and there is no real client to
             // put them in the live set.
-            device.streaming_here |= sessions.contains(&device.id);
+            device.streaming_here |= sessions.contains_key(&device.id);
+            // Left None for a mock fixture's staged session, which has no
+            // client and so no mode to report.
+            device.stream_free_cursor = sessions.get(&device.id).copied();
         }
 
         Snapshot {
@@ -520,6 +548,7 @@ impl AppState {
             fps,
             codec,
             free_cursor,
+            host_audio,
             device_streams,
             virtual_screen,
             virtual_screen_mechanism: crate::host::virtual_screen::mechanism(),
@@ -598,6 +627,44 @@ mod tests {
         )
     }
 
+    /// A stream reports the pointer mode it was launched with, and goes on
+    /// reporting it after the setting moves. The setting is what the *next*
+    /// stream will use; the two part company the moment someone changes it
+    /// mid-stream, and the drawer tells a person which mode the stream in
+    /// front of them is in. Reading the store there would sometimes name
+    /// the wrong one, which is the confusion this whole field exists to end.
+    #[tokio::test]
+    async fn a_running_stream_reports_the_pointer_mode_it_launched_with() {
+        let state = state();
+        state
+            .registry
+            .write()
+            .await
+            .insert_prebuilt(crate::model::Device::new("dev".into(), "Desk".into()));
+        let mode = |snapshot: &Snapshot| {
+            let device = snapshot.devices.iter().find(|d| d.id == "dev").unwrap();
+            (device.streaming_here, device.stream_free_cursor)
+        };
+
+        // Nothing streaming: there is no stream to have a mode.
+        assert_eq!(mode(&state.snapshot().await), (false, None));
+
+        state
+            .session_started("dev", crate::session::Control::detached(), None, true)
+            .await;
+        state.store.lock().await.free_cursor = false;
+
+        let during = state.snapshot().await;
+        assert_eq!(mode(&during), (true, Some(true)));
+        assert!(
+            !during.free_cursor,
+            "the setting is the next stream's, and still says what it says"
+        );
+
+        state.session_ended("dev").await;
+        assert_eq!(mode(&state.snapshot().await), (false, None));
+    }
+
     #[tokio::test]
     async fn quitting_with_nothing_streaming_waits_for_nothing() {
         let state = state();
@@ -640,7 +707,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
         state
-            .session_started("dev", crate::session::Control::detached(), pid)
+            .session_started("dev", crate::session::Control::detached(), pid, false)
             .await;
         let watched = state.clone();
         tokio::spawn(async move {
@@ -668,7 +735,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
         state
-            .session_started("dev", crate::session::Control::detached(), pid)
+            .session_started("dev", crate::session::Control::detached(), pid, false)
             .await;
         let watched = state.clone();
         tokio::spawn(async move {

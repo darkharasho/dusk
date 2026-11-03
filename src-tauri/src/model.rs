@@ -125,6 +125,15 @@ pub struct Device {
     /// so the card has to tell the two apart or it claims you are
     /// streaming when nothing is on screen.
     pub streaming_here: bool,
+    /// Whether the stream running here let the pointer out, as that stream
+    /// was launched. `None` when nothing is streaming from this machine.
+    ///
+    /// Separate from the global setting in the snapshot, which is what the
+    /// *next* stream will use: the mode is fixed by a launch argument, so
+    /// the two differ for the whole of a stream whose setting was changed
+    /// under it. See [`crate::state::Running::free_cursor`].
+    #[serde(default)]
+    pub stream_free_cursor: Option<bool>,
     /// The machine answers on its plain port but its pairing port has not
     /// completed a handshake for [`SECURE_PORT_DOWN_AFTER`] probes. That is
     /// the port pairing, launching, resuming and quitting all go through, so
@@ -189,6 +198,7 @@ impl Device {
             server: None,
             apps: Vec::new(),
             streaming_here: false,
+            stream_free_cursor: None,
             secure_port_down: false,
             last_seen_ms: None,
             dusk: None,
@@ -358,6 +368,9 @@ pub struct Snapshot {
     /// Whether the pointer may leave a stream rather than being held inside
     /// it. See [`crate::store::Store::free_cursor`].
     pub free_cursor: bool,
+    /// Whether a stream also plays its sound on the host's own speakers.
+    /// See [`crate::store::Store::host_audio`].
+    pub host_audio: bool,
     /// Per-machine overrides over the four settings above, keyed by device id.
     /// A machine absent here streams at the globals; the drawer reads its
     /// entry to show what a particular machine is set to.

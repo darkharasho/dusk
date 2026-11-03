@@ -1,5 +1,36 @@
 # Release Notes
 
+Version v0.3.50 — November 3, 2026
+
+A stream no longer takes a Bluetooth headset away from the machine you are
+sitting at, and the in-stream overlay says how to open it.
+
+## Changes
+
+- **Streams stop stealing a shared Bluetooth headset.** Earbuds paired to
+  both machines would go silent on this one whenever the other was being
+  streamed. The cause was a setting in the streaming client's own memory,
+  asking the host to play the sound on its speakers too. That is not just a
+  question of where sound comes out: it makes the host read its real output
+  device for the length of the stream, and when that device is a headset
+  shared between the two machines, the headset switches to the host and this
+  machine goes quiet with nothing anywhere saying why. Dusk now states what
+  it wants on every launch instead of inheriting whatever was last set.
+
+- **"Play the sound on the host too", in Settings › Streaming.** The same
+  thing, offered deliberately and off by default, for when somebody is
+  actually sitting at the machine being streamed.
+
+- **The in-stream overlay says how to open it.** The floating handle cannot
+  be clicked while a stream is holding the pointer — there is no cursor on
+  screen to aim with — so the hotkey is the way in. Both the device drawer
+  and Settings › Streaming now name it, and the drawer says which of the two
+  the stream in front of you is actually in.
+
+- **"Let the pointer leave the stream" says when it applies.** It takes
+  effect on the next connection, not the stream already running, which
+  previously made it look like a switch that did nothing.
+
 Version v0.3.49 — November 2, 2026
 
 The pointer can leave a fullscreen stream, so a second monitor is reachable

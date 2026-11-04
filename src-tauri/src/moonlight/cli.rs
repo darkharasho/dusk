@@ -683,6 +683,62 @@ fn reason_from_log(log: &str) -> Option<String> {
     dialog_reason(&entries).or_else(|| sdl_reason(&entries))
 }
 
+/// Say what the client's own wording means, for the two failures it states
+/// in terms of its internals rather than in terms of what happened.
+///
+/// Everything else is passed through untouched: the client's text is
+/// usually the better one, and a translation table that guesses at
+/// unfamiliar messages would turn a precise reason into a vague one. The
+/// raw wording is still logged next to this, so nothing is lost by
+/// rewording what reaches the person.
+pub fn explain(reason: &str) -> String {
+    // The client's error dialogs print the library's termination code with
+    // no interpretation. -1 is the one that is not a reason at all: it is
+    // what `connectionTerminated` is passed when the control connection
+    // simply drops (`ENET_EVENT_TYPE_DISCONNECT`) without the host having
+    // sent a termination message first. Every deliberate end — the session
+    // being quit, the app exiting, the host shutting down — arrives as a
+    // reason code instead. So -1 means precisely that the host stopped
+    // answering and said nothing about why, which is worth saying plainly:
+    // it points at the host rather than at this machine or the network,
+    // and that is the difference between looking in the right place and
+    // the wrong one.
+    //
+    // Matched in both wordings: the dialog's "Connection terminated. Error
+    // code: -1", and the library's own "Connection terminated: -1" for when
+    // there was no dialog to quote.
+    if let Some(rest) = reason.strip_prefix("Connection terminated") {
+        let code = rest
+            .trim_start_matches(['.', ':', ' '])
+            .trim_start_matches("Error code")
+            .trim_start_matches([':', ' ']);
+        if code == "-1" {
+            return "The stream stopped because the other machine stopped \
+                    answering, and it did not say why — so this was not \
+                    something this machine or the network did. Its own log \
+                    will say what happened there; Dusk's stream log records \
+                    the time to look for."
+                .to_string();
+        }
+    }
+
+    // "Failed to connect" is the seek timing out, which covers both a host
+    // that is not there and one that was sent a wake-up packet and had not
+    // finished waking. Naming the second is the point: it is the case where
+    // trying again shortly is the fix, and the client's wording gives no
+    // hint that waiting is worth anything.
+    if let Some(host) = reason.strip_prefix("Failed to connect to ") {
+        return format!(
+            "{host} did not answer in time. If it was asleep, Dusk asked it \
+             to wake and it had not finished — give it a moment and try \
+             again. Otherwise it is switched off, not on this network, or \
+             not set to wake on network activity."
+        );
+    }
+
+    reason.to_string()
+}
+
 /// A failure the client reported while still exiting cleanly.
 ///
 /// Only an error it actually showed the person counts here. The library's
@@ -1128,6 +1184,48 @@ mod tests {
             reason_from_log(log).as_deref(),
             Some("Connection terminated. Error code: -1")
         );
+    }
+
+    #[test]
+    fn a_bare_termination_blames_the_host_rather_than_a_code() {
+        // Exactly what the test above proves the log yields, and the
+        // library's terser wording of the same thing.
+        for reason in [
+            "Connection terminated. Error code: -1",
+            "Connection terminated: -1",
+        ] {
+            let said = explain(reason);
+            assert!(said.contains("stopped answering"), "{reason}: {said}");
+            assert!(!said.contains("-1"), "{reason}: {said}");
+        }
+    }
+
+    #[test]
+    fn a_termination_with_a_real_reason_is_left_alone() {
+        // Anything but -1 is the host saying why, and the client's wording
+        // of it is better than a guess.
+        for reason in [
+            "Connection terminated. Error code: 5389",
+            "Connection terminated by user",
+        ] {
+            assert_eq!(explain(reason), reason);
+        }
+    }
+
+    #[test]
+    fn a_seek_that_timed_out_says_waking_takes_time() {
+        let said = explain("Failed to connect to 192.168.50.146");
+        assert!(said.starts_with("192.168.50.146 did not answer"), "{said}");
+        assert!(said.contains("wake"), "{said}");
+    }
+
+    #[test]
+    fn an_unfamiliar_reason_is_passed_through() {
+        assert_eq!(
+            explain("Failed to find application Desktop"),
+            "Failed to find application Desktop"
+        );
+        assert_eq!(explain(""), "");
     }
 
     #[test]

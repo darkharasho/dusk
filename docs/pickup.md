@@ -1175,6 +1175,26 @@ build cross-checks clean, and none has run end to end yet.
 
 Things that cost real time. Most were invisible to a green build.
 
+**A polled host logs nothing, so an empty log is not an untried address.**
+`ComputerManager` polls with `NvHTTP::getServerInfo(NVLL_NONE, fastFail)`
+(`app/backend/computermanager.cpp:38`), and `Executing request:` is only
+printed at `NVLL_VERBOSE` (`nvhttp.cpp:527`). A client log with no request
+to the host it was asked for has still been polling it the whole time. Half
+an hour went into "it never tried the address" on the strength of that
+silence.
+
+**`Error code: -1` is the one termination code that is not a reason.** Every
+deliberate end — quit, app exit, host shutdown — reaches
+`connectionTerminated` as a reason code the host sent first. -1 is what a
+bare `ENET_EVENT_TYPE_DISCONNECT` passes
+(`moonlight-common-c/src/ControlStream.c:1381`): the control connection
+dropped with the host having said nothing. So -1 points at the host having
+gone away, not at this machine or the network, and a log showing 0% loss and
+1 ms latency right up to it is consistent rather than contradictory.
+`cli::explain` says so in those words. Correlate with the host: the stream
+log's epoch stamp plus the client's own `HH:MM:SS` offset gives the instant
+to hand `journalctl --since @<seconds>` on the host.
+
 **Compiling is not shipping.** Three of the four bugs in this stretch passed
 every CI job and only surfaced on inspecting the output — the notarization
 log, a `bash -x` trace, the published artifact's plist. When a change is

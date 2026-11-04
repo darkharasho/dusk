@@ -905,10 +905,13 @@ pub async fn launch_app(
         if let Err(err) = ended {
             // A stream that fails after launch used to be invisible: the
             // card simply went back to Ready. Say what happened instead.
+            // The client's own wording goes to the log and the person gets
+            // the explained one, so a reason that was reworded can still be
+            // traced back to what the client actually said.
             eprintln!("dusk: the Moonlight session ended badly: {err}");
             let failed = SessionFailed {
                 device_id: session_id.clone(),
-                message: err.to_string(),
+                message: crate::moonlight::cli::explain(&err.to_string()),
             };
             if let Err(err) = handle.emit(SESSION_FAILED_EVENT, failed) {
                 eprintln!("dusk: could not report the failed session: {err}");

@@ -1,5 +1,36 @@
 # Release Notes
 
+Version v0.3.52 — November 4, 2026
+
+A machine that was asleep gets long enough to wake up, and a stream that
+fails says something you can act on.
+
+## Changes
+
+- **A sleeping machine is given time to finish waking.** Connecting to a
+  machine that is asleep sends it a wake-up packet and then waits for it to
+  answer — but the wait was thirty seconds, which is shorter than waking
+  takes. So the machine was woken and then given up on while it was still
+  starting, and the failure said "Failed to connect", which reads as though
+  it could not be reached at all. The wait is now ninety seconds. A machine
+  that is already awake answers on the first ask and never waits, so this is
+  only ever spent on the machines that need it.
+
+- **"Failed to connect" says what to do about it.** It now names waking as
+  the likely cause when it is one, so trying again shortly reads as worth
+  doing, and lists the other possibilities — switched off, not on this
+  network, or not set to wake on network activity — rather than leaving all
+  of them as one sentence about connecting.
+
+- **A stream that drops without explanation says so plainly.** When the
+  other machine stops answering mid-stream and says nothing about why, Dusk
+  used to pass along the streaming library's bare "Error code: -1". That
+  code means precisely one thing — the other machine went away without a
+  word — and in particular it does not mean this machine or the network did
+  anything wrong. Dusk now says that, and points at where to look. Every
+  other reason a stream ends is unaffected, and still said in the words it
+  came with.
+
 Version v0.3.51 — November 3, 2026
 
 Leaving a stream no longer risks closing what is running on the other

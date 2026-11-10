@@ -73,7 +73,11 @@ libc = "0.2"
 # Unlocking the Secret Service on a machine that logs in automatically, so
 # `dusk setup` can reach the keystore over SSH. Already in the tree under
 # keyring's sync-secret-service, so this names it rather than adding it.
-zbus = "5"
+# `tokio` because the window watcher serves a D-Bus object inside Tauri's
+# runtime (host::pointer_watch_kwin). Without it zbus brings up an async-io
+# reactor of its own and the process runs two. The feature is additive, so
+# the blocking API `secrets::unlock` uses is unaffected.
+zbus = { version = "5", features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"

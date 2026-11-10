@@ -14,6 +14,9 @@ pub mod mock;
 pub mod platform;
 pub mod pointer_intent;
 pub mod pointer_watch;
+/// Declared on every platform and empty on all but Linux, by the `cfg` at
+/// the top of the file. KWin is the only compositor with a way in.
+pub mod pointer_watch_kwin;
 pub mod screen_mode;
 pub mod service;
 pub mod virtual_screen;

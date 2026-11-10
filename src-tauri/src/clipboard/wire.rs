@@ -48,6 +48,19 @@ pub enum Wire {
     /// The host's newest copy is over the cap, so it was not sent. Carries
     /// nothing about the copy. An older Dusk reads it as [`Wire::Unknown`].
     TooBig,
+    /// Whether the host's focused window wants the pointer to itself, sent
+    /// when that changes rather than continuously.
+    ///
+    /// Only the decision crosses the network. The window's class decided it
+    /// and its title was never read, because what someone has in focus on
+    /// their own machine is not something a stream needs to carry — and a
+    /// title is exactly the kind of thing that ends up in a log. An older
+    /// Dusk reads this as [`Wire::Unknown`], which is the right behaviour:
+    /// it keeps whatever pointer mode the stream was launched with.
+    Pointer {
+        #[serde(default)]
+        locked: bool,
+    },
     /// A message type this build does not know. Not an error.
     #[serde(other)]
     Unknown,
@@ -69,6 +82,7 @@ impl std::fmt::Debug for Wire {
             }
             Wire::Bye => f.write_str("Bye"),
             Wire::TooBig => f.write_str("TooBig"),
+            Wire::Pointer { locked } => f.debug_struct("Pointer").field("locked", locked).finish(),
             Wire::Unknown => f.write_str("Unknown"),
         }
     }
@@ -161,6 +175,50 @@ mod tests {
         let older: Older = serde_json::from_str(r#"{"type":"too_big"}"#).unwrap();
         assert!(matches!(older, Older::Unknown));
         let _ = Older::Bye;
+    }
+
+    #[test]
+    fn pointer_carries_the_decision_and_nothing_about_the_window() {
+        assert_eq!(
+            line(&Wire::Pointer { locked: true }),
+            "{\"type\":\"pointer\",\"locked\":true}\n"
+        );
+
+        // The decision only. A class or a caption appearing here later would
+        // be a privacy regression, and this is where it would show up.
+        let l = line(&Wire::Pointer { locked: false });
+        assert!(!l.contains("class"), "{l}");
+        assert!(!l.contains("caption"), "{l}");
+
+        // And it never reaches a log even as a Debug.
+        assert_eq!(
+            format!("{:?}", Wire::Pointer { locked: true }),
+            "Pointer { locked: true }"
+        );
+    }
+
+    #[test]
+    fn an_older_dusk_ignores_pointer_rather_than_failing() {
+        // Same forward-compatibility contract as `too_big`: a Dusk built
+        // before this message keeps the mode its stream was launched with.
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Older {
+            Bye,
+            #[serde(other)]
+            Unknown,
+        }
+        let older: Older = serde_json::from_str(r#"{"type":"pointer","locked":true}"#).unwrap();
+        assert!(matches!(older, Older::Unknown));
+        let _ = Older::Bye;
+    }
+
+    #[test]
+    fn a_pointer_message_without_the_field_reads_as_free() {
+        // `locked` defaults rather than failing the parse, so a future Dusk
+        // that sends a richer message does not break this one.
+        let w: Wire = serde_json::from_str(r#"{"type":"pointer"}"#).unwrap();
+        assert_eq!(w, Wire::Pointer { locked: false });
     }
 
     #[test]

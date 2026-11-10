@@ -1033,6 +1033,10 @@ rather than a summary. Where each side stands:
   as it goes, through the client's own quit-and-exit path. An **Open Dusk** row, shown only when Dusk
   launched the stream, sends `settings`. It also releases the mouse and
   minimises a full-screen stream, so the window Dusk raises is not hidden.
+  **Release stuck keys** sends nothing over the channel: it is the client
+  talking to the host over the protocol, a key-up for all eight modifiers
+  whether or not this client believes any of them is down. See the landmine
+  on swallowed key events for why a tracked-key raise is not enough.
 - **Dusk** logs the handshake and each overlay action (`dusk: the client
   connected to the session channel`), which is the only way to tell from
   a log that the channel was used: Disconnect ends the stream either way.

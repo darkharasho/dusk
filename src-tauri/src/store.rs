@@ -56,6 +56,27 @@ pub struct Store {
     /// mouse movement has nowhere to move once the pointer reaches the edge
     /// of the window — so this is off unless asked for.
     pub free_cursor: bool,
+    /// Let a stream follow what the host's focused window is doing with the
+    /// pointer, rather than keeping the mode it was launched with.
+    ///
+    /// This is the setting that makes [`Store::free_cursor`] stop mattering
+    /// mid-stream: a game that takes the pointer gets relative motion even
+    /// though the stream launched with the pointer free, and the desktop
+    /// gets it back when the game is done.
+    ///
+    /// Off by default, and this one is a judgement rather than caution.
+    /// Which windows want the pointer is decided from being fullscreen plus
+    /// the window's class, because the signal everybody else uses — the
+    /// host's cursor being hidden or locked — is not available on Wayland to
+    /// anything but the compositor. That makes it a guess, and it was wrong
+    /// within five minutes of first running: a fullscreen Telegram would
+    /// have had the pointer taken off it. So it is asked for rather than
+    /// assumed, it says what it did, and the mouse-mode shortcut overrides
+    /// it for the rest of the session.
+    ///
+    /// Needs a host that can be asked, which today means KDE. Elsewhere it
+    /// can be on and simply never report anything.
+    pub follow_host_pointer: bool,
     /// Also play a stream's sound on the host's own speakers, rather than
     /// only here.
     ///
@@ -656,6 +677,20 @@ mod tests {
         assert_eq!(over.bitrate_kbps, None);
         assert_eq!(over.codec, None);
         assert!(over.resolution.is_none());
+    }
+
+    #[test]
+    fn following_the_host_pointer_is_off_until_asked_for() {
+        // Off by default because the rule behind it is a guess, and it was
+        // wrong within five minutes of first running. A file written before
+        // the setting existed reads as off too.
+        assert!(!Store::default().follow_host_pointer);
+
+        let old: Store = serde_json::from_str("{}").unwrap();
+        assert!(!old.follow_host_pointer);
+
+        let on: Store = serde_json::from_str(r#"{"follow_host_pointer":true}"#).unwrap();
+        assert!(on.follow_host_pointer);
     }
 
     #[test]

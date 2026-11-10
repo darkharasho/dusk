@@ -237,6 +237,11 @@ export interface Snapshot {
    */
   freeCursor: boolean;
   /**
+   * Whether a stream follows what the host's focused window is doing with
+   * the pointer, instead of keeping the mode it was launched with.
+   */
+  followHostPointer: boolean;
+  /**
    * Whether a stream also plays its sound on the host's own speakers. Off
    * by default: asking for it makes the host hold its real output device
    * open for the length of the stream.

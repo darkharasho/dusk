@@ -164,6 +164,12 @@ pub struct Wants {
 impl Wants {
     /// Only the clipboard, which is what every caller wanted before there
     /// was anything else to want.
+    ///
+    /// Test-only now: both real callers read the two settings, so this
+    /// exists to say "as it was before the pointer" in the assertions that
+    /// predate it, and it is those assertions passing unchanged that shows
+    /// the generalisation did not move anything.
+    #[cfg(test)]
     pub fn clipboard_only(on: bool) -> Self {
         Self {
             clipboard: on,
@@ -595,13 +601,15 @@ async fn decide(
     live: &Arc<Semaphore>,
     bound: &Mutex<Bound>,
 ) -> Result<(System, OwnedSemaphorePermit), Decline> {
-    let sharing_on = state.store.lock().await.clipboard_sharing.is_on();
+    let wants = {
+        let store = state.store.lock().await;
+        Wants {
+            clipboard: store.clipboard_sharing.is_on(),
+            pointer: store.follow_host_pointer,
+        }
+    };
     let support = support();
     // The checks that need nothing from the host come first.
-    // `clipboard_only` until the pointer setting exists: this reads the same
-    // as it did before, and the second reason to admit arrives with the
-    // switch that turns it on.
-    let wants = Wants::clipboard_only(sharing_on);
     admit(wants, &support, true)?;
     let permit = claim(live)?;
     let (hosting, key) = hosting_stream(state).await;
@@ -653,7 +661,13 @@ async fn serve(
         },
         move || {
             let state = for_sharing.clone();
-            async move { Wants::clipboard_only(state.store.lock().await.clipboard_sharing.is_on()) }
+            async move {
+                let store = state.store.lock().await;
+                Wants {
+                    clipboard: store.clipboard_sharing.is_on(),
+                    pointer: store.follow_host_pointer,
+                }
+            }
         },
         state.pointer_changes(),
     )

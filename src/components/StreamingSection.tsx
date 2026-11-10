@@ -4,6 +4,7 @@ import {
   setClipboardSharing,
   setCodec,
   setFps,
+  setFollowHostPointer,
   setFreeCursor,
   setHostAudio,
   setResolution,
@@ -85,6 +86,26 @@ function fpsDetail(fps: number | null): string {
  * spending a sentence on. Merely streaming is not enough: a stream that
  * already agrees needs no explaining.
  */
+/**
+ * What following the host's pointer does, and the three things about it
+ * someone needs to know before turning it on.
+ *
+ * All three are caveats, which is unusual for help text and is the point.
+ * Which windows want the pointer is a guess from being fullscreen plus the
+ * window's class, because the signal every other remote-desktop tool uses —
+ * the host's cursor being hidden — is not visible to anything but the
+ * compositor on Wayland. The guess was wrong within five minutes of its
+ * first real run, on a fullscreen chat window. So: say it is a guess, say
+ * which machines can do it at all, and say how to override it.
+ */
+export function followPointerDetail(): string {
+  return [
+    "A game that takes the mouse gets movement rather than a pointer, and the desktop gets the pointer back when the game is done — so the switch above stops having to be right for both.",
+    `Which windows want the mouse is worked out from the window being fullscreen, so something fullscreen that is not a game can take the pointer too. ${OVERLAY_HOTKEY.replace(" + O", " + M")} puts the mode back and keeps it for the rest of the session.`,
+    "Only machines running KDE can be asked what they have in focus. Elsewhere this stays on and never does anything.",
+  ].join(" ");
+}
+
 export function cursorDetail(contradicted: boolean): string {
   return [
     "The mouse stays a pointer rather than being taken over by the stream, so it can move off a fullscreen stream onto another screen without leaving it.",
@@ -257,6 +278,15 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
         on={snapshot.freeCursor}
         disabled={busy}
         onChange={(on) => void save(() => setFreeCursor(on))}
+      />
+
+      <Toggle
+        id="stream-follow-host-pointer"
+        label="Follow what the other machine has in focus"
+        detail={followPointerDetail()}
+        on={snapshot.followHostPointer}
+        disabled={busy}
+        onChange={(on) => void save(() => setFollowHostPointer(on))}
       />
 
       <Toggle

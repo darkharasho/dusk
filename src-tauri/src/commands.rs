@@ -1250,6 +1250,27 @@ pub async fn set_free_cursor(
     Ok(())
 }
 
+/// Whether a stream follows what the host's focused window is doing with the
+/// pointer, rather than keeping the mode it was launched with.
+///
+/// Takes effect on the next connection rather than at once: the peer channel
+/// reads this when it admits one, and a stream already up has already been
+/// admitted. Turning it off does reach a live connection, on the recheck.
+#[tauri::command]
+pub async fn set_follow_host_pointer(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.follow_host_pointer = on;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
 /// Whether a stream also plays its sound on the host's own speakers.
 #[tauri::command]
 pub async fn set_host_audio(

@@ -235,6 +235,10 @@ export function setCodec(codec: Codec): Promise<void> {
  * Whether the pointer may leave a stream instead of being captured by it, so
  * a fullscreen stream can be stepped out of onto another monitor.
  */
+export function setFollowHostPointer(on: boolean): Promise<void> {
+  return invoke("set_follow_host_pointer", { on });
+}
+
 export function setFreeCursor(on: boolean): Promise<void> {
   return invoke("set_free_cursor", { on });
 }

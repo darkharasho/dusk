@@ -368,6 +368,9 @@ pub struct Snapshot {
     /// Whether the pointer may leave a stream rather than being held inside
     /// it. See [`crate::store::Store::free_cursor`].
     pub free_cursor: bool,
+    /// Whether a stream follows what the host's focused window is doing with
+    /// the pointer. See [`crate::store::Store::follow_host_pointer`].
+    pub follow_host_pointer: bool,
     /// Whether a stream also plays its sound on the host's own speakers.
     /// See [`crate::store::Store::host_audio`].
     pub host_audio: bool,

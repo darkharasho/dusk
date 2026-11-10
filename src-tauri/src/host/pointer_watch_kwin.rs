@@ -37,8 +37,8 @@ use crate::state::AppState;
 
 use super::pointer_intent::PointerIntent;
 use super::pointer_watch::{
-    intent_of_report, Changes, WatchError, KWIN_IFACE, KWIN_PATH, KWIN_SERVICE, PATH, SCRIPT,
-    SERVICE,
+    intent_of_report, parse_report, Changes, WatchError, KWIN_IFACE, KWIN_PATH, KWIN_SERVICE, PATH,
+    SCRIPT, SERVICE,
 };
 
 /// What the script calls into. Owns the change filter, so a report that means
@@ -71,11 +71,24 @@ impl Reports {
         };
 
         if let Some(intent) = changed {
+            // The class is named here and nowhere else. It does not cross
+            // the network -- the client is told the decision alone, so its
+            // notice can say what happened but not what caused it. This log
+            // is on the machine the window belongs to, which makes it the
+            // one place the two halves can be put back together when the
+            // rule guesses wrong. Which it does: a fullscreen chat window
+            // was the first thing it got wrong.
+            let (_, class) = parse_report(payload).unwrap_or((false, ""));
             eprintln!(
-                "dusk: the host's focused window {} the pointer",
+                "dusk: the host's focused window {} the pointer{}",
                 match intent {
                     PointerIntent::Locked => "has taken",
                     PointerIntent::Free => "has released",
+                },
+                if class.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({class})")
                 }
             );
             (self.sink)(intent);

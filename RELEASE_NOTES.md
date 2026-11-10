@@ -1,5 +1,45 @@
 # Release Notes
 
+Version v0.3.54 — November 10, 2026
+
+A stream can follow what the other machine has in focus, so a game gets the
+mouse and the desktop gets the pointer back, without anyone switching modes
+by hand. Off until asked for.
+
+## Changes
+
+- **New: "Follow what the other machine has in focus."** Streaming a desktop
+  and then opening a fullscreen game has always meant choosing the wrong
+  thing twice over: let the pointer leave the stream and the game's camera
+  will not turn, or hold the pointer and the floating overlay handle cannot
+  be clicked. With this on, the machine being streamed from says when the
+  window in focus has taken the mouse, and the stream follows — movement for
+  the game, a pointer for the desktop, changing as you move between them.
+
+  It is off by default, and the reason is worth stating. Which windows want
+  the mouse is worked out from a window being fullscreen, because the thing
+  that would settle it properly — whether that machine's own cursor is
+  hidden — is not something anything but its desktop can see. So it is a good
+  guess rather than a certainty: something fullscreen that is not a game can
+  take the pointer too. When it does, the stream says so on screen and names
+  the key that puts it back for the rest of the session. Only machines
+  running KDE can be asked what they have in focus; elsewhere the setting can
+  be on and will simply never do anything.
+
+- **Per-machine pointer setting.** "Let the pointer leave the stream" now
+  has a per-machine override beside the resolution and codec ones, and the
+  global switch is read as being about streaming a desktop: launching
+  anything else holds the pointer either way, because a game that turns the
+  camera with the mouse cannot use a free one. Both the global setting and
+  the per-machine one say so.
+
+- **Text copied on a machine no longer decides whether anything else works.**
+  The connection between two Dusks carried only the clipboard, so it was
+  switched on and off by the clipboard setting. It carries the pointer now
+  too, and is kept up for whatever it still has to carry — which also means a
+  desktop whose clipboard cannot be read at all can still follow its pointer,
+  where before it was turned away outright.
+
 Version v0.3.53 — November 10, 2026
 
 Opening the in-stream overlay can no longer leave a key held down on the

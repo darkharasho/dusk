@@ -75,9 +75,22 @@ const NOT_GAMES: &[&str] = &[
     "org.gnome.totem",
     "kodi",
     // Things people put fullscreen to read or talk, not to play.
+    //
+    // Telegram is here because it happened, not because it was predicted:
+    // within five minutes of the watcher running on the Bazzite host, a
+    // fullscreen `org.telegram.desktop` was reported and would have had the
+    // pointer taken away from it. The list before that had Discord, Slack
+    // and Zoom — which is to say it was a guess at this category from one
+    // person's habits. Treat every name below as a known case rather than as
+    // coverage, and see the module docs for what is meant to make being
+    // wrong survivable.
     "com.discordapp.discord",
+    "org.telegram.desktop",
+    "telegramdesktop",
     "slack",
     "zoom",
+    "element",
+    "signal",
     "obs",
     "com.obsproject.studio",
     // Terminals.
@@ -193,6 +206,16 @@ mod tests {
         ] {
             assert_eq!(intent_of(class, true), PointerIntent::Free, "{class}");
         }
+    }
+
+    #[test]
+    fn fullscreen_telegram_does_not_take_the_pointer() {
+        // Observed on the Bazzite host on 2026-11-10, five minutes into the
+        // watcher's first real run: the deny-list had Discord, Slack and
+        // Zoom and not this, so a fullscreen chat window would have had the
+        // pointer captured. The regression test is the point, not the name.
+        assert_eq!(intent_of("org.telegram.desktop", true), PointerIntent::Free);
+        assert_eq!(intent_of("telegramdesktop", true), PointerIntent::Free);
     }
 
     #[test]

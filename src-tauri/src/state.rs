@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{watch, Mutex, Notify, RwLock};
+
+use crate::host::pointer_intent::PointerIntent;
 
 use crate::host::HostBackend;
 use crate::model::{DeviceId, Snapshot};
@@ -93,6 +95,18 @@ pub struct AppState {
     /// one started after it.
     sweeps: AtomicU64,
     refresh: Notify,
+    /// What this machine's focused window is doing with the pointer, for the
+    /// streams it is hosting to follow.
+    ///
+    /// A `watch` rather than a broadcast, because this is a state and not a
+    /// series of events: a connection that joins while a game is already
+    /// fullscreen reads the current answer instead of waiting for the next
+    /// change, and a connection that falls behind cannot miss one.
+    ///
+    /// Only something watching the windows ever sets it, which today means
+    /// KWin on Linux. Everywhere else it stays `Free` and the arm that reads
+    /// it simply never fires.
+    pointer: watch::Sender<PointerIntent>,
 }
 
 /// The settings both HTTP clients need, whatever they talk to Sunshine over.
@@ -281,7 +295,30 @@ impl AppState {
             discovering: AtomicBool::new(false),
             sweeps: AtomicU64::new(0),
             refresh: Notify::new(),
+            // Free until something says otherwise, which is the right
+            // default on a machine nothing is watching: the pointer stays
+            // whatever the stream was launched with.
+            pointer: watch::channel(PointerIntent::Free).0,
         }
+    }
+
+    /// Follow what this machine's focused window is doing with the pointer.
+    ///
+    /// The first read is the current state rather than a wait, so a stream
+    /// that starts into an already-fullscreen game is right immediately.
+    pub fn pointer_changes(&self) -> watch::Receiver<PointerIntent> {
+        self.pointer.subscribe()
+    }
+
+    /// Say what the focused window is doing. Called by whatever is watching
+    /// the windows; a send with nobody listening is not a failure.
+    ///
+    /// The allow is scoped rather than blanket: the only caller is the KWin
+    /// watcher, so off Linux there is genuinely nobody to call this, while on
+    /// Linux an unused one would still be worth hearing about.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn set_pointer(&self, intent: PointerIntent) {
+        let _ = self.pointer.send(intent);
     }
 
     /// The authenticated client, if we have an identity.

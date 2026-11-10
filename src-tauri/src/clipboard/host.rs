@@ -20,7 +20,7 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
@@ -31,6 +31,7 @@ use super::local::{support, LocalClipboard, Support, System, Watched, POLL};
 use super::tls::server_config;
 use super::{fits, line, text_of, Decline, Guard, Wire, MAX_LINE, PORT};
 use crate::cert_pairing::reconcile::client_connected;
+use crate::host::pointer_intent::PointerIntent;
 use crate::model::{Activity, DEFAULT_HTTP_PORT};
 use crate::state::AppState;
 use crate::sunshine::state_file;
@@ -311,6 +312,7 @@ pub async fn run<S, C, F, Fut, G, GFut>(
     clipboard: C,
     mut still_hosting: F,
     mut wants: G,
+    mut pointer: watch::Receiver<PointerIntent>,
 ) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -336,6 +338,7 @@ where
         &mut rx,
         &mut still_hosting,
         &mut wants,
+        &mut pointer,
     )
     .await;
     reader.abort();
@@ -350,6 +353,7 @@ async fn relay<C, W, F, Fut, G, GFut>(
     rx: &mut mpsc::Receiver<io::Result<Incoming>>,
     still_hosting: &mut F,
     wants: &mut G,
+    pointer: &mut watch::Receiver<PointerIntent>,
 ) -> io::Result<()>
 where
     C: LocalClipboard + 'static,
@@ -370,6 +374,18 @@ where
     // turned off mid-connection stops the thing it governs without needing
     // the store read on the clipboard's own tick.
     let mut current = wants().await;
+
+    // The state now, not the next change: a client that connects while a
+    // game is already fullscreen has to be told before it sends any motion.
+    if current.pointer {
+        let locked = *pointer.borrow_and_update() == PointerIntent::Locked;
+        send(write, &Wire::Pointer { locked }).await?;
+    }
+
+    // Cleared if the watcher goes away. A `watch` receiver whose sender has
+    // been dropped returns immediately and forever, so without this the
+    // select would spin.
+    let mut following = true;
 
     loop {
         tokio::select! {
@@ -405,6 +421,17 @@ where
                     } else if guard.outgoing(&text) {
                         send(write, &Wire::Clip { format: "text".into(), text }).await?;
                     }
+                }
+            }
+            changed = pointer.changed(), if following => {
+                if changed.is_err() {
+                    // Nothing is watching the windows any more. The stream
+                    // keeps whatever mode it is in rather than being handed
+                    // back to a default it did not ask for.
+                    following = false;
+                } else if current.pointer {
+                    let locked = *pointer.borrow_and_update() == PointerIntent::Locked;
+                    send(write, &Wire::Pointer { locked }).await?;
                 }
             }
             _ = recheck.tick() => {
@@ -628,6 +655,7 @@ async fn serve(
             let state = for_sharing.clone();
             async move { Wants::clipboard_only(state.store.lock().await.clipboard_sharing.is_on()) }
         },
+        state.pointer_changes(),
     )
     .await
 }
@@ -720,6 +748,24 @@ mod tests {
     where
         W: Fn() -> Wants + Send + 'static,
     {
+        // A sender nothing holds: dropped immediately, which is the case
+        // worth having as the default here — a host with nothing watching
+        // its windows. `start_following` is for the other one.
+        let (_, pointer) = watch::channel(PointerIntent::Free);
+        start_following(fake, hosting, wants, pointer)
+    }
+
+    /// Like `start_wanting`, with something reporting what the focused
+    /// window is doing.
+    fn start_following<W>(
+        fake: &Fake,
+        hosting: Arc<Mutex<Hosting>>,
+        wants: W,
+        pointer: watch::Receiver<PointerIntent>,
+    ) -> (Peer, tokio::task::JoinHandle<io::Result<()>>)
+    where
+        W: Fn() -> Wants + Send + 'static,
+    {
         let (a, b) = tokio::io::duplex(8 * 1024 * 1024);
         let (read, write) = tokio::io::split(a);
         let fake = fake.clone();
@@ -734,6 +780,7 @@ mod tests {
                 let w = wants();
                 async move { w }
             },
+            pointer,
         ));
         let peer = Peer {
             lines: BufReader::new(read).lines(),
@@ -906,6 +953,7 @@ mod tests {
             fake.clone(),
             || async { Hosting::Yes },
             || async { Wants::clipboard_only(true) },
+            watch::channel(PointerIntent::Free).1,
         ));
         // Hello fits in the buffer; read just that and then stop reading.
         let mut hello = vec![0u8; line(&Wire::Hello { version: VERSION }).len()];
@@ -953,6 +1001,7 @@ mod tests {
             Stuck { reads, release },
             || async { Hosting::Yes },
             || async { Wants::clipboard_only(true) },
+            watch::channel(PointerIntent::Free).1,
         ));
         if let Some(message) = say {
             if peer.next().await.is_some() {
@@ -1022,7 +1071,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_pointer_only_connection_stays_up_and_sends_no_clips() {
+    async fn a_pointer_only_connection_states_the_pointer_and_stays_up() {
         // The behaviour the generalisation exists for: clipboard sharing is
         // off, so nothing is copied either way, and the connection lives on
         // for the thing it is actually for.
@@ -1034,12 +1083,83 @@ mod tests {
 
         assert_eq!(peer.next().await, Some(Wire::Hello { version: VERSION }));
 
-        // Several rechecks and clipboard polls go by. Before this change the
-        // first recheck would have said goodbye.
+        // The state up front, not the next change. A client that connects
+        // while a game is already fullscreen has to know before it sends any
+        // motion, so even `locked: false` is worth saying once.
+        assert_eq!(
+            peer.next().await,
+            Some(Wire::Pointer { locked: false }),
+            "the pointer is stated on connect"
+        );
+
+        // Then several rechecks and clipboard polls go by in silence. Before
+        // this change the first recheck would have said goodbye, and a clip
+        // would have gone out for the text already on the clipboard.
         assert_eq!(
             peer.hears_within(SEC * 12).await,
             None,
-            "a pointer-only connection has nothing to say and does not hang up"
+            "nothing further to say, and no hanging up"
+        );
+
+        drop(peer);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_pointer_being_taken_reaches_the_client() {
+        let fake = Fake::new(None);
+        let (tell, pointer) = watch::channel(PointerIntent::Free);
+        let (mut peer, task) = start_following(
+            &fake,
+            Arc::new(Mutex::new(Hosting::Yes)),
+            || Wants {
+                clipboard: false,
+                pointer: true,
+            },
+            pointer,
+        );
+
+        peer.next().await; // Hello
+        assert_eq!(peer.next().await, Some(Wire::Pointer { locked: false }));
+
+        // A game takes the pointer.
+        tell.send(PointerIntent::Locked).unwrap();
+        assert_eq!(
+            peer.hears_within(SEC).await,
+            Some(Wire::Pointer { locked: true })
+        );
+
+        // And gives it back.
+        tell.send(PointerIntent::Free).unwrap();
+        assert_eq!(
+            peer.hears_within(SEC).await,
+            Some(Wire::Pointer { locked: false })
+        );
+
+        drop(peer);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_not_following_the_pointer_is_told_nothing_about_it() {
+        // Clipboard-only, which is every existing caller: the pointer may be
+        // changing the whole time and none of it goes out.
+        let fake = Fake::new(None);
+        let (tell, pointer) = watch::channel(PointerIntent::Free);
+        let (mut peer, task) = start_following(
+            &fake,
+            Arc::new(Mutex::new(Hosting::Yes)),
+            || Wants::clipboard_only(true),
+            pointer,
+        );
+
+        assert_eq!(peer.next().await, Some(Wire::Hello { version: VERSION }));
+        tell.send(PointerIntent::Locked).unwrap();
+
+        assert_eq!(
+            peer.hears_within(SEC * 2).await,
+            None,
+            "a connection that is not following the pointer hears nothing of it"
         );
 
         drop(peer);

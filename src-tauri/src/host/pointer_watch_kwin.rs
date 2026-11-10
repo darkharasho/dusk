@@ -29,9 +29,11 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use zbus::{interface, Connection, Proxy};
+
+use crate::state::AppState;
 
 use super::pointer_intent::PointerIntent;
 use super::pointer_watch::{
@@ -156,6 +158,28 @@ impl Watcher {
         eprintln!("dusk: watching the host's focused window through KWin");
 
         Ok(Self { connection, script })
+    }
+
+    /// Start watching, and keep watching for as long as the process runs.
+    ///
+    /// Failure is not an error worth surfacing: a host whose desktop cannot
+    /// be asked simply streams the way it did before, and says so once.
+    pub fn spawn(state: Arc<AppState>) {
+        tauri::async_runtime::spawn(async move {
+            match Watcher::start(move |intent| state.set_pointer(intent)).await {
+                Ok(watcher) => {
+                    // Held here for the life of the process. Dropping it
+                    // releases the name, after which the script's reports go
+                    // nowhere — the `unloadScript` before each load is what
+                    // makes a leftover from an unclean exit harmless.
+                    let _watcher = watcher;
+                    std::future::pending::<()>().await;
+                }
+                Err(err) => {
+                    eprintln!("dusk: not following the host's focused window: {err}");
+                }
+            }
+        });
     }
 
     /// Unload the script and forget it. Idempotent.

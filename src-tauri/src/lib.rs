@@ -321,6 +321,11 @@ pub fn run() {
                 clipboard::host::spawn(handle.clone(), state.clone());
                 #[cfg(target_os = "linux")]
                 peer::watch_for_a_screen_left_resized(state.clone());
+                // KWin is the only compositor that can be asked what has
+                // focus, so this is Linux-and-KDE only and says so if it
+                // cannot start.
+                #[cfg(target_os = "linux")]
+                host::pointer_watch_kwin::Watcher::spawn(state.clone());
                 cert_pairing::reconcile::Reconciler::spawn(state.clone());
                 host::watchdog::spawn(state.clone());
                 poller::spawn(handle, state);

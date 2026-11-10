@@ -22,6 +22,11 @@
 //! without cleaning up does not leave two copies reporting.
 
 #![cfg(target_os = "linux")]
+// Nothing calls this yet, and off Linux the module is empty so there is
+// nothing to call: the allow is about where the first caller is, as it is in
+// `pointer_watch` and `pointer_intent` beside it. CI caught this rather than
+// a local build, because on macOS the `cfg` above leaves no code to be dead.
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::sync::Mutex;

@@ -310,7 +310,7 @@ pub async fn run<S, C, F, Fut, G, GFut>(
     stream: S,
     clipboard: C,
     mut still_hosting: F,
-    mut sharing_on: G,
+    mut wants: G,
 ) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -318,7 +318,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Hosting>,
     G: FnMut() -> GFut,
-    GFut: Future<Output = bool>,
+    GFut: Future<Output = Wants>,
 {
     let clipboard = Arc::new(Mutex::new(Watched::new(clipboard)));
     let baseline = read_clipboard(&clipboard).await?;
@@ -335,7 +335,7 @@ where
         &mut write,
         &mut rx,
         &mut still_hosting,
-        &mut sharing_on,
+        &mut wants,
     )
     .await;
     reader.abort();
@@ -349,7 +349,7 @@ async fn relay<C, W, F, Fut, G, GFut>(
     write: &mut W,
     rx: &mut mpsc::Receiver<io::Result<Incoming>>,
     still_hosting: &mut F,
-    sharing_on: &mut G,
+    wants: &mut G,
 ) -> io::Result<()>
 where
     C: LocalClipboard + 'static,
@@ -357,7 +357,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Hosting>,
     G: FnMut() -> GFut,
-    GFut: Future<Output = bool>,
+    GFut: Future<Output = Wants>,
 {
     let mut poll = interval_at(Instant::now() + POLL, POLL);
     poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -365,6 +365,11 @@ where
     recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
     // One failed check is forgiven; a second in a row is not.
     let mut unknown_in_a_row = 0;
+
+    // Asked once up front and refreshed on every recheck, so a setting
+    // turned off mid-connection stops the thing it governs without needing
+    // the store read on the clipboard's own tick.
+    let mut current = wants().await;
 
     loop {
         tokio::select! {
@@ -376,14 +381,22 @@ where
                 Some(Ok(Incoming::Message(message))) => {
                     // Hello, Declined, TooBig, Unknown and non-text clips are
                     // ignored.
-                    if let Some(text) = text_of(&message) {
-                        if fits(text) && guard.incoming(text) {
-                            write_clipboard(clipboard, text.to_string()).await?;
+                    //
+                    // A clip is also ignored when the clipboard is not what
+                    // this connection is for. The peer may be an older Dusk
+                    // that would have been declined outright before, and
+                    // still polls and sends: admitting it for the pointer
+                    // must not start applying its copies.
+                    if current.clipboard {
+                        if let Some(text) = text_of(&message) {
+                            if fits(text) && guard.incoming(text) {
+                                write_clipboard(clipboard, text.to_string()).await?;
+                            }
                         }
                     }
                 }
             },
-            _ = poll.tick() => {
+            _ = poll.tick(), if current.clipboard => {
                 if let Some(text) = read_clipboard(clipboard).await? {
                     if !fits(&text) {
                         if guard.too_big(&text) {
@@ -395,7 +408,11 @@ where
                 }
             }
             _ = recheck.tick() => {
-                if !sharing_on().await {
+                current = wants().await;
+                // Goodbye only when there is nothing left to carry. Turning
+                // the clipboard off used to end the connection because the
+                // clipboard was the connection.
+                if !current.clipboard && !current.pointer {
                     send(write, &Wire::Bye).await?;
                     return Ok(());
                 }
@@ -609,7 +626,7 @@ async fn serve(
         },
         move || {
             let state = for_sharing.clone();
-            async move { state.store.lock().await.clipboard_sharing.is_on() }
+            async move { Wants::clipboard_only(state.store.lock().await.clipboard_sharing.is_on()) }
         },
     )
     .await
@@ -688,6 +705,21 @@ mod tests {
         hosting: Arc<Mutex<Hosting>>,
         sharing: Arc<AtomicBool>,
     ) -> (Peer, tokio::task::JoinHandle<io::Result<()>>) {
+        start_wanting(fake, hosting, move || {
+            Wants::clipboard_only(sharing.load(Ordering::SeqCst))
+        })
+    }
+
+    /// Like `start_sharing`, but the connection can be for something other
+    /// than the clipboard.
+    fn start_wanting<W>(
+        fake: &Fake,
+        hosting: Arc<Mutex<Hosting>>,
+        wants: W,
+    ) -> (Peer, tokio::task::JoinHandle<io::Result<()>>)
+    where
+        W: Fn() -> Wants + Send + 'static,
+    {
         let (a, b) = tokio::io::duplex(8 * 1024 * 1024);
         let (read, write) = tokio::io::split(a);
         let fake = fake.clone();
@@ -699,8 +731,8 @@ mod tests {
                 async move { on }
             },
             move || {
-                let on = sharing.load(Ordering::SeqCst);
-                async move { on }
+                let w = wants();
+                async move { w }
             },
         ));
         let peer = Peer {
@@ -873,7 +905,7 @@ mod tests {
             b,
             fake.clone(),
             || async { Hosting::Yes },
-            || async { true },
+            || async { Wants::clipboard_only(true) },
         ));
         // Hello fits in the buffer; read just that and then stop reading.
         let mut hello = vec![0u8; line(&Wire::Hello { version: VERSION }).len()];
@@ -920,7 +952,7 @@ mod tests {
             b,
             Stuck { reads, release },
             || async { Hosting::Yes },
-            || async { true },
+            || async { Wants::clipboard_only(true) },
         ));
         if let Some(message) = say {
             if peer.next().await.is_some() {
@@ -986,6 +1018,57 @@ mod tests {
         sharing.store(false, Ordering::SeqCst);
         assert_eq!(peer.hears_within(SEC * 6).await, Some(Wire::Bye));
         assert_eq!(peer.next().await, None);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pointer_only_connection_stays_up_and_sends_no_clips() {
+        // The behaviour the generalisation exists for: clipboard sharing is
+        // off, so nothing is copied either way, and the connection lives on
+        // for the thing it is actually for.
+        let fake = Fake::new(Some("something already copied"));
+        let (mut peer, task) = start_wanting(&fake, Arc::new(Mutex::new(Hosting::Yes)), || Wants {
+            clipboard: false,
+            pointer: true,
+        });
+
+        assert_eq!(peer.next().await, Some(Wire::Hello { version: VERSION }));
+
+        // Several rechecks and clipboard polls go by. Before this change the
+        // first recheck would have said goodbye.
+        assert_eq!(
+            peer.hears_within(SEC * 12).await,
+            None,
+            "a pointer-only connection has nothing to say and does not hang up"
+        );
+
+        drop(peer);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pointer_only_connection_ignores_a_clip_it_is_sent() {
+        // An older peer that would have been declined outright is now
+        // admitted for the pointer, and still polls and sends its copies.
+        // Admitting it must not start applying them to this machine.
+        let fake = Fake::new(None);
+        let (mut peer, task) = start_wanting(&fake, Arc::new(Mutex::new(Hosting::Yes)), || Wants {
+            clipboard: false,
+            pointer: true,
+        });
+        peer.next().await;
+
+        peer.say(clip("from a peer that does not know")).await;
+        peer.hears_within(SEC * 2).await;
+
+        assert_eq!(
+            fake.writes(),
+            0,
+            "a clip must not reach the clipboard when the clipboard is not what this is for"
+        );
+        assert_eq!(fake.get(), None, "and nothing was put on it");
+
+        drop(peer);
         assert!(task.await.unwrap().is_ok());
     }
 

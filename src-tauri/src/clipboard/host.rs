@@ -146,19 +146,58 @@ fn fingerprint(tls: &TlsStream<TcpStream>) -> Option<Fingerprint> {
     Some(Sha256::digest(leaf.as_ref()).into())
 }
 
-/// Pure admission decision, checked after the TLS handshake.
-pub fn admit(sharing_on: bool, support: &Support, hosting: bool) -> Result<(), Decline> {
-    if !sharing_on {
+/// What a connection would be for.
+///
+/// The channel started out carrying one thing and was gated on that one
+/// thing's setting, which made the setting the switch for the channel itself.
+/// It carries two now, so what it is for has to be asked rather than assumed:
+/// a host with clipboard sharing off still has a pointer to report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Wants {
+    /// Copied text is shared both ways.
+    pub clipboard: bool,
+    /// The host says which of its windows has taken the pointer.
+    pub pointer: bool,
+}
+
+impl Wants {
+    /// Only the clipboard, which is what every caller wanted before there
+    /// was anything else to want.
+    pub fn clipboard_only(on: bool) -> Self {
+        Self {
+            clipboard: on,
+            pointer: false,
+        }
+    }
+}
+
+/// Whether to let a connection in, and why not.
+///
+/// A desktop that cannot be read only rules out the clipboard. It used to
+/// rule out the connection, because the connection was the clipboard — so a
+/// GNOME Wayland host can now follow its pointer while still saying it cannot
+/// share text, which it could not before.
+pub fn admit(wants: Wants, support: &Support, hosting: bool) -> Result<(), Decline> {
+    let clipboard = wants.clipboard && matches!(support, Support::Supported);
+
+    if !clipboard && !wants.pointer {
+        // Nothing to carry. Which of the two reasons gets reported matters:
+        // the client shows it, and "this desktop cannot" is a different
+        // thing for someone to read than "you turned it off".
+        if wants.clipboard {
+            if let Support::Unsupported(detail) = support {
+                return Err(Decline::Unsupported {
+                    detail: Some((*detail).to_string()),
+                });
+            }
+        }
         return Err(Decline::SharingOff);
     }
-    if let Support::Unsupported(detail) = support {
-        return Err(Decline::Unsupported {
-            detail: Some((*detail).to_string()),
-        });
-    }
+
     if !hosting {
         return Err(Decline::NotStreaming);
     }
+
     Ok(())
 }
 
@@ -515,10 +554,14 @@ async fn decide(
     let sharing_on = state.store.lock().await.clipboard_sharing.is_on();
     let support = support();
     // The checks that need nothing from the host come first.
-    admit(sharing_on, &support, true)?;
+    // `clipboard_only` until the pointer setting exists: this reads the same
+    // as it did before, and the second reason to admit arrives with the
+    // switch that turns it on.
+    let wants = Wants::clipboard_only(sharing_on);
+    admit(wants, &support, true)?;
     let permit = claim(live)?;
     let (hosting, key) = hosting_stream(state).await;
-    admit(sharing_on, &support, hosting == Hosting::Yes)?;
+    admit(wants, &support, hosting == Hosting::Yes)?;
     // Pinned mutual TLS always has a client certificate by now.
     let client = fingerprint(tls).ok_or(Decline::NotPaired)?;
     let opened = tokio::task::spawn_blocking(System::open)
@@ -678,20 +721,75 @@ mod tests {
 
     #[test]
     fn admission_needs_everything() {
-        assert_eq!(admit(true, &Support::Supported, true), Ok(()));
+        let on = Wants::clipboard_only(true);
+        let off = Wants::clipboard_only(false);
+
+        assert_eq!(admit(on, &Support::Supported, true), Ok(()));
         assert_eq!(
-            admit(false, &Support::Supported, true),
+            admit(off, &Support::Supported, true),
             Err(Decline::SharingOff)
         );
         assert_eq!(
-            admit(true, &Support::Unsupported("x"), true),
+            admit(on, &Support::Unsupported("x"), true),
             Err(Decline::Unsupported {
                 detail: Some("x".into())
             })
         );
         assert_eq!(
-            admit(true, &Support::Supported, false),
+            admit(on, &Support::Supported, false),
             Err(Decline::NotStreaming)
+        );
+    }
+
+    #[test]
+    fn the_pointer_alone_is_reason_enough_to_admit() {
+        let pointer_only = Wants {
+            clipboard: false,
+            pointer: true,
+        };
+
+        // What the channel could not do before: carry something with
+        // clipboard sharing switched off.
+        assert_eq!(admit(pointer_only, &Support::Supported, true), Ok(()));
+
+        // And on a desktop whose clipboard cannot be read at all. This is
+        // the GNOME Wayland case: it still has a pointer.
+        assert_eq!(
+            admit(pointer_only, &Support::Unsupported("no portal"), true),
+            Ok(())
+        );
+
+        // A stream is still required. Neither feature means anything when
+        // nothing is being streamed.
+        assert_eq!(
+            admit(pointer_only, &Support::Supported, false),
+            Err(Decline::NotStreaming)
+        );
+    }
+
+    #[test]
+    fn an_unreadable_clipboard_still_says_so_when_it_is_the_only_reason() {
+        // The decline a person reads has to name the right cause, so an
+        // unsupported desktop is not reported as a setting they turned off.
+        let both = Wants {
+            clipboard: true,
+            pointer: false,
+        };
+        assert_eq!(
+            admit(both, &Support::Unsupported("no portal"), true),
+            Err(Decline::Unsupported {
+                detail: Some("no portal".into())
+            })
+        );
+
+        // But with nothing asked for, it is simply off.
+        assert_eq!(
+            admit(
+                Wants::clipboard_only(false),
+                &Support::Unsupported("x"),
+                true
+            ),
+            Err(Decline::SharingOff)
         );
     }
 
@@ -916,7 +1014,7 @@ mod tests {
         // And so admission turns it away.
         assert_eq!(
             admit(
-                true,
+                Wants::clipboard_only(true),
                 &Support::Supported,
                 still_connected(true, Some(&left)) == Hosting::Yes
             ),

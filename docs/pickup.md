@@ -1253,6 +1253,31 @@ Match a stamp against `journalctl -b -1 --since @<seconds>`.
 **`gh` needs a repo.** A job that does not check out has no git remote to
 infer one from; set `GH_REPO` rather than adding a pointless checkout.
 
+**Swallowing a key event on the client latches it on the host, and the state
+outlives the stream.** `Menu::handleKeyEvent` deliberately drops every key-up
+while the overlay menu is open, so no key reaches the host while a menu is
+being navigated. That is right for a key whose press was also dropped, and
+wrong for a key already held when the menu opened: the host got the down,
+never gets the up, and holds that key for the rest of the session. The fix is
+`raiseAllKeys()` at the moment the menu takes the keyboard — in
+`Menu::setMenuOpen`, not at the call sites, because the menu opens three ways
+(the `Ctrl+Alt+Shift+O` combo, a click on the floating handle, and
+`SDL_CODE_DUSK_SHOW_OVERLAY` from Dusk over the channel) and for a month only
+the combo raised.
+
+The class is worth more than the instance: anywhere the client decides not to
+forward an event, the host's input state has already moved and will not move
+back on its own. What makes it expensive to diagnose is that the symptom has
+no visible connection to the cause. A latched Shift reads as *"Enter stopped
+submitting and makes a newline instead"* — in every app on the host at once,
+which points at the host's OS or at the app, not at a streaming client on
+another machine. And because the latch lives in the host's injected-input
+state rather than in the session, ending the stream and reconnecting does not
+clear it, which rules out exactly the culprit that is responsible. Recovery
+from inside a stream is a lone tap of the stuck modifier (its key-up is
+forwarded normally); failing that, restarting the host service tears down the
+virtual keyboard and its state.
+
 ## Commands
 
 ```sh

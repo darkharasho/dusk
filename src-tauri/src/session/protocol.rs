@@ -161,6 +161,17 @@ pub enum ToClient {
     Notice {
         text: String,
     },
+    /// Whether the host's focused window has taken the pointer, so the client
+    /// sends relative motion rather than absolute positions a locked pointer
+    /// ignores.
+    ///
+    /// A bool rather than a mode name, so Dusk and the fork never have to
+    /// agree on what the modes are called. The client decides what to do
+    /// with it, including declining: a mode the user pinned by hand outlasts
+    /// anything said here.
+    MouseMode {
+        locked: bool,
+    },
 }
 
 // Hand-written so clipboard text never reaches a log or a failed assertion.
@@ -190,6 +201,9 @@ impl std::fmt::Debug for ToClient {
                 .field("len", &text.len())
                 .finish(),
             ToClient::Notice { text } => f.debug_struct("Notice").field("text", text).finish(),
+            ToClient::MouseMode { locked } => {
+                f.debug_struct("MouseMode").field("locked", locked).finish()
+            }
         }
     }
 }
@@ -499,12 +513,30 @@ mod tests {
                 fps: None,
                 resolution: None,
             },
+            ToClient::MouseMode { locked: true },
         ];
         for message in messages {
             let rendered = line(&message).unwrap();
             assert_eq!(rendered.matches('\n').count(), 1, "{message:?}");
             serde_json::from_str::<serde_json::Value>(rendered.trim()).expect("valid JSON");
         }
+    }
+
+    #[test]
+    fn mouse_mode_is_spelled_the_way_the_fork_reads_it() {
+        // The fork matches `type == "mouse_mode"` and reads `locked` as a
+        // bool (duskchannel.cpp). Pinned here because the two sides are in
+        // different repositories and nothing else would catch a rename: the
+        // client would simply ignore an unknown type and the pointer would
+        // never switch, with no error anywhere.
+        assert_eq!(
+            line(&ToClient::MouseMode { locked: true }).unwrap(),
+            "{\"type\":\"mouse_mode\",\"locked\":true}\n"
+        );
+        assert_eq!(
+            line(&ToClient::MouseMode { locked: false }).unwrap(),
+            "{\"type\":\"mouse_mode\",\"locked\":false}\n"
+        );
     }
 
     fn authed() -> Conversation {

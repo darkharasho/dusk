@@ -139,6 +139,7 @@ pub struct DeviceStream {
     pub bitrate_kbps: Option<u32>,
     pub fps: Option<u32>,
     pub codec: Option<Codec>,
+    pub free_cursor: Option<bool>,
 }
 
 impl DeviceStream {
@@ -148,7 +149,40 @@ impl DeviceStream {
             && self.bitrate_kbps.is_none()
             && self.fps.is_none()
             && self.codec.is_none()
+            && self.free_cursor.is_none()
     }
+}
+
+/// The name Sunshine gives the entry that streams the desktop itself.
+///
+/// Matched by name because that is all there is to match on: the app list
+/// carries an id, a name and whether HDR is supported, and the id is
+/// generated per host. A renamed desktop entry reads as an app here, which
+/// the per-machine override exists to correct.
+const DESKTOP_APP: &str = "desktop";
+
+/// Whether `app_name` streams the desktop rather than launching something.
+pub fn is_desktop_app(app_name: &str) -> bool {
+    app_name.trim().eq_ignore_ascii_case(DESKTOP_APP)
+}
+
+/// Whether a stream of `app_name` lets the pointer leave the stream.
+///
+/// Free cursor sends absolute pointer positions, which a pointer-locked game
+/// ignores outright — so the camera does not turn and nothing on screen says
+/// why. The global toggle is therefore read as a preference about *desktop*
+/// streaming, which is the only place it can be honoured, and an app that is
+/// not the desktop gets relative capture regardless of it.
+///
+/// A per-machine override wins over both, so a host whose desktop entry was
+/// renamed, or a game that wants the pointer anyway, is still reachable.
+/// Returning the decision rather than applying it keeps this testable and
+/// keeps the one caller free to log what it chose and why.
+pub fn free_cursor_for(app_name: &str, over: Option<&DeviceStream>, global: bool) -> bool {
+    if let Some(explicit) = over.and_then(|o| o.free_cursor) {
+        return explicit;
+    }
+    is_desktop_app(app_name) && global
 }
 
 /// The lowest and highest bitrates the client accepts, in Kbps.
@@ -622,6 +656,54 @@ mod tests {
         assert_eq!(over.bitrate_kbps, None);
         assert_eq!(over.codec, None);
         assert!(over.resolution.is_none());
+    }
+
+    #[test]
+    fn the_desktop_entry_is_recognised_by_name_whatever_its_case() {
+        assert!(is_desktop_app("Desktop"));
+        assert!(is_desktop_app("desktop"));
+        assert!(is_desktop_app("  Desktop  "));
+        assert!(!is_desktop_app("Steam Big Picture"));
+        assert!(!is_desktop_app("Desktop Dungeons"));
+        assert!(!is_desktop_app(""));
+    }
+
+    #[test]
+    fn only_the_desktop_honours_the_global_free_cursor() {
+        // The whole point: the toggle is on, and a game still gets relative
+        // capture, because absolute positions cannot steer a locked pointer.
+        assert!(free_cursor_for("Desktop", None, true));
+        assert!(!free_cursor_for("Steam Big Picture", None, true));
+
+        // With it off, nothing turns it on.
+        assert!(!free_cursor_for("Desktop", None, false));
+        assert!(!free_cursor_for("Steam Big Picture", None, false));
+    }
+
+    #[test]
+    fn a_per_machine_free_cursor_wins_over_both() {
+        let on = DeviceStream {
+            free_cursor: Some(true),
+            ..Default::default()
+        };
+        let off = DeviceStream {
+            free_cursor: Some(false),
+            ..Default::default()
+        };
+
+        // The escape hatch for a renamed desktop entry: a game name, the
+        // global off, and the pointer still leaves because it was asked for.
+        assert!(free_cursor_for("My Desktop", Some(&on), false));
+        // And the other way, for a desktop that should hold the pointer.
+        assert!(!free_cursor_for("Desktop", Some(&off), true));
+
+        // An override that sets other fields leaves this one inheriting.
+        let other = DeviceStream {
+            fps: Some(120),
+            ..Default::default()
+        };
+        assert!(free_cursor_for("Desktop", Some(&other), true));
+        assert!(!free_cursor_for("Steam Big Picture", Some(&other), true));
     }
 
     #[test]

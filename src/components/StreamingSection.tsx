@@ -88,7 +88,8 @@ function fpsDetail(fps: number | null): string {
 export function cursorDetail(contradicted: boolean): string {
   return [
     "The mouse stays a pointer rather than being taken over by the stream, so it can move off a fullscreen stream onto another screen without leaving it.",
-    `Turn it off for games that turn the camera with the mouse — with it off the floating in-stream handle cannot be clicked, and ${OVERLAY_HOTKEY} opens its menu instead.`,
+    "This applies to streaming the desktop. Launching anything else holds the pointer either way, because a game that turns the camera with the mouse cannot use a free one — per-machine settings can override that both ways.",
+    `With the pointer held the floating in-stream handle cannot be clicked, and ${OVERLAY_HOTKEY} opens its menu instead.`,
     contradicted
       ? "The stream running now launched the other way and keeps it until it ends; this takes effect the next time you connect."
       : "Takes effect the next time you connect.",

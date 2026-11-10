@@ -298,6 +298,16 @@ export interface DeviceStream {
   bitrateKbps: number | null;
   fps: number | null;
   codec: Codec | null;
+  /**
+   * Whether the pointer leaves the stream, for this machine alone.
+   *
+   * Unlike the others this does not inherit the global setting outright: a
+   * stream of anything but the desktop holds the pointer whatever the global
+   * says, because absolute positions cannot steer a pointer-locked game. Set
+   * it to override that both ways — a renamed desktop entry, or a game that
+   * wants the pointer anyway.
+   */
+  freeCursor: boolean | null;
 }
 
 export interface GithubUser {

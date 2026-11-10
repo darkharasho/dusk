@@ -361,6 +361,7 @@ function Body() {
             bitrateKbps: snapshot.bitrateKbps,
             fps: snapshot.fps,
             codec: snapshot.codec,
+            freeCursor: snapshot.freeCursor,
           }}
           onClose={() => setOpenId(null)}
         />

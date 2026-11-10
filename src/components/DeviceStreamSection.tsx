@@ -22,6 +22,20 @@ function codecDefault(codec: Codec): string {
   return CODECS.find((c) => c.value === codec)?.label ?? "Automatic";
 }
 
+/**
+ * What "Use default" means for the pointer, which is the one control here
+ * whose default is not simply the global value.
+ *
+ * Spelled out because the surprising half is silent otherwise: a game holds
+ * the pointer even with the global switch on, and the only visible sign is a
+ * camera that turns. Naming both halves is what stops that reading as a bug.
+ */
+export function cursorOverrideDetail(global: boolean): string {
+  return global
+    ? "The desktop lets the pointer leave, as the global setting says; everything else holds it, because a game that turns the camera with the mouse cannot use a free pointer."
+    : "Nothing lets the pointer leave while the global setting is off.";
+}
+
 interface Props {
   deviceId: string;
   /** This machine's current overrides, or undefined when it has none. */
@@ -32,6 +46,7 @@ interface Props {
     bitrateKbps: number | null;
     fps: number | null;
     codec: Codec;
+    freeCursor: boolean;
   };
 }
 
@@ -52,6 +67,7 @@ export function DeviceStreamSection({ deviceId, override, defaults }: Props) {
     bitrateKbps: override?.bitrateKbps ?? null,
     fps: override?.fps ?? null,
     codec: override?.codec ?? null,
+    freeCursor: override?.freeCursor ?? null,
   };
 
   function change(patch: Partial<DeviceStream>) {
@@ -167,6 +183,26 @@ export function DeviceStreamSection({ deviceId, override, defaults }: Props) {
               ))}
             </select>
           </div>
+        </div>
+
+        <div className="dusk-setting">
+          <div className="dusk-field">
+            <label htmlFor="dev-free-cursor">Pointer leaves the stream</label>
+            <select
+              id="dev-free-cursor"
+              className="axi-select"
+              value={current.freeCursor === null ? "" : current.freeCursor ? "yes" : "no"}
+              disabled={busy}
+              onChange={(e) =>
+                change({ freeCursor: e.target.value === "" ? null : e.target.value === "yes" })
+              }
+            >
+              <option value="">Use default (only for the desktop)</option>
+              <option value="yes">Always</option>
+              <option value="no">Never</option>
+            </select>
+          </div>
+          <p className="axi-ink-dim">{cursorOverrideDetail(defaults.freeCursor)}</p>
         </div>
 
         {error && <p className="axi-ink-dim">{error}</p>}

@@ -28,6 +28,7 @@ interface Props {
     bitrateKbps: number | null;
     fps: number | null;
     codec: Codec;
+    freeCursor: boolean;
   };
   onClose(): void;
 }

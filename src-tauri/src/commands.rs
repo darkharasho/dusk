@@ -732,7 +732,7 @@ pub async fn launch_app(
 
     // Per-machine overrides win over the global Streaming settings, each field
     // on its own: a machine with nothing set streams exactly as the globals.
-    let (bitrate, codec, fps, resolution, free_cursor, host_audio) = {
+    let (bitrate, codec, fps, resolution, free_cursor, free_cursor_global, host_audio) = {
         let store = inner.store.lock().await;
         let over = store.device_streams.get(&id);
         (
@@ -740,10 +740,22 @@ pub async fn launch_app(
             over.and_then(|o| o.codec).unwrap_or(store.codec),
             over.and_then(|o| o.fps).or(store.fps),
             over.and_then(|o| o.resolution).unwrap_or(store.resolution),
+            crate::store::free_cursor_for(&app_name, over, store.free_cursor),
             store.free_cursor,
             store.host_audio,
         )
     };
+
+    // Said out loud when the launch disagrees with the global toggle, because
+    // the symptom of getting this wrong is a camera that will not turn with
+    // nothing on screen connecting it to a setting. A line here is the only
+    // thread back from "the game does not work" to the reason it does not.
+    if free_cursor != free_cursor_global {
+        eprintln!(
+            "dusk: streaming {app_name}, so the pointer {} the stream whatever the setting says",
+            if free_cursor { "leaves" } else { "stays in" }
+        );
+    }
     let options = crate::moonlight::cli::StreamOptions {
         resolution: Some(stream_size(&app, &address, resolution, session.control()).await),
         bitrate,

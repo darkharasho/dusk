@@ -1,5 +1,37 @@
 # Release Notes
 
+Version v0.3.53 — November 10, 2026
+
+Opening the in-stream overlay can no longer leave a key held down on the
+machine you are streaming to, and there is a way out of one that already is.
+
+## Changes
+
+- **Opening the overlay no longer leaves a key held down on the other
+  machine.** While the overlay's menu is up it keeps the keyboard to itself,
+  so that moving through it cannot also type into whatever is running on the
+  machine you are streaming to. A key you happened to be holding as the menu
+  opened was caught by that: the other machine had been told the key went
+  down, was never told it came up, and went on treating it as held for the
+  rest of the session. A held Shift is the one that gets noticed — Enter
+  stops submitting and starts adding a newline instead, in every program over
+  there at once, which looks like anything but a streaming problem. Ending
+  the stream and starting it again did not clear it, because by then the key
+  was being held by that machine rather than by the stream. Keys held as the
+  menu opens are now let go, whichever way it was opened: the keyboard
+  shortcut, a click on the floating handle, or Dusk opening it for you. Only
+  the shortcut did this before, which is why the other two were the ones that
+  stuck.
+
+- **A "Release stuck keys" row in the overlay recovers a key that is already
+  stuck.** There was no way out from inside a stream short of knowing that
+  tapping the stuck key by itself frees it — which requires guessing that the
+  keyboard is involved, and the symptom points everywhere else. The new row
+  lets go of every modifier on the other machine without needing to know
+  which one is stuck, and does so whether or not this machine still believes
+  anything is held, which is the state that makes one stick in the first
+  place.
+
 Version v0.3.52 — November 4, 2026
 
 A machine that was asleep gets long enough to wake up, and a stream that

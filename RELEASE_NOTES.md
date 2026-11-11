@@ -1,5 +1,21 @@
 # Release Notes
 
+Version v0.3.57 — November 11, 2026
+
+What the stream tells you looks like it came from Dusk rather than from
+something going wrong.
+
+## Changes
+
+- **In-stream messages are drawn as a card.** They used to be borrowed from
+  the streaming client's own connection warning — large red text jammed into
+  the bottom-left corner with nothing around it, which read as an error
+  whatever it said. A message now arrives as a small dark panel with Dusk's
+  amber down its edge, set in from the corner, with the keyboard shortcut
+  picked out under it. The mouse being handed back takes a quieter form, with
+  no amber and no shortcut, because nothing was taken and there is nothing to
+  undo.
+
 Version v0.3.56 — November 11, 2026
 
 Following what the other machine has in focus now actually moves the mouse,

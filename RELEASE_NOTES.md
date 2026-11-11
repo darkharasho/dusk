@@ -1,5 +1,31 @@
 # Release Notes
 
+Version v0.3.55 — November 11, 2026
+
+Anything that takes the mouse when it should not can be written down and
+never do it again, and a machine's version and its update are something to
+look at rather than read.
+
+## Changes
+
+- **"Never treat these as a game."** Following what the other machine has in
+  focus works out which windows want the mouse from the window being
+  fullscreen, which is a good guess and not a certainty — something
+  fullscreen that is not a game can take the pointer too. There is now a list
+  for exactly that. When it happens, the machine being streamed from writes
+  the window's name in its own log; paste that name into the list and it is
+  never treated as a game again. It takes effect on the next window change
+  rather than the next stream, and the list is only shown while following is
+  switched on.
+
+- **A machine's version, and what is happening to it, are drawn rather than
+  described.** The version a machine runs sits beside Ready as a label you
+  can read at a glance, instead of a sentence below it. An update available,
+  one being installed, one that finished, and a machine that never came back
+  each now look different from each other rather than being four identical
+  grey lines — the one that matters most, a machine that went away to update
+  and did not return, no longer looks exactly like the one that worked.
+
 Version v0.3.54 — November 10, 2026
 
 A stream can follow what the other machine has in focus, so a game gets the

@@ -441,7 +441,20 @@ where
                 }
             }
             _ = recheck.tick() => {
+                let was_following = current.pointer;
                 current = wants().await;
+                // Turned on while a stream was already up: state the pointer
+                // now rather than waiting for it to change. Without this the
+                // setting appears to do nothing until the next window
+                // change, and the obvious thing to try -- turning it on and
+                // alt-tabbing into the game that is already fullscreen --
+                // is the case where no change ever comes, because the
+                // watcher reports changes and the game was fullscreen all
+                // along.
+                if current.pointer && !was_following {
+                    let locked = *pointer.borrow_and_update() == PointerIntent::Locked;
+                    send(write, &Wire::Pointer { locked }).await?;
+                }
                 // Goodbye only when there is nothing left to carry. Turning
                 // the clipboard off used to end the connection because the
                 // clipboard was the connection.
@@ -1148,6 +1161,45 @@ mod tests {
         assert_eq!(
             peer.hears_within(SEC).await,
             Some(Wire::Pointer { locked: false })
+        );
+
+        drop(peer);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn turning_following_on_mid_stream_states_the_pointer_without_waiting() {
+        // The way anybody actually tries the setting: a stream is up, the
+        // switch goes on, and the game they alt-tab into was already
+        // fullscreen -- so the watcher, which reports changes, reports
+        // nothing and there is no change to relay. The recheck has to say
+        // where the pointer stands, or the setting reads as broken.
+        let fake = Fake::new(None);
+        let (_tell, pointer) = watch::channel(PointerIntent::Locked);
+        let following = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let switch = following.clone();
+        let (mut peer, task) = start_following(
+            &fake,
+            Arc::new(Mutex::new(Hosting::Yes)),
+            move || Wants {
+                clipboard: true,
+                pointer: switch.load(std::sync::atomic::Ordering::SeqCst),
+            },
+            pointer,
+        );
+
+        assert_eq!(peer.next().await, Some(Wire::Hello { version: VERSION }));
+        assert_eq!(
+            peer.hears_within(SEC).await,
+            None,
+            "nothing about the pointer while the setting is off"
+        );
+
+        following.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            peer.hears_within(RECHECK * 2).await,
+            Some(Wire::Pointer { locked: true }),
+            "and where it stands as soon as the setting is read again"
         );
 
         drop(peer);

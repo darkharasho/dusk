@@ -492,11 +492,19 @@ fn start_clipboard(
             Ok(stream) => {
                 // Turned off since this began counts as off, even if it is
                 // on again: the run ends, and the next one starts afresh.
-                let sharing_on = move || {
+                // What has changed is that the connection may outlive the
+                // clipboard, because the host's pointer rides the same wire.
+                let carry = move || {
                     let state = state.clone();
-                    async move { clipboard_sharing(&state).await == (true, offs) }
+                    async move {
+                        match clipboard_sharing(&state).await {
+                            (false, _) => client::Carry::Nothing,
+                            (true, now) if now == offs => client::Carry::Clipboard,
+                            (true, _) => client::Carry::Restart,
+                        }
+                    }
                 };
-                client::run(stream, control, rx, sharing_on).await
+                client::run(stream, control, rx, carry).await
             }
             Err(ended) => ended,
         };
@@ -567,8 +575,12 @@ impl ClipboardLink {
             up: false,
             live: None,
             held: Default::default(),
-            // Nothing tried yet: connect as soon as sharing is on.
-            last: crate::clipboard::client::LastEnd::OwnSetting,
+            // Nothing tried yet: connect once the stream is up, whatever
+            // this machine's clipboard setting says. Whether the connection
+            // is worth keeping is partly the host's answer -- it is the end
+            // that knows if it is following its own pointer -- and the only
+            // way to hear it is to ask.
+            last: crate::clipboard::client::LastEnd::Fresh,
             ended_at: tokio::time::Instant::now(),
         }
     }
@@ -579,9 +591,10 @@ impl ClipboardLink {
         self.ended_at = at;
     }
 
-    /// Notes a connection that ended since last looked, connects when the
-    /// rules allow, and drops the connection when sharing was turned off
-    /// here, which ends it.
+    /// Notes a connection that ended since last looked, and connects when
+    /// the rules allow. Sharing being turned off here no longer drops a live
+    /// connection: it stops copies crossing, and the run itself goes once
+    /// the host is not using it for the pointer either.
     async fn tend(&mut self) {
         use crate::clipboard::client::{should_reconnect, LastEnd};
         use tokio::sync::oneshot::error::TryRecvError;
@@ -603,10 +616,11 @@ impl ClipboardLink {
             // A copy from before sharing went off is never sent.
             self.held.clear();
         }
+        // A live run is left to decide for itself: it ends when there is
+        // nothing left for it to carry, which is no longer the same thing as
+        // the clipboard being off here. Dropping it from out here would take
+        // the host's pointer down with it.
         if self.live.is_some() {
-            if !sharing {
-                self.ended(LastEnd::OwnSetting, tokio::time::Instant::now());
-            }
             return;
         }
         if !should_reconnect(&self.last, self.ended_at.elapsed(), sharing) {

@@ -1,5 +1,31 @@
 # Release Notes
 
+Version v0.3.56 — November 11, 2026
+
+Following what the other machine has in focus now actually moves the mouse,
+which until today it did not.
+
+## Changes
+
+- **The mouse follows the other machine's focused window.** The switch
+  shipped two versions ago, and on the machine being streamed from every part
+  of it worked: it watched what had focus, decided a game had taken the
+  mouse, and said so. The machine being sat at was never taught to listen, so
+  the message arrived and was discarded, and swapping into a game changed
+  nothing on either side. It is heard now, the mouse changes with it, and the
+  stream says on screen which mode it is in and which keys put it back.
+
+- **Turning the switch on during a stream takes effect at once.** It used to
+  wait for the next window change, so the obvious way to try it — switch it
+  on, then alt-tab into the game already running — was the one case where
+  nothing was ever reported and the setting read as broken.
+
+- **Turning off clipboard sharing no longer turns off the mouse following.**
+  The two travel over the same connection, and that connection used to exist
+  only while text sharing was on. Text sharing now governs text and nothing
+  else: with it off, no copy crosses in either direction, and the mouse keeps
+  following.
+
 Version v0.3.55 — November 11, 2026
 
 Anything that takes the mouse when it should not can be written down and

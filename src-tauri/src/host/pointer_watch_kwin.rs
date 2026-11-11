@@ -45,7 +45,9 @@ use super::pointer_watch::{
 /// what the last one meant costs nothing beyond the D-Bus round trip.
 struct Reports {
     changes: Mutex<Changes>,
-    sink: Box<dyn Fn(PointerIntent) + Send + Sync>,
+    /// Both the deny-list this reads and the place a change is sent live
+    /// here, so there is nothing else to hold.
+    state: Arc<AppState>,
 }
 
 // The name is spelled out rather than taken from `pointer_watch::IFACE`
@@ -58,13 +60,17 @@ struct Reports {
 impl Reports {
     /// One `"1:<class>"` or `"0:"` from the compositor.
     ///
-    /// Takes no result, so the script's `callDBus` does not wait on us and a
-    /// slow sink cannot stall KWin's event loop.
-    fn report(&self, payload: &str) {
-        let intent = intent_of_report(payload);
+    /// Takes no result, so the script's `callDBus` does not wait on us and
+    /// nothing done here can stall KWin's event loop.
+    async fn report(&self, payload: &str) {
+        // Read each time rather than captured at start: a class written down
+        // while a stream is up should take effect on the next window change,
+        // not the next launch.
+        let denied = self.state.store.lock().await.pointer_not_games.clone();
+        let intent = intent_of_report(payload, &denied);
 
-        // Scoped so the lock is not held across the sink, which may do
-        // anything including write to a socket.
+        // Scoped so the change lock is not held across the send, which
+        // wakes every connection following the pointer.
         let changed = match self.changes.lock() {
             Ok(mut changes) => changes.next(intent),
             Err(poisoned) => poisoned.into_inner().next(intent),
@@ -91,7 +97,7 @@ impl Reports {
                     format!(" ({class})")
                 }
             );
-            (self.sink)(intent);
+            self.state.set_pointer(intent);
         }
     }
 }
@@ -117,10 +123,7 @@ impl Watcher {
     }
 
     /// Own the name, write the script, and ask KWin to run it.
-    pub async fn start<F>(sink: F) -> Result<Self, WatchError>
-    where
-        F: Fn(PointerIntent) + Send + Sync + 'static,
-    {
+    pub async fn start(state: Arc<AppState>) -> Result<Self, WatchError> {
         let script = Self::script_path();
         std::fs::write(&script, SCRIPT).map_err(|e| {
             WatchError::Unsupported(format!("the watcher could not be written to disk: {e}"))
@@ -134,7 +137,7 @@ impl Watcher {
                 PATH,
                 Reports {
                     changes: Mutex::new(Changes::new()),
-                    sink: Box::new(sink),
+                    state,
                 },
             )
             .map_err(|e| WatchError::Refused(format!("could not serve {PATH}: {e}")))?
@@ -179,7 +182,7 @@ impl Watcher {
     /// be asked simply streams the way it did before, and says so once.
     pub fn spawn(state: Arc<AppState>) {
         tauri::async_runtime::spawn(async move {
-            match Watcher::start(move |intent| state.set_pointer(intent)).await {
+            match Watcher::start(state).await {
                 Ok(watcher) => {
                     // Held here for the life of the process. Dropping it
                     // releases the name, after which the script's reports go

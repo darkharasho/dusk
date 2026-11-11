@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   setBitrate,
   setClipboardSharing,
   setCodec,
   setFps,
   setFollowHostPointer,
+  setPointerNotGames,
   setFreeCursor,
   setHostAudio,
   setResolution,
@@ -68,25 +69,6 @@ function fpsDetail(fps: number | null): string {
 }
 
 /**
- * What letting the pointer go buys and costs, including the two parts that
- * are each easy to mistake for a bug.
- *
- * The mode reaches the client as a launch argument, so a stream already
- * running keeps whatever it started with: flipping this and watching a live
- * stream ignore it reads as a switch that does nothing.
- *
- * And it decides whether the floating in-stream handle can be clicked at
- * all. A stream that holds the pointer locks the cursor, so there is nothing
- * to aim at the handle with and the client hit-tests nothing — the hotkey is
- * the only way into the overlay. Nothing about this screen hints at that
- * unless it is said here.
- *
- * `contradicted` is a stream running right now in the other mode, which is
- * the only time the gap between this switch and what is on screen is worth
- * spending a sentence on. Merely streaming is not enough: a stream that
- * already agrees needs no explaining.
- */
-/**
  * What following the host's pointer does, and the three things about it
  * someone needs to know before turning it on.
  *
@@ -106,6 +88,25 @@ export function followPointerDetail(): string {
   ].join(" ");
 }
 
+/**
+ * What letting the pointer go buys and costs, including the two parts that
+ * are each easy to mistake for a bug.
+ *
+ * The mode reaches the client as a launch argument, so a stream already
+ * running keeps whatever it started with: flipping this and watching a live
+ * stream ignore it reads as a switch that does nothing.
+ *
+ * And it decides whether the floating in-stream handle can be clicked at
+ * all. A stream that holds the pointer locks the cursor, so there is nothing
+ * to aim at the handle with and the client hit-tests nothing — the hotkey is
+ * the only way into the overlay. Nothing about this screen hints at that
+ * unless it is said here.
+ *
+ * `contradicted` is a stream running right now in the other mode, which is
+ * the only time the gap between this switch and what is on screen is worth
+ * spending a sentence on. Merely streaming is not enough: a stream that
+ * already agrees needs no explaining.
+ */
 export function cursorDetail(contradicted: boolean): string {
   return [
     "The mouse stays a pointer rather than being taken over by the stream, so it can move off a fullscreen stream onto another screen without leaving it.",
@@ -289,6 +290,16 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
         onChange={(on) => void save(() => setFollowHostPointer(on))}
       />
 
+      {/* Only while following is on: a list of exceptions to a rule that is
+          not running is a thing to wonder about rather than a thing to use. */}
+      {snapshot.followHostPointer && (
+        <NotGames
+          classes={snapshot.pointerNotGames}
+          disabled={busy}
+          onSave={(classes) => void save(() => setPointerNotGames(classes))}
+        />
+      )}
+
       <Toggle
         id="stream-host-audio"
         label="Play the sound on the host too"
@@ -307,6 +318,70 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
         onChange={(on) => void save(() => setClipboardSharing(on))}
       />
       {error && <p className="axi-ink-danger">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * The classes this machine never treats as a game.
+ *
+ * A textarea of one class per line rather than a tag editor, because of where
+ * the names come from: when something fullscreen takes the pointer and should
+ * not have, that machine's log names the class it decided on, and the thing
+ * to do with a name you have just read is paste it.
+ *
+ * Edited locally and saved on a press. A list that saved on every keystroke
+ * would write a half-typed class to disk and, worse, act on it.
+ */
+function NotGames({
+  classes,
+  disabled,
+  onSave,
+}: {
+  classes: string[];
+  disabled: boolean;
+  onSave(classes: string[]): void;
+}) {
+  const saved = classes.join("\n");
+  const [text, setText] = useState(saved);
+
+  // Someone else's edit, or another machine's, should land here rather than
+  // being held off by whatever is in the box.
+  useEffect(() => setText(saved), [saved]);
+
+  const dirty = text !== saved;
+
+  return (
+    <div className="dusk-setting">
+      <div className="dusk-field">
+        <label htmlFor="stream-not-games">Never treat these as a game</label>
+        <textarea
+          id="stream-not-games"
+          className="axi-input"
+          rows={4}
+          spellCheck={false}
+          value={text}
+          disabled={disabled}
+          placeholder={"org.telegram.desktop\nmpv"}
+          onChange={(e) => setText(e.target.value)}
+        />
+      </div>
+      <p className="axi-ink-dim">
+        One window class per line. When something fullscreen takes the mouse and
+        shouldn&rsquo;t have, that machine&rsquo;s log names the class it decided on — paste it
+        here and it is never a game again. Takes effect on the next window change,
+        not the next stream.
+      </p>
+      <div className="axi-row">
+        <button
+          type="button"
+          className="axi-btn axi-btn--sm"
+          disabled={disabled || !dirty}
+          onClick={() => onSave(text.split("\n"))}
+        >
+          {dirty ? "Save the list" : "Saved"}
+        </button>
+      </div>
     </div>
   );
 }

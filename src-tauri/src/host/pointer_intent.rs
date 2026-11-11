@@ -135,6 +135,40 @@ fn is_steam_app(class: &str) -> bool {
 /// worse than a camera that does not turn. It is also the edge worth
 /// triggering on, because focus moves between ordinary windows constantly
 /// and none of those movements should change anything.
+/// Fold a class the way the deny-list is compared: trimmed and lowercased.
+fn folded(class: &str) -> String {
+    class.trim().to_ascii_lowercase()
+}
+
+/// What the focused window wants, with classes the user has ruled out.
+///
+/// The built-in list is a list of known cases and not coverage -- it was
+/// wrong about a fullscreen chat window five minutes into its first real
+/// run, and the next gap will be found the same way. So this is the way out
+/// that does not need a release: the host's log names the class it decided
+/// on, and a class named here is never a game again.
+///
+/// Consulted before the built-in rule, including before the `steam_app_*`
+/// fast path. Someone who writes down a Steam id has said something about
+/// that particular game, and an override that loses to a built-in is not an
+/// override.
+pub fn intent_of_with(
+    resource_class: &str,
+    fullscreen: bool,
+    also_denied: &[String],
+) -> PointerIntent {
+    if !fullscreen {
+        return PointerIntent::Free;
+    }
+
+    let class = folded(resource_class);
+    if also_denied.iter().any(|denied| folded(denied) == class) {
+        return PointerIntent::Free;
+    }
+
+    intent_of(resource_class, fullscreen)
+}
+
 pub fn intent_of(resource_class: &str, fullscreen: bool) -> PointerIntent {
     if !fullscreen {
         return PointerIntent::Free;
@@ -236,6 +270,60 @@ mod tests {
         assert!(!is_steam_app("steam_app_12a"));
         assert!(!is_steam_app("steam"));
         assert!(!is_steam_app(""));
+    }
+
+    #[test]
+    fn a_class_the_user_ruled_out_is_never_a_game() {
+        let denied = vec!["factorio".to_string()];
+
+        // Without the list it is an unknown fullscreen window, so a game.
+        assert_eq!(intent_of("factorio", true), PointerIntent::Locked);
+        // With it, never.
+        assert_eq!(
+            intent_of_with("factorio", true, &denied),
+            PointerIntent::Free
+        );
+        // And nothing else is affected.
+        assert_eq!(
+            intent_of_with("steam_app_1", true, &denied),
+            PointerIntent::Locked
+        );
+    }
+
+    #[test]
+    fn the_users_list_beats_the_built_in_fast_path() {
+        // Writing down a Steam id is a statement about that game. An
+        // override that loses to a built-in is not an override.
+        let denied = vec!["steam_app_5149240".to_string()];
+        assert_eq!(
+            intent_of_with("steam_app_5149240", true, &denied),
+            PointerIntent::Free
+        );
+    }
+
+    #[test]
+    fn the_users_list_is_compared_the_way_a_class_is() {
+        // Pasted out of a log, so it may carry case or spaces.
+        let denied = vec!["  Factorio  ".to_string()];
+        assert_eq!(
+            intent_of_with("factorio", true, &denied),
+            PointerIntent::Free
+        );
+        assert_eq!(
+            intent_of_with("  FACTORIO", true, &denied),
+            PointerIntent::Free
+        );
+    }
+
+    #[test]
+    fn an_empty_list_changes_nothing() {
+        for (class, fullscreen) in [("steam_app_1", true), ("firefox", true), ("x", false)] {
+            assert_eq!(
+                intent_of_with(class, fullscreen, &[]),
+                intent_of(class, fullscreen),
+                "{class}"
+            );
+        }
     }
 
     #[test]

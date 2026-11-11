@@ -77,6 +77,16 @@ pub struct Store {
     /// Needs a host that can be asked, which today means KDE. Elsewhere it
     /// can be on and simply never report anything.
     pub follow_host_pointer: bool,
+    /// Window classes that never take the pointer, whatever the rule says.
+    ///
+    /// The built-in list is known cases and not coverage, so this is the way
+    /// out that does not need a release: when something fullscreen takes the
+    /// pointer and should not have, this machine's log names the class it
+    /// decided on, and a class written down here is never a game again.
+    ///
+    /// Only consulted while [`Store::follow_host_pointer`] is on, and only on
+    /// the machine being streamed from, which is where the rule runs.
+    pub pointer_not_games: Vec<String>,
     /// Also play a stream's sound on the host's own speakers, rather than
     /// only here.
     ///

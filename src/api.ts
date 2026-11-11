@@ -239,6 +239,10 @@ export function setFollowHostPointer(on: boolean): Promise<void> {
   return invoke("set_follow_host_pointer", { on });
 }
 
+export function setPointerNotGames(classes: string[]): Promise<void> {
+  return invoke("set_pointer_not_games", { classes });
+}
+
 export function setFreeCursor(on: boolean): Promise<void> {
   return invoke("set_free_cursor", { on });
 }

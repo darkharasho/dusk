@@ -242,6 +242,11 @@ export interface Snapshot {
    */
   followHostPointer: boolean;
   /**
+   * Window classes this machine never treats as a game, whatever the rule
+   * would otherwise say. Only read on the machine being streamed from.
+   */
+  pointerNotGames: string[];
+  /**
    * Whether a stream also plays its sound on the host's own speakers. Off
    * by default: asking for it makes the host hold its real output device
    * open for the length of the stream.

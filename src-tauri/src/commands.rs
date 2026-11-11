@@ -1250,6 +1250,35 @@ pub async fn set_free_cursor(
     Ok(())
 }
 
+/// The window classes this machine never treats as a game.
+///
+/// Saved as given, minus blanks and duplicates: the list is pasted out of a
+/// log, so it arrives with whatever spacing and repetition that implies.
+#[tauri::command]
+pub async fn set_pointer_not_games(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    classes: Vec<String>,
+) -> Result<(), String> {
+    let mut tidy: Vec<String> = Vec::new();
+    for class in classes {
+        let class = class.trim().to_string();
+        if class.is_empty() {
+            continue;
+        }
+        if !tidy.iter().any(|seen| seen.eq_ignore_ascii_case(&class)) {
+            tidy.push(class);
+        }
+    }
+    {
+        let mut store = state.store.lock().await;
+        store.pointer_not_games = tidy;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
 /// Whether a stream follows what the host's focused window is doing with the
 /// pointer, rather than keeping the mode it was launched with.
 ///

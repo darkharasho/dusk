@@ -28,7 +28,7 @@
 
 #![allow(dead_code)]
 
-use super::pointer_intent::{intent_of, PointerIntent};
+use super::pointer_intent::{intent_of_with, PointerIntent};
 
 /// The KWin script, embedded so there is no resource path to resolve.
 pub const SCRIPT: &str = include_str!("pointer_watch.js");
@@ -83,9 +83,9 @@ pub fn parse_report(payload: &str) -> Option<(bool, &str)> {
 ///
 /// Unparseable payloads hand the pointer back rather than taking it: the
 /// failure that annoys is a pointer that vanishes, not one that stays.
-pub fn intent_of_report(payload: &str) -> PointerIntent {
+pub fn intent_of_report(payload: &str, also_denied: &[String]) -> PointerIntent {
     match parse_report(payload) {
-        Some((fullscreen, class)) => intent_of(class, fullscreen),
+        Some((fullscreen, class)) => intent_of_with(class, fullscreen, also_denied),
         None => PointerIntent::Free,
     }
 }
@@ -154,7 +154,7 @@ mod tests {
     fn nonsense_is_read_as_nothing_holding_the_pointer() {
         for payload in ["", "steam", "2:steam", ":steam", "true:steam", "1"] {
             assert_eq!(
-                intent_of_report(payload),
+                intent_of_report(payload, &[]),
                 PointerIntent::Free,
                 "{payload:?}"
             );
@@ -166,12 +166,16 @@ mod tests {
         // The payload the script would have sent for the window captured on
         // the Bazzite host on 2026-11-10.
         assert_eq!(
-            intent_of_report("1:steam_app_5149240"),
+            intent_of_report("1:steam_app_5149240", &[]),
             PointerIntent::Locked
         );
         // And the focus churn around it reads as free.
         for payload in ["0:steam", "0:sai", "0:com.discordapp.Discord"] {
-            assert_eq!(intent_of_report(payload), PointerIntent::Free, "{payload}");
+            assert_eq!(
+                intent_of_report(payload, &[]),
+                PointerIntent::Free,
+                "{payload}"
+            );
         }
     }
 
@@ -195,13 +199,13 @@ mod tests {
     fn two_different_fullscreen_games_are_one_intent() {
         let mut changes = Changes::new();
         assert_eq!(
-            changes.next(intent_of_report("1:steam_app_1")),
+            changes.next(intent_of_report("1:steam_app_1", &[])),
             Some(PointerIntent::Locked)
         );
         // Alt-tabbing to another fullscreen game announces nothing: the
         // script sees a different class, this layer sees the same intent.
-        assert_eq!(changes.next(intent_of_report("1:steam_app_2")), None);
-        assert_eq!(changes.next(intent_of_report("1:factorio")), None);
+        assert_eq!(changes.next(intent_of_report("1:steam_app_2", &[])), None);
+        assert_eq!(changes.next(intent_of_report("1:factorio", &[])), None);
     }
 
     #[test]

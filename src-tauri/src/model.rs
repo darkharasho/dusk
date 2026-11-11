@@ -371,6 +371,9 @@ pub struct Snapshot {
     /// Whether a stream follows what the host's focused window is doing with
     /// the pointer. See [`crate::store::Store::follow_host_pointer`].
     pub follow_host_pointer: bool,
+    /// Window classes this machine never treats as a game.
+    /// See [`crate::store::Store::pointer_not_games`].
+    pub pointer_not_games: Vec<String>,
     /// Whether a stream also plays its sound on the host's own speakers.
     /// See [`crate::store::Store::host_audio`].
     pub host_audio: bool,

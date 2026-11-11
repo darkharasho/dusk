@@ -1,5 +1,33 @@
 # Release Notes
 
+Version v0.3.58 — November 11, 2026
+
+A stream that cannot start says so, instead of spinning.
+
+## Changes
+
+- **A machine that has gone quiet is said so straight away.** Starting a
+  stream to a machine the grid shows as ready, which has since stopped
+  answering, used to open a window that sat on "Establishing connection" for
+  ninety seconds and then failed where you could not see it. Dusk now asks
+  the machine twice, two seconds apart, and tells you it is not answering
+  rather than launching into it. A machine that is asleep is untouched by
+  this — waking it and waiting is exactly what that ninety seconds is for.
+
+- **A stream that never starts no longer leaves its card mid-stream.** When
+  the streaming window fails to reach the other machine it waits for someone
+  to dismiss its own message, which could be behind every other window on
+  screen — so Dusk, which waits for that window to close, waited with it.
+  Dusk now gives a stream a hundred seconds to get going, then says it failed
+  on the machine's card and closes the window that will not.
+
+- **Dusk keeps a log on macOS.** Everything Dusk says about what it is doing
+  went to the system journal on Linux and nowhere at all on a Mac, which is
+  why a failure this morning could be explained from the other machine and
+  not from this one. It is now written to
+  `~/Library/Logs/dev.dusk.app/dusk.log`, kept to two files of a few
+  megabytes, and skipped entirely when Dusk is run from a terminal.
+
 Version v0.3.57 — November 11, 2026
 
 What the stream tells you looks like it came from Dusk rather than from

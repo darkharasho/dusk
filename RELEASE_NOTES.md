@@ -1,5 +1,24 @@
 # Release Notes
 
+Version v0.3.59 — November 11, 2026
+
+When a machine will not connect, both halves of Dusk now say what they saw.
+
+## Changes
+
+- **A machine that goes quiet says why.** When Dusk cannot reach a machine it
+  had been talking to, the reason — refused, timed out, nothing there — is
+  now written down with the address it was tried on. It used to be discarded
+  at the moment it was learned, which left a machine that answers everything
+  else looking unreachable for no stated reason.
+
+- **Two ways onto one network are named.** A machine with, say, Ethernet
+  plugged in and Wi-Fi left on, both on the same network, can make other
+  machines appear to come and go. Dusk now says so when it starts, and again
+  if a machine stops answering, naming the two. It cannot fix it — turning
+  one of the two off is the fix — but it is no longer the invisible
+  explanation for a machine that will not connect.
+
 Version v0.3.58 — November 11, 2026
 
 A stream that cannot start says so, instead of spinning.

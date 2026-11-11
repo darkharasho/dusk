@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import type { Device } from "../types";
 import { updateDevice } from "../api";
@@ -37,7 +37,9 @@ export function RemoteUpdate({ device }: { device: Device }) {
   const [mine, setMine] = useState<string | null>(null);
   const [pending, setPending] = useState(() => asked.get(device.id) ?? null);
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  // A title and a detail rather than one sentence: the notice draws them
+  // differently, and the title alone has to be readable.
+  const [note, setNote] = useState<{ title: string; detail: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -53,7 +55,10 @@ export function RemoteUpdate({ device }: { device: Device }) {
     if (pending && theirs && theirs !== pending.from) {
       asked.delete(device.id);
       setPending(null);
-      setNote(`${device.name} is now on version ${theirs}.`);
+      setNote({
+        title: `Updated to ${theirs}`,
+        detail: `${device.name} restarted and came back on the new version.`,
+      });
     }
   }, [pending, theirs, device.id, device.name]);
 
@@ -83,7 +88,10 @@ export function RemoteUpdate({ device }: { device: Device }) {
         setPending(entry);
         setNow(entry.at);
       } else {
-        setNote(`${device.name} says it already has the latest version.`);
+        setNote({
+          title: 'Already up to date',
+          detail: `${device.name} says it already has the latest version.`,
+        });
       }
     } catch (err) {
       setError(describe(err));
@@ -94,46 +102,91 @@ export function RemoteUpdate({ device }: { device: Device }) {
 
   return (
     <div className="axi-stack">
-      {dusk && (
-        <p className="axi-ink-dim">
-          Dusk {dusk.version}
-          {behind && ` · this machine has ${mine}`}
-        </p>
-      )}
       {pending && !overdue && (
-        <p className="axi-ink-dim">
-          {device.name} is installing version {pending.version} and will restart by itself in a minute or two.
-        </p>
+        <Notice icon="↻" title={`Installing ${pending.version}`}>
+          {device.name} will restart by itself in a minute or two.
+        </Notice>
       )}
+
       {pending && overdue && (
-        <p className="axi-ink-dim">
-          {device.name} hasn&rsquo;t come back on version {pending.version} yet. You can ask it again, or it may
-          need someone at the machine.
-        </p>
+        <Notice variant="danger" icon="!" title={`${device.name} hasn’t come back`}>
+          It never returned on {pending.version}. You can ask it again, or someone may need to
+          be at the machine.
+        </Notice>
       )}
+
       {(!pending || overdue) &&
         behind &&
         (dusk.remoteUpdate ? (
-          <>
-            {device.streamingHere && (
-              <p className="axi-ink-dim">Your stream will drop while {device.name} restarts.</p>
-            )}
-            <button
-              type="button"
-              className="axi-btn axi-btn--sm"
-              disabled={busy}
-              onClick={() => void update()}
-            >
-              {busy ? "Asking it to update" : "Update Dusk on this machine"}
-            </button>
-          </>
+          <Notice variant="warn" icon="↑" title={`${mine} is available`}>
+            {device.name} is on {dusk.version}.
+            {device.streamingHere && " Your stream will drop while it restarts."}
+            <div className="axi-row" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="axi-btn axi-btn--sm axi-btn--primary"
+                disabled={busy}
+                onClick={() => void update()}
+              >
+                {busy ? "Asking it to update" : `Update ${device.name}`}
+              </button>
+            </div>
+          </Notice>
         ) : (
-          <p className="axi-ink-dim">
-            Dusk on {device.name} can&rsquo;t update itself from here. Someone at {device.name} has to install it.
-          </p>
+          <Notice variant="warn" icon="↑" title={`${mine} is available`}>
+            Dusk on {device.name} can&rsquo;t update itself from here. Someone at the machine has
+            to install it.
+          </Notice>
         ))}
-      {note && <p className="axi-ink-dim">{note}</p>}
-      {error && <p className="axi-ink-danger">{error}</p>}
+
+      {note && (
+        <Notice variant="ok" icon="✓" title={note.title}>
+          {note.detail}
+        </Notice>
+      )}
+
+      {error && (
+        <Notice variant="danger" icon="!" title="That didn’t work">
+          {error}
+        </Notice>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One outcome, drawn as the language draws outcomes.
+ *
+ * The variant is what colours an `axi-notice`, so one without a variant is a
+ * plain box rather than a quieter status — which is why the installing case
+ * passes none on purpose and the rest always pass one.
+ *
+ * The icon is a character rather than a drawn glyph, matching the notice
+ * already in the drawer. Rule 12 asks for the language's own angles at
+ * control weight, so these are a stand-in until the language offers them.
+ */
+function Notice({
+  variant,
+  icon,
+  title,
+  children,
+}: {
+  variant?: "ok" | "warn" | "danger";
+  icon: string;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={variant ? `axi-notice axi-notice--${variant}` : "axi-notice"}>
+      <span className="axi-notice__icon" aria-hidden="true">
+        {icon}
+      </span>
+      <div>
+        <p style={{ margin: 0 }}>{title}</p>
+        <div className="axi-ink-dim" style={{ marginTop: 4 }}>
+          {children}
+        </div>
+      </div>
     </div>
   );
 }

@@ -206,6 +206,14 @@ export function DeviceDrawer({
         <div className="axi-drawer__body axi-stack">
           <div className="axi-row">
             <span className={chipClass}>{label}</span>
+            {/* Meta ink, and meta ink whatever the version turns out to be:
+                the chip answers what the machine is on, and whether that is
+                worth doing something about is the notice's job below. Two
+                filled chips here would compete, and the state chip is the
+                one that should win. */}
+            {device.dusk && (
+              <span className="axi-chip axi-chip--meta">Dusk {device.dusk.version}</span>
+            )}
             <span className="axi-ink-faint dusk-card__address">
               {device.primaryAddress ?? device.addresses[0] ?? "No address"}
             </span>

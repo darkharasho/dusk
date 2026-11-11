@@ -16,6 +16,7 @@ mod install;
 mod mockdata;
 mod model;
 mod moonlight;
+mod netcheck;
 mod peer;
 mod poller;
 mod registry;
@@ -169,6 +170,11 @@ pub fn run() {
     // case this must not capture.
     #[cfg(target_os = "macos")]
     applog::to_file();
+
+    // Above everything it might explain: a machine with two ways onto one
+    // network is the likeliest reason a machine that was there a moment ago
+    // is not.
+    netcheck::say_once();
 
     #[cfg(target_os = "linux")]
     avoid_wayland_dmabuf_crash();

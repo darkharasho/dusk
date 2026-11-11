@@ -776,9 +776,16 @@ pub async fn launch_app(
             .is_ok();
         if gone_quiet(answered_again, was_online) {
             eprintln!("dusk: {address} says nothing on its plain port; not launching into it");
+            // The second sentence only when this machine has two ways onto
+            // one network, because then it is the likeliest reason and the
+            // one nobody thinks of. Named here rather than only in the log:
+            // this is the moment somebody is looking for a reason.
+            let two_ways = crate::netcheck::found()
+                .map(|shared| format!(" {}", shared.sentence()))
+                .unwrap_or_default();
             return Err(format!(
                 "{device_name} is not answering, though it was a moment ago. \
-                 It may still be restarting — try again in a few seconds."
+                 It may still be restarting — try again in a few seconds.{two_ways}"
             ));
         }
     }

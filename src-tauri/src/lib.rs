@@ -5,6 +5,7 @@
 
 mod account;
 mod applist;
+mod applog;
 mod cert_pairing;
 mod cli;
 mod clipboard;
@@ -163,6 +164,12 @@ pub fn run_screen_hook_if_asked() -> Option<i32> {
 }
 
 pub fn run() {
+    // First of all, and only here: the CLI paths above this in `main` print
+    // for whoever typed them, and one of them piped somewhere is exactly the
+    // case this must not capture.
+    #[cfg(target_os = "macos")]
+    applog::to_file();
+
     #[cfg(target_os = "linux")]
     avoid_wayland_dmabuf_crash();
 

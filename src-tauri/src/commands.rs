@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::install;
-use crate::model::{Activity, Device, HostStatus, Snapshot};
+use crate::model::{Activity, Device, HostStatus, Reachability, Snapshot};
 use crate::registry::split_address;
 use crate::startup;
 use crate::state::{emit_snapshot, AppState};
@@ -540,6 +540,22 @@ async fn clipboard_sharing(state: &AppState) -> (bool, u64) {
 /// make one.
 const CLIPBOARD_TICK: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long to wait before asking a silent host a second time, before a
+/// launch gives up on it. Short, because the whole point is to fail faster
+/// than the client's own 90-second seek.
+const ANSWER_AGAIN_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long a launched client has to reach the host and come back to Dusk
+/// before the stream is called failed.
+///
+/// Past the client's own seek budget, which is 90 seconds: inside that it is
+/// still looking, and a machine woken from sleep uses most of it. What this
+/// catches is the client that has already given up -- it raises its own
+/// error dialog and then *waits on the OK button*, so it never exits and
+/// waiting for the process is waiting forever. The card stayed mid-stream
+/// while a window behind everything else held the only explanation.
+const STREAM_START_BUDGET: std::time::Duration = std::time::Duration::from_secs(100);
+
 /// One stream's clipboard connection, made once the stream is up and made
 /// again when it drops, by the rules in
 /// [`crate::clipboard::client::should_reconnect`].
@@ -668,6 +684,18 @@ impl ClipboardLink {
     }
 }
 
+/// Whether a launch should be refused because the machine has gone quiet.
+///
+/// `answered` is a fresh `serverinfo` round trip, asked twice; `was_online`
+/// is what the grid last decided. Only the pair matters, which is why this
+/// is a function rather than two conditions in the middle of a launch: the
+/// rule is that the grid being *wrong* is worth refusing over, and the grid
+/// saying "offline" is not, because waking a sleeping machine runs through
+/// exactly that state and works.
+fn gone_quiet(answered: bool, was_online: bool) -> bool {
+    !answered && was_online
+}
+
 /// Start streaming an app, and watch the session for the card's sake.
 #[tauri::command]
 pub async fn launch_app(
@@ -688,7 +716,7 @@ pub async fn launch_app(
         .clear_running_clients(std::time::Duration::from_secs(3))
         .await;
 
-    let (app_name, polled_hosting, http_port) = {
+    let (app_name, polled_hosting, http_port, device_name, was_online) = {
         let registry = inner.registry.read().await;
         let device = registry
             .devices()
@@ -705,6 +733,8 @@ pub async fn launch_app(
             app_name,
             matches!(device.activity, Activity::Hosting { .. }),
             device.http_port,
+            device.name.clone(),
+            matches!(device.reachability, Reachability::Online { .. }),
         )
     };
 
@@ -717,10 +747,41 @@ pub async fn launch_app(
     // the very reason the clear exists to remove. A host that will not
     // answer falls back to the grid's last word, which is no worse than the
     // guess this replaces.
-    let host_hosting = match crate::serverinfo::query_http(&inner.http, &address, http_port).await {
+    let probe = crate::serverinfo::query_http(&inner.http, &address, http_port).await;
+    let host_hosting = match &probe {
         Ok(info) => matches!(info.activity(), Activity::Hosting { .. }),
         Err(_) => polled_hosting,
     };
+
+    // A machine the grid calls online that will not answer *now* is the one
+    // case worth refusing, and it is the case that cost an afternoon: the
+    // host had just restarted after an update, the card still said Ready
+    // from the last poll, and the client was launched into nothing. It then
+    // spent its full 90-second budget looking -- a budget that exists so a
+    // sleeping machine has time to wake -- and failed into a window that was
+    // behind everything else on screen. Ninety seconds of spinner, and
+    // nothing anywhere saying why.
+    //
+    // Only when the grid said online. A machine that is offline or unknown
+    // is exactly what that budget is for: the client wakes it and waits, and
+    // refusing here would break waking a sleeping host, which works.
+    //
+    // Asked twice, because one missed answer is not an answer: a host
+    // restarting its service is back within seconds, and that case should
+    // launch rather than be told to try again.
+    if gone_quiet(probe.is_ok(), was_online) {
+        tokio::time::sleep(ANSWER_AGAIN_AFTER).await;
+        let answered_again = crate::serverinfo::query_http(&inner.http, &address, http_port)
+            .await
+            .is_ok();
+        if gone_quiet(answered_again, was_online) {
+            eprintln!("dusk: {address} says nothing on its plain port; not launching into it");
+            return Err(format!(
+                "{device_name} is not answering, though it was a moment ago. \
+                 It may still be restarting — try again in a few seconds."
+            ));
+        }
+    }
 
     // A client that exited without cancelling leaves Sunshine hosting a
     // session nobody is in, and the next connection fails its control stream
@@ -823,6 +884,11 @@ pub async fn launch_app(
     // to bring it back. Shared because the two halves are separate tasks.
     let stepped_aside = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let aside = stepped_aside.clone();
+    // Whether the client ever reached the host and came back to us. Read by
+    // the budget below, which is the only thing that notices a client that
+    // gave up without exiting.
+    let connected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reached = connected.clone();
     tauri::async_runtime::spawn(async move {
         let session = session;
         let mut effects = effects;
@@ -856,6 +922,9 @@ pub async fn launch_app(
                 // stream is up.
                 crate::session::Effect::Authenticated => {
                     eprintln!("dusk: the client connected to the session channel");
+                    // The stream is up, so the budget below has nothing to
+                    // report: this is the moment it was waiting for.
+                    reached.store(true, std::sync::atomic::Ordering::Relaxed);
                     aside.store(true, std::sync::atomic::Ordering::Relaxed);
                     crate::tray::hide_window(&overlay_app);
 
@@ -911,6 +980,54 @@ pub async fn launch_app(
         }
     });
 
+    // A stream that never starts, reported without waiting for the client.
+    //
+    // The client's failure path ends at its own error dialog, which waits on
+    // a button nobody is looking at: the window can be behind every other
+    // one on screen, and on macOS a window that is not visible is not drawn,
+    // so even a glance at it can show the frame from before the error. The
+    // process is still alive, so the watcher below -- which waits for it --
+    // waits as long as the window stands there. Measured on 2026-11-11:
+    // twenty minutes, card still mid-stream, nothing said anywhere.
+    //
+    // Clearing the client is what makes this one report rather than two
+    // halves: it ends the process, so the watcher's own cleanup runs and the
+    // card goes back to Ready behind this message, instead of the message
+    // arriving under a card that still claims to be streaming.
+    // Set by the budget before it clears the client, and read by the watcher
+    // below. Without it the kill reads as a crash and the person gets two
+    // messages for one failure, the second one wrong.
+    let reported = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let budget_reported = reported.clone();
+    let budget_handle = app.clone();
+    let budget_state = inner.clone();
+    let budget_id = id.clone();
+    let budget_name = device_name.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(STREAM_START_BUDGET).await;
+        if connected.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+
+        eprintln!(
+            "dusk: the client never reached {budget_name}; clearing it and saying the stream failed"
+        );
+        budget_reported.store(true, std::sync::atomic::Ordering::SeqCst);
+        let failed = SessionFailed {
+            device_id: budget_id,
+            message: format!(
+                "The stream never reached {budget_name}. It may have gone away, \
+                 or be restarting — its card will say when it is back."
+            ),
+        };
+        if let Err(err) = budget_handle.emit(SESSION_FAILED_EVENT, failed) {
+            eprintln!("dusk: could not report the stream that never started: {err}");
+        }
+        budget_state
+            .clear_running_clients(std::time::Duration::from_secs(3))
+            .await;
+    });
+
     let handle = app.clone();
     let watched = inner.clone();
     let session_id = id.clone();
@@ -929,7 +1046,10 @@ pub async fn launch_app(
             crate::tray::show_window(&handle);
         }
 
-        if let Err(err) = ended {
+        // Nothing to add when the budget has already said it failed: what
+        // it is looking at is a client it stopped itself.
+        let already_said = reported.load(std::sync::atomic::Ordering::SeqCst);
+        if let Some(err) = ended.as_ref().err().filter(|_| !already_said) {
             // A stream that fails after launch used to be invisible: the
             // card simply went back to Ready. Say what happened instead.
             // The client's own wording goes to the log and the person gets
@@ -1819,5 +1939,35 @@ mod clipboard_lookup_tests {
     fn nothing_matching_gives_nothing() {
         let hosts = [host(Some("a"), &["10.0.0.1"], "x")];
         assert_eq!(pinned_cert(&hosts, "b", "10.0.0.2"), None);
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::gone_quiet;
+
+    #[test]
+    fn a_machine_the_grid_calls_online_that_says_nothing_is_refused() {
+        // The case this exists for, measured on 2026-11-11: the host had
+        // restarted after an update, the card still said Ready from the
+        // last poll, and the launch went into nothing -- then spent ninety
+        // seconds looking before failing into a window behind every other
+        // one on screen.
+        assert!(gone_quiet(false, true));
+    }
+
+    #[test]
+    fn a_machine_that_answers_is_never_refused() {
+        assert!(!gone_quiet(true, true));
+        assert!(!gone_quiet(true, false));
+    }
+
+    #[test]
+    fn a_machine_the_grid_calls_offline_is_left_to_the_client() {
+        // Not an oversight. The client wakes a known host with a magic
+        // packet and then waits, and its whole seek budget exists for that
+        // -- so the silence of a machine that is asleep is the one silence
+        // worth launching into.
+        assert!(!gone_quiet(false, false));
     }
 }

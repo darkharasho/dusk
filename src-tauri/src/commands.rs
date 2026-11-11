@@ -863,8 +863,9 @@ pub async fn launch_app(
                     clipboard.tend().await;
                 }
                 // Sent on, over a new connection if none is up and the
-                // rules allow one. Sharing turned off here mid-stream: the
-                // connection goes, and nothing more is passed on.
+                // rules allow one. Sharing turned off here mid-stream stops
+                // copies crossing; the connection itself stays for as long
+                // as the host is using it for the pointer.
                 crate::session::Effect::Clipboard(text) => clipboard.copied(text).await,
                 crate::session::Effect::Overlay(action) => match action {
                     // Asked rather than killed: a client that is told to go

@@ -1,5 +1,21 @@
 # Release Notes
 
+Version v0.3.60 — November 12, 2026
+
+Scrolling a Linux machine from another one no longer drops notches.
+
+## Changes
+
+- **Every scroll notch lands.** Using a Linux machine from another one with the
+  free cursor, the first notch after moving the mouse often did nothing in Chrome,
+  Steam, Discord and other apps built the same way, so scrolling felt patchy
+  whenever you moved and scrolled together. Dusk now sends that notch in a
+  form those apps catch, and other apps still scroll by the full notch. Only
+  Linux machines get this; Windows and Mac machines scroll as before.
+
+  Both machines need this version: the Linux machine has to tell the other
+  one that it runs Linux.
+
 Version v0.3.59 — November 11, 2026
 
 When a machine will not connect, both halves of Dusk now say what they saw.

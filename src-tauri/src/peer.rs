@@ -68,8 +68,13 @@
 //!
 //! ```text
 //! connecting → host   {"type":"display","screen":{"width":3440,"height":1440}}
-//! host → connecting   {"type":"display_size","width":2560,"height":1440}
+//! host → connecting   {"type":"display_size","width":2560,"height":1440,
+//!                      "displays":2,"os":"linux"}
 //! ```
+//!
+//! `os` is new in 0.3.60: `linux`, `windows` or `macos`, so the client can
+//! work around how that host's desktop reads input. A newer Dusk may name
+//! another, which an older one treats the same as saying nothing.
 //!
 //! A machine of the same account can ask another to update itself, when
 //! the grid shows it on an older Dusk. `at` is when it asked, in Unix
@@ -197,6 +202,9 @@ pub enum Message {
         /// cannot know.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         displays: Option<u32>,
+        /// Which OS the host runs, as `std::env::consts::OS` names it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os: Option<String>,
     },
     /// Which machine is this?
     ///
@@ -387,6 +395,7 @@ async fn serve(app: AppHandle, state: Arc<AppState>, stream: TcpStream, address:
                     width,
                     height,
                     displays: host_display_count(&app, &state).await,
+                    os: Some(std::env::consts::OS.into()),
                 },
                 None => Message::Declined {
                     reason: "This machine could not tell its screen size.".into(),
@@ -948,6 +957,29 @@ pub struct HostScreen {
     pub size: (u32, u32),
     /// How many screens the stream can be switched between, if it said.
     pub displays: Option<u32>,
+    /// Which OS it runs, if it said one Dusk knows.
+    pub os: Option<HostOs>,
+}
+
+/// The OS a host runs, as far as a stream from it needs to know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostOs {
+    Linux,
+    Windows,
+    Macos,
+}
+
+impl HostOs {
+    /// The name a host gave, or `None` for one this Dusk does not know.
+    fn named(name: &str) -> Option<HostOs> {
+        match name {
+            "linux" => Some(HostOs::Linux),
+            "windows" => Some(HostOs::Windows),
+            "macos" => Some(HostOs::Macos),
+            _ => None,
+        }
+    }
 }
 
 /// Ask the Dusk at `address` what size to stream at, telling it the size of
@@ -980,12 +1012,14 @@ async fn display_size_at(
             width,
             height,
             displays,
+            os,
         } if (320..=15360).contains(&width) && (240..=8640).contains(&height) => {
             Some(HostScreen {
                 size: (width, height),
                 // Sunshine switches on F1..F12, so a count past that, or
                 // none at all, is not one to offer.
                 displays: displays.filter(|n| (1..=12).contains(n)),
+                os: os.as_deref().and_then(HostOs::named),
             })
         }
         _ => None,
@@ -1277,6 +1311,7 @@ mod tests {
                 width: 2560,
                 height: 1440,
                 displays: None,
+                os: None,
             })
             .unwrap(),
             r#"{"type":"display_size","width":2560,"height":1440}"#
@@ -1286,9 +1321,10 @@ mod tests {
                 width: 2560,
                 height: 1440,
                 displays: Some(2),
+                os: Some("linux".into()),
             })
             .unwrap(),
-            r#"{"type":"display_size","width":2560,"height":1440,"displays":2}"#
+            r#"{"type":"display_size","width":2560,"height":1440,"displays":2,"os":"linux"}"#
         );
     }
 
@@ -1457,7 +1493,8 @@ mod tests {
             display_size_at("127.0.0.1", port, Some((3440, 1440))).await,
             Some(HostScreen {
                 size: (3440, 1440),
-                displays: None
+                displays: None,
+                os: None
             }),
             "a host older than the display count still gives its size"
         );
@@ -1472,7 +1509,8 @@ mod tests {
             display_size_at("127.0.0.1", port, None).await,
             Some(HostScreen {
                 size: (3440, 1440),
-                displays: Some(2)
+                displays: Some(2),
+                os: None
             })
         );
         // More than the host can switch between is not a count to offer.
@@ -1634,6 +1672,26 @@ mod tests {
         )
         .await;
         assert_eq!(identify_at("127.0.0.1", port).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_host_says_which_os_it_runs() {
+        let port =
+            host_answering(r#"{"type":"display_size","width":3440,"height":1440,"os":"linux"}"#)
+                .await;
+        assert_eq!(
+            display_size_at("127.0.0.1", port, None)
+                .await
+                .and_then(|h| h.os),
+            Some(HostOs::Linux)
+        );
+        // One from a newer Dusk is no answer, and costs nothing else.
+        let port = host_answering(
+            r#"{"type":"display_size","width":3440,"height":1440,"displays":2,"os":"plan9"}"#,
+        )
+        .await;
+        let answer = display_size_at("127.0.0.1", port, None).await.unwrap();
+        assert_eq!((answer.os, answer.displays), (None, Some(2)));
     }
 
     #[tokio::test]

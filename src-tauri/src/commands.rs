@@ -333,8 +333,9 @@ const FALLBACK_SIZE: (u32, u32) = (1920, 1080);
 
 /// The size to stream at, from the Streaming setting.
 ///
-/// The host's answer also says how many displays it has, which goes to the
-/// client through `control` so its overlay offers only those.
+/// The host's answer also says how many displays it has and which OS it
+/// runs, which go to the client through `control`: the overlay offers only
+/// those displays, and the client works around that OS's input quirks.
 async fn stream_size(
     app: &AppHandle,
     address: &str,
@@ -349,14 +350,14 @@ async fn stream_size(
         let control = control.clone();
         tauri::async_runtime::spawn(async move {
             let answer = crate::peer::display_size(&host, screen).await;
-            tell_host_displays(&control, answer);
+            tell_client_about_host(&control, answer);
         });
     }
     let size = match resolution {
         Resolution::MatchHost => {
             let answer =
                 crate::peer::display_size(crate::peer::host_part(address), this_display(app)).await;
-            tell_host_displays(&control, answer);
+            tell_client_about_host(&control, answer);
             answer.map(|a| a.size)
         }
         Resolution::MatchThisDisplay => this_display(app),
@@ -368,11 +369,18 @@ async fn stream_size(
     (width & !1, height & !1)
 }
 
-/// Pass on how many displays the host said it has. Nothing is sent when it
-/// did not say, which leaves the client to its own guess.
-fn tell_host_displays(control: &crate::session::Control, answer: Option<crate::peer::HostScreen>) {
-    if let Some(count) = answer.and_then(|a| a.displays) {
+/// Pass on how many displays the host said it has, and its OS. Nothing is
+/// sent for what it did not say, which leaves the client to its own guess.
+fn tell_client_about_host(
+    control: &crate::session::Control,
+    answer: Option<crate::peer::HostScreen>,
+) {
+    let Some(answer) = answer else { return };
+    if let Some(count) = answer.displays {
         control.send(crate::session::ToClient::HostDisplays { count });
+    }
+    if let Some(os) = answer.os {
+        control.send(crate::session::ToClient::HostOs { os });
     }
 }
 

@@ -152,6 +152,12 @@ pub enum ToClient {
     HostDisplays {
         count: u32,
     },
+    /// Which OS the host runs, so the client can work around how that
+    /// host's desktop reads input. Sent once the host has said; a client
+    /// that never hears it assumes nothing.
+    HostOs {
+        os: crate::peer::HostOs,
+    },
     /// Text copied on the host, for the client to put on its clipboard.
     Clipboard {
         format: String,
@@ -195,6 +201,7 @@ impl std::fmt::Debug for ToClient {
                 .debug_struct("HostDisplays")
                 .field("count", count)
                 .finish(),
+            ToClient::HostOs { os } => f.debug_struct("HostOs").field("os", os).finish(),
             ToClient::Clipboard { format, text } => f
                 .debug_struct("Clipboard")
                 .field("format", format)
@@ -501,6 +508,9 @@ mod tests {
             ToClient::ShowOverlay,
             ToClient::HostDisplay { id: "1".into() },
             ToClient::HostDisplays { count: 2 },
+            ToClient::HostOs {
+                os: crate::peer::HostOs::Linux,
+            },
             ToClient::Clipboard {
                 format: "text".into(),
                 text: "a\nb".into(),
@@ -520,6 +530,20 @@ mod tests {
             assert_eq!(rendered.matches('\n').count(), 1, "{message:?}");
             serde_json::from_str::<serde_json::Value>(rendered.trim()).expect("valid JSON");
         }
+    }
+
+    #[test]
+    fn host_os_is_spelled_the_way_the_fork_reads_it() {
+        // The fork matches `type == "host_os"` and `os == "linux"`
+        // (duskchannel.cpp); a rename would silently turn its scroll
+        // workaround off.
+        assert_eq!(
+            line(&ToClient::HostOs {
+                os: crate::peer::HostOs::Linux
+            })
+            .unwrap(),
+            "{\"type\":\"host_os\",\"os\":\"linux\"}\n"
+        );
     }
 
     #[test]

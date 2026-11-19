@@ -204,7 +204,14 @@ fn stream_args(host: &str, app: &str, options: &StreamOptions) -> Vec<String> {
     // nobody connects to it. A toggle that says Super goes to the host means
     // it whatever shape the window is.
     args.push("--capture-system-keys".into());
-    args.push(if options.system_keys { "always" } else { "never" }.into());
+    args.push(
+        if options.system_keys {
+            "always"
+        } else {
+            "never"
+        }
+        .into(),
+    );
     // Always off, and with no setting behind it, unlike the three above.
     //
     // `quitAppAfter` closes the app on the host when a session ends on its

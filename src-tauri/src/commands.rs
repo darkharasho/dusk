@@ -822,16 +822,7 @@ pub async fn launch_app(
 
     // Per-machine overrides win over the global Streaming settings, each field
     // on its own: a machine with nothing set streams exactly as the globals.
-    let (
-        bitrate,
-        codec,
-        fps,
-        resolution,
-        free_cursor,
-        free_cursor_global,
-        host_audio,
-        system_keys,
-    ) = {
+    let (bitrate, codec, fps, resolution, free_cursor, free_cursor_global, host_audio, system_keys) = {
         let store = inner.store.lock().await;
         let over = store.device_streams.get(&id);
         (

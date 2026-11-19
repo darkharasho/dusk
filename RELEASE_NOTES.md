@@ -1,5 +1,27 @@
 # Release Notes
 
+Version v0.3.61 — November 19, 2026
+
+Super can reach the machine you are streaming, so a full-screen game is no
+longer a dead end.
+
+## Changes
+
+- **Super goes to the other machine.** Playing something full screen, there
+  was no way to bring up the other machine's Start menu, and so no way to
+  get at anything else running over there. The stream's own menu now has a
+  **Super** row that presses it on that machine, and the menu is still
+  opened with Ctrl + Alt + Shift + O.
+
+  For pressing the key itself rather than reaching for the menu, Settings ›
+  Streaming has **Send the Windows key to the other machine** — Command, on
+  a Mac. It is off to begin with, and worth leaving off unless you want it:
+  while it is on, Super and the shortcuts built on it, switching windows and
+  closing them, belong to the stream rather than to the machine you are
+  sitting at, for as long as the stream holds the pointer. The same menu's
+  Release the mouse hands them back, and the setting applies the next time
+  you connect rather than to a stream already running.
+
 Version v0.3.60 — November 12, 2026
 
 Scrolling a Linux machine from another one no longer drops notches.

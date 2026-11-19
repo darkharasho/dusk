@@ -370,6 +370,7 @@ pub fn run() {
             commands::set_follow_host_pointer,
             commands::set_pointer_not_games,
             commands::set_host_audio,
+            commands::set_system_keys,
             commands::set_clipboard_sharing,
             commands::set_auto_update,
             commands::update_device,

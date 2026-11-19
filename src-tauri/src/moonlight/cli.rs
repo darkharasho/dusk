@@ -126,6 +126,13 @@ pub struct StreamOptions {
     /// out — it changes which device the host holds open, and it can take
     /// a shared Bluetooth headset away from the machine you are sitting at.
     pub host_audio: bool,
+    /// Whether Super and the system shortcuts built on it go to the host
+    /// instead of to this machine. See [`crate::store::Store::system_keys`].
+    ///
+    /// Stated both ways, like the two above, and for the same reason: the
+    /// client writes this one to its own settings file, so a run that left
+    /// it out would inherit whatever the last run asked for.
+    pub system_keys: bool,
 }
 
 /// The client's name for a codec on its command line.
@@ -188,7 +195,17 @@ fn stream_args(host: &str, app: &str, options: &StreamOptions) -> Vec<String> {
         }
         .into(),
     );
-    // Always off, and with no setting behind it, unlike the two above.
+    // `always` rather than `fullscreen`, which is the client's other way of
+    // saying yes to this. Both only take the keyboard while the stream holds
+    // the pointer, so there is always a way back out — the stream's own
+    // Release the mouse hands the keyboard back with it. What `fullscreen`
+    // adds is the mode changing underneath you when the window does, so the
+    // same key reaches the host or this machine depending on something
+    // nobody connects to it. A toggle that says Super goes to the host means
+    // it whatever shape the window is.
+    args.push("--capture-system-keys".into());
+    args.push(if options.system_keys { "always" } else { "never" }.into());
+    // Always off, and with no setting behind it, unlike the three above.
     //
     // `quitAppAfter` closes the app on the host when a session ends on its
     // own (`session.cpp:1276` in the fork). Dusk already offers both
@@ -999,6 +1016,8 @@ mod tests {
                 "1920x1080",
                 "--no-absolute-mouse",
                 "--no-audio-on-host",
+                "--capture-system-keys",
+                "never",
                 "--no-quit-after"
             ]
         );
@@ -1022,6 +1041,8 @@ mod tests {
                 "Desktop",
                 "--absolute-mouse",
                 "--no-audio-on-host",
+                "--capture-system-keys",
+                "never",
                 "--no-quit-after"
             ]
         );
@@ -1051,6 +1072,33 @@ mod tests {
             !args.contains(&"--audio-on-host".to_string()),
             "the two spellings must never both appear"
         );
+    }
+
+    /// Stated both ways as well, and remembered by the client between runs
+    /// like the other two. `always` rather than `fullscreen` for the on
+    /// case: the point of the toggle is that Super reaches the host, and
+    /// `fullscreen` makes that true or not depending on the shape of the
+    /// window, which is not something anyone connects to the setting.
+    #[test]
+    fn super_is_told_which_machine_it_belongs_to_either_way() {
+        let sent = StreamOptions {
+            system_keys: true,
+            ..Default::default()
+        };
+        let args = stream_args("host", "Steam Big Picture", &sent);
+        let at = args
+            .iter()
+            .position(|a| a == "--capture-system-keys")
+            .expect("the client is always told where Super goes");
+        assert_eq!(args[at + 1], "always");
+
+        let kept = StreamOptions::default();
+        let args = stream_args("host", "Steam Big Picture", &kept);
+        let at = args
+            .iter()
+            .position(|a| a == "--capture-system-keys")
+            .expect("including when it stays here");
+        assert_eq!(args[at + 1], "never");
     }
 
     /// Leaving a stream must never close what is running on the host. That
@@ -1097,6 +1145,8 @@ mod tests {
                 "H.264",
                 "--no-absolute-mouse",
                 "--no-audio-on-host",
+                "--capture-system-keys",
+                "never",
                 "--no-quit-after"
             ]
         );

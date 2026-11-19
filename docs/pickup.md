@@ -1037,6 +1037,14 @@ rather than a summary. Where each side stands:
   talking to the host over the protocol, a key-up for all eight modifiers
   whether or not this client believes any of them is down. See the landmine
   on swallowed key events for why a tracked-key raise is not enough.
+  **Super** is the same shape — a `VK_LWIN` down and up over the protocol,
+  not a channel message — and exists because a lone Super press is the one
+  key the client keeps for the machine it is pressed on, so from inside a
+  fullscreen game the host's Start menu is otherwise unreachable. Dusk's
+  *Send the Windows key to the other machine* (`--capture-system-keys
+  always`) is the other way to it, and the expensive one: it holds those
+  keys for the whole stream. This row costs one press, and works where
+  keyboard capture is refused outright.
 - **Dusk** logs the handshake and each overlay action (`dusk: the client
   connected to the session channel`), which is the only way to tell from
   a log that the channel was used: Disconnect ends the stream either way.

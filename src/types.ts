@@ -253,6 +253,13 @@ export interface Snapshot {
    */
   hostAudio: boolean;
   /**
+   * Whether Super — the Windows key, Command on a Mac — and the shortcuts
+   * built on it go to the machine being streamed rather than acting on this
+   * one. Off by default: it takes those keys off this machine for as long as
+   * the stream holds the pointer.
+   */
+  systemKeys: boolean;
+  /**
    * Per-machine overrides over the four settings above, keyed by device id.
    * A machine absent here, or whose fields are all null, streams at the
    * globals.

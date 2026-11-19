@@ -822,7 +822,16 @@ pub async fn launch_app(
 
     // Per-machine overrides win over the global Streaming settings, each field
     // on its own: a machine with nothing set streams exactly as the globals.
-    let (bitrate, codec, fps, resolution, free_cursor, free_cursor_global, host_audio) = {
+    let (
+        bitrate,
+        codec,
+        fps,
+        resolution,
+        free_cursor,
+        free_cursor_global,
+        host_audio,
+        system_keys,
+    ) = {
         let store = inner.store.lock().await;
         let over = store.device_streams.get(&id);
         (
@@ -833,6 +842,7 @@ pub async fn launch_app(
             crate::store::free_cursor_for(&app_name, over, store.free_cursor),
             store.free_cursor,
             store.host_audio,
+            store.system_keys,
         )
     };
 
@@ -853,6 +863,7 @@ pub async fn launch_app(
         codec: (codec != Codec::Auto).then_some(codec),
         free_cursor,
         host_audio,
+        system_keys,
         ..Default::default()
     };
 
@@ -1460,6 +1471,23 @@ pub async fn set_host_audio(
     {
         let mut store = state.store.lock().await;
         store.host_audio = on;
+        store.save(&state.store_path)?;
+    }
+    emit_snapshot(&app, state.inner()).await;
+    Ok(())
+}
+
+/// Whether Super and the shortcuts built on it go to the machine being
+/// streamed rather than acting on this one.
+#[tauri::command]
+pub async fn set_system_keys(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().await;
+        store.system_keys = on;
         store.save(&state.store_path)?;
     }
     emit_snapshot(&app, state.inner()).await;

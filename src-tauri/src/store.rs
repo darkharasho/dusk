@@ -103,6 +103,21 @@ pub struct Store {
     /// at goes silent. Nothing in either program says so; the sound simply
     /// stops. So Dusk asks for host audio only when someone wants it.
     pub host_audio: bool,
+    /// Send Super — the Windows key, Command on a Mac — and the shortcuts
+    /// built on it to the machine being streamed, rather than letting this
+    /// one act on them.
+    ///
+    /// Off by default is the honest default rather than the cautious one:
+    /// with this on, the stream takes the keys this machine's own window
+    /// switching and quitting are on, for as long as the stream holds the
+    /// pointer. That is a bad trade for a desktop stream in a window and the
+    /// only way to do the thing it is for — reaching the host's Start menu
+    /// from inside a fullscreen game, which otherwise cannot be done at all,
+    /// because a lone Super press is the one key the client keeps.
+    ///
+    /// There is always a way back: the keys follow the pointer, so the
+    /// stream's own Release the mouse hands them back along with it.
+    pub system_keys: bool,
     /// Per-machine overrides over the four settings above. Keyed by device id;
     /// a machine with no entry, or an entry whose fields are all `None`,
     /// streams exactly as the globals say. The id is stable while a machine

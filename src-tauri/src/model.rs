@@ -377,6 +377,9 @@ pub struct Snapshot {
     /// Whether a stream also plays its sound on the host's own speakers.
     /// See [`crate::store::Store::host_audio`].
     pub host_audio: bool,
+    /// Whether Super and the shortcuts built on it go to the machine being
+    /// streamed. See [`crate::store::Store::system_keys`].
+    pub system_keys: bool,
     /// Per-machine overrides over the four settings above, keyed by device id.
     /// A machine absent here streams at the globals; the drawer reads its
     /// entry to show what a particular machine is set to.

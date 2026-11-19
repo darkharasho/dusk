@@ -257,6 +257,14 @@ export function setHostAudio(on: boolean): Promise<void> {
   return invoke("set_host_audio", { on });
 }
 
+/**
+ * Whether Super, and the shortcuts built on it, go to the machine being
+ * streamed rather than acting on this one.
+ */
+export function setSystemKeys(on: boolean): Promise<void> {
+  return invoke("set_system_keys", { on });
+}
+
 /** Whether text copied during a stream is shared with the other machine. */
 export function setClipboardSharing(on: boolean): Promise<void> {
   return invoke("set_clipboard_sharing", { on });

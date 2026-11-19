@@ -9,6 +9,7 @@ import {
   setFreeCursor,
   setHostAudio,
   setResolution,
+  setSystemKeys,
 } from "../api";
 import { Toggle } from "./StartupSection";
 import type { Codec, Resolution, Snapshot } from "../types";
@@ -115,6 +116,35 @@ export function cursorDetail(contradicted: boolean): string {
     contradicted
       ? "The stream running now launched the other way and keeps it until it ends; this takes effect the next time you connect."
       : "Takes effect the next time you connect.",
+  ].join(" ");
+}
+
+/**
+ * What this machine's keyboard calls the key, since the setting is read on
+ * the machine the keys are pressed on rather than the one they end up at.
+ */
+export const SUPER_KEY = /Mac/.test(navigator.userAgent) ? "Command" : "the Windows key";
+
+/**
+ * Why Super is a setting at all, and what it costs while it is on.
+ *
+ * The thing worth saying first is that a lone Super press is the one key the
+ * client keeps for this machine, so from inside a fullscreen game there is
+ * otherwise no way to reach the other machine's Start menu — which is the
+ * whole reason someone comes looking for this.
+ *
+ * The cost is the same trade seen from the other side, and it is sharp
+ * enough to name: the keys this machine switches and closes its own windows
+ * with go to the stream too. So the way back out is spelled, because a
+ * person who has just lost Alt+Tab is in no position to go hunting for it.
+ */
+export function systemKeysDetail(): string {
+  return [
+    `${SUPER_KEY} normally acts on this machine, so a fullscreen game has no way to reach the other machine's Start menu.`,
+    "On, it goes to the stream instead, along with the shortcuts built on it — switching windows, closing them — for as long as the stream holds the pointer.",
+    `That is this machine's own window switching gone while you stream: ${OVERLAY_HOTKEY} opens the in-stream menu, and Release the mouse there hands the keys back with the pointer.`,
+    "For a one-off press there is no need for any of this: the same menu has a Super row that taps it on the other machine and takes nothing away from here.",
+    "Takes effect the next time you connect.",
   ].join(" ");
 }
 
@@ -299,6 +329,15 @@ export function StreamingSection({ snapshot }: { snapshot: Snapshot }) {
           onSave={(classes) => void save(() => setPointerNotGames(classes))}
         />
       )}
+
+      <Toggle
+        id="stream-system-keys"
+        label={`Send ${SUPER_KEY} to the other machine`}
+        detail={systemKeysDetail()}
+        on={snapshot.systemKeys}
+        disabled={busy}
+        onChange={(on) => void save(() => setSystemKeys(on))}
+      />
 
       <Toggle
         id="stream-host-audio"
